@@ -922,12 +922,34 @@
   }
 
   /* 解析失败 */
+  /* 解析服务：默认走云端 Node 后端，也可填自己的地址 */
+  function openParseService() {
+    var cur = L.parseBase();
+    var name = !cur ? '已关闭' : (cur === L.CLOUD_DEFAULT ? '云端（默认）' : '自定义地址');
+    var html =
+      '<p style="color:var(--ink-2)">浏览器读不了别人的网页（跨域限制），取正文必须有一台服务器代抓。' +
+      '默认用云端实例，成功率最高；也可以填自己的服务地址。</p>' +
+      '<div class="badge" style="margin:12px 0 0">' + esc(name) + '</div>' +
+      '<div class="field mt-m"><div class="field-head"><span class="lbl">服务地址</span>' +
+      '<span class="sec-sub">留空 = 关闭云端</span></div>' +
+      '<input data-field="parsebase" value="' + esc(cur) + '" placeholder="' + esc(L.CLOUD_DEFAULT) + '" spellcheck="false"></div>' +
+      '<div class="note mt-s">' + U.ic('alert', 14) +
+      '<div>需要支持 <b>GET /api/parse?url=</b> 并返回 <b>{ok,title,text}</b>。仓库里的 <b>server.js</b> 就是这个实现，' +
+      '也可以放到 Cloudflare Worker、VPS 或任意 Node 机器上。</div></div>';
+    openSheet(html, {
+      title: '解析服务',
+      foot: '<button class="btn btn-primary btn-block" data-act="save-parse">保存并测试</button>' +
+        '<button class="btn btn-ghost btn-block" data-act="reset-parse">恢复默认云端</button>'
+    });
+  }
+
   function openParseFail(err) {
     var detail = (err && err.detail) ? '<div class="sec-sub" style="margin-top:10px;word-break:break-all">' + esc(err.detail) + '</div>' : '';
     openSheet(
       '<p>' + esc((err && err.message) || '解析失败') + '</p>' +
       '<div class="note mt-s">' + U.ic('alert', 14) +
-      '<div>常见原因：公众号对非微信环境的抓取有限制、页面正文由脚本动态渲染、或者这台设备访问不了代理通道。<b>直接把正文复制进来，改写效果一样。</b></div></div>' + detail,
+      '<div>常见原因：公众号对非微信环境的抓取有限制、页面正文由脚本动态渲染、或者这台设备访问不了代理通道。' +
+      '可以到<b>我的 → 解析服务</b>确认云端是否在线；实在取不到，<b>把正文复制进来，改写效果一样</b>。</div></div>' + detail,
       {
         title: '这个链接没解析成功',
         foot: (err && err.url
@@ -1431,6 +1453,31 @@
         render('tab');
         toast('外观：' + THEME_LABEL[state.theme]);
         break;
+
+      case 'parse-service':
+        openParseService();
+        break;
+
+      case 'reset-parse':
+        L.setParseBase(L.CLOUD_DEFAULT);
+        closeSheet();
+        toast('已恢复云端解析');
+        render('tab');
+        break;
+
+      case 'save-parse': {
+        var pinp = document.querySelector("[data-field='parsebase']");
+        var pv = pinp ? String(pinp.value || '').trim() : '';
+        L.setParseBase(pv);
+        closeSheet();
+        if (!pv) { toast('已关闭云端解析'); render('tab'); break; }
+        toast('正在测试…');
+        L.cloudHealth(pv).then(function (ok) {
+          toast(ok ? '解析服务可用' : '连不上这个地址');
+          render('tab');
+        });
+        break;
+      }
 
       case 'install-app':
         openInstall();
