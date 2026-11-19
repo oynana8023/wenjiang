@@ -1922,6 +1922,22 @@ a {
   object-fit: cover;
   display: block;
 }
+/* 竖版图（抖音 3:4、头条话题卡）硬裁成 16:9 会把标题裁掉：改成模糊底 + 完整图 */
+.hot-cover.fit {
+  position: relative;
+}
+.hot-cover.fit .bc {
+  position: absolute;
+  inset: -24px;
+  background-size: cover;
+  background-position: center;
+  filter: blur(20px) saturate(1.1) brightness(.62);
+  transform: scale(1.12);
+}
+.hot-cover.fit img {
+  position: relative;
+  object-fit: contain;
+}
 
 .coverbox {
   position: relative;

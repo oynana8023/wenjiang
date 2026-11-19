@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI;
 
-  var VERSION = 'v2.2.2';
+  var VERSION = 'v2.2.3';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -896,19 +896,34 @@
       '<span>' + esc(text || '这一条没有配图') + '</span></div></div>';
   }
 
-  function paintCover(head, srcId) {
+  function paintCover(head, srcId, reason) {
     var slot = document.getElementById('hotCover');
     if (!slot) return;
-    var ph = function () { slot.innerHTML = coverPlaceholder(srcId, '原文没有可用的头图'); };
+    var ph = function () { slot.innerHTML = coverPlaceholder(srcId, reason || '原文没有可用的头图'); };
     if (!head) return ph();
     var probe = new Image();
     probe.onload = function () {
       /* 不少站点的 og:image 指向 1px 占位图，尺寸不够宁可不显示 */
       if (probe.naturalWidth < 400 || probe.naturalHeight < 200) return ph();
-      slot.innerHTML = '<div class="hot-cover"><img src="' + esc(head) + '" alt="" loading="lazy"></div>';
+      var ratio = probe.naturalHeight / Math.max(1, probe.naturalWidth);
+      /* 竖图（榜单话题卡、抖音封面）用模糊底衬完整图，避免被 16:9 裁掉标题 */
+      var cls = ratio > 1.08 ? 'hot-cover fit' : 'hot-cover';
+      var bg = ratio > 1.08
+        ? '<div class="bc" style="background-image:url(' + esc(head) + ')"></div>'
+        : '';
+      slot.innerHTML = '<div class="' + cls + '">' + bg + '<img src="' + esc(head) + '" alt="" loading="lazy"></div>';
     };
     probe.onerror = ph;
     probe.src = head;
+  }
+
+  /* 正文页取不到图时，回头问榜单接口要官方封面（抖音 word_cover / 头条 Image / B站 pic） */
+  function coverFallback(srcId, title, reason) {
+    L.cover(srcId, title).then(function (h) {
+      paintCover(h || '', srcId, reason);
+    }).catch(function () {
+      paintCover('', srcId, reason);
+    });
   }
 
   function fillHotMeta(url, srcId, it, cat) {
@@ -923,7 +938,7 @@
 
       if (!m || (!m.head && !m.category && !m.published)) {
         /* 取不到就当没有，但标签照旧显示，别留一片空白 */
-        paintCover('', srcId);
+        coverFallback(srcId, it.title);
         return;
       }
 
@@ -932,9 +947,10 @@
       box2.innerHTML = metaChips(m.category || cat, when, it.hot, meta ? metaChip(meta) : '') +
         (m.desc ? '<p style="margin:9px 0 0;font-size:13px;line-height:1.7;color:var(--ink-2)">' + esc(m.desc) + '</p>' : '');
 
-      paintCover(m.head || '', srcId);
+      if (m.head) paintCover(m.head, srcId);
+      else coverFallback(srcId, it.title);
     }).catch(function () {
-      paintCover('', srcId);
+      coverFallback(srcId, it.title);
     });
   }
 
@@ -949,13 +965,16 @@
     /* 百度的「搜索页」里其实带了大图（内嵌 JSON 的 poster），微博/抖音的搜索页要登录或纯前端渲染，取不到 */
     var isBaidu = /(^|\.)baidu\.com$/.test(L.hostOf(url));
     var canMeta = !!url && (!isSearch || isBaidu);
+    /* 搜索页 / 强风控站点：正文页拿不到图，还可以回头问榜单要官方封面 */
+    var canCover = !!url && !isBaidu && (isSearch || isBlocked);
+    var willTry = canMeta || canCover;
 
     var cat = U.catOf(it.title, srcId);
     var stamp = s.at ? U.fmtTime(s.at) : '';
     var when = stamp ? '上榜 ' + stamp : '';
 
     var html = '<div id="hotCover">' +
-      (canMeta
+      (willTry
         ? '<div class="hot-cover sk"></div>'
         : coverPlaceholder(srcId, isSearch ? '这个榜单只给搜索页，抓不到头图' : '没有原文链接，无配图')) +
       '</div>' +
@@ -969,7 +988,7 @@
         '<div class="urlbox" data-url="' + esc(url) + '">' + esc(url) + '</div></div>';
       html += isSearch
         ? '<div class="note mt-s">' + U.ic('info', 14) +
-          '<div>热搜榜给的是<b>搜索页</b>，不是文章正文，所以这条没法解析全文。上面的头图和摘要取自搜索页里的原卡片；想看全文，点「打开链接」或把标题复制去搜。</div></div>'
+          '<div>热搜榜给的是<b>搜索页</b>，不是文章正文，所以这条没法解析全文。上面的头图取自该榜单的<b>官方封面</b>；想看全文，点「打开链接」或把标题复制去搜。</div></div>'
         : isBlocked
           ? '<div class="note mt-s">' + U.ic('info', 14) +
             '<div>这个站点对非浏览器访问有<b>强风控</b>（知乎、B站、36氪、头条热搜都这样），解析基本取不到正文。建议点「打开链接」在浏览器里读，复制正文后粘到创作页，效果一样。</div></div>'
@@ -1000,6 +1019,7 @@
 
     openSheet(html, { title: '这条热榜', foot: foot });
     if (canMeta) fillHotMeta(url, srcId, it, cat);
+    else if (canCover) coverFallback(srcId, it.title, isSearch ? '这个榜单没有配图' : '这个站点没有可用的头图');
   }
 
   /* 额度 */

@@ -495,6 +495,83 @@ async function metaFor(url) {
   throw new Error(lastErr || '取不到页面信息');
 }
 
+/* ---------------- 榜单封面：微博/抖音/头条这类「只有搜索页」的源 ----------------
+   热搜条目本身没有文章页，图片在榜单接口里：头条 hot-board 的 Image、
+   抖音热搜的 word_cover、B站排行榜的 pic。按标题精确匹配，宁可没有也不乱配。 */
+const coverCache = new Map();
+const COVER_TTL = 10 * 60 * 1000;
+
+async function getJson(url, referer) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 12000);
+  try {
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: {
+        'User-Agent': UA_DESKTOP,
+        Accept: 'application/json, text/plain, */*',
+        'Accept-Language': 'zh-CN,zh;q=0.9',
+        Referer: referer || url
+      }
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function coverList(src) {
+  const hit = coverCache.get(src);
+  if (hit && Date.now() - hit.at < COVER_TTL) return hit.list;
+  let list = [];
+  try {
+    if (src === 'toutiao') {
+      const j = await getJson('https://www.toutiao.com/hot-event/hot-board/?origin=toutiao_pc');
+      list = (j.data || []).map((x) => ({
+        t: x.Title,
+        u: (x.Image && (x.Image.url || (x.Image.url_list && x.Image.url_list[0] && x.Image.url_list[0].url))) || ''
+      }));
+    } else if (src === 'douyin') {
+      const j = await getJson('https://www.douyin.com/aweme/v1/web/hot/search/list/?device_platform=webapp&aid=6383&channel=channel_pc_web&detail_list=1', 'https://www.douyin.com/');
+      const wl = (j.data && j.data.word_list) || j.word_list || [];
+      list = wl.map((x) => ({
+        t: x.word,
+        u: (x.word_cover && ((x.word_cover.url_list && x.word_cover.url_list[0]) || x.word_cover.url)) || ''
+      }));
+    } else if (src === 'bilibili') {
+      const j = await getJson('https://api.bilibili.com/x/web-interface/ranking/v2?rid=0&type=all', 'https://www.bilibili.com/');
+      list = ((j.data && j.data.list) || []).map((x) => ({
+        t: x.title,
+        u: String(x.pic || '').replace(/^http:/, 'https:')
+      }));
+    }
+  } catch (e) { /* 拿不到就当这个源没有封面 */ }
+  list = list.filter((x) => x.u && x.t);
+  coverCache.set(src, { at: Date.now(), list });
+  return list;
+}
+
+async function coverFor(src, title) {
+  const k = imgKey(title);
+  if (!k) return { ok: false };
+  /* 先在自家榜单里找；找不到再跨榜找「标题完全一致」的那条（微博热搜本身没有配图） */
+  const chain = [src, 'toutiao', 'douyin'].filter((v, i, a) => v && a.indexOf(v) === i);
+  for (const s of chain) {
+    const list = await coverList(s);
+    if (!list.length) continue;
+    let hit = list.find((x) => imgKey(x.t) === k);
+    if (!hit && s === src) {
+      hit = list.find((x) => {
+        const k2 = imgKey(x.t);
+        return k2 && ((k.length >= 8 && k2.indexOf(k) >= 0) || (k2.length >= 8 && k.indexOf(k2) >= 0));
+      });
+    }
+    if (hit) return { ok: true, head: hit.u.replace(/&amp;/g, '&'), matched: hit.t, from: s };
+  }
+  return { ok: false };
+}
+
 /* ---------------- 服务 ---------------- */
 
 function send(res, code, obj) {
@@ -543,6 +620,13 @@ const server = http.createServer(async (req, res) => {
         if (!url) return send(res, 400, { ok: false, error: '缺少 url' });
         const meta = await metaFor(url);
         return send(res, 200, Object.assign({ ok: true }, meta));
+      }
+      if (u.pathname === '/api/cover') {
+        const src = u.searchParams.get('src') || '';
+        const title = u.searchParams.get('title') || '';
+        if (!src || !title) return send(res, 400, { ok: false, error: '缺少参数' });
+        const out = await coverFor(src, title);
+        return send(res, 200, out);
       }
       return send(res, 404, { ok: false, error: '接口不存在' });
     } catch (e) {

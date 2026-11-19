@@ -438,6 +438,79 @@ async function metaFor(url, srcId) {
   throw new Error(lastErr || '取不到页面信息');
 }
 
+/* ---------------- 榜单封面：抖音 word_cover / 头条 Image / B站 pic ---------------- */
+const coverCache = new Map();
+const COVER_TTL = 10 * 60 * 1000;
+
+async function getJson(url, referer) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 12000);
+  try {
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: {
+        'User-Agent': UA_DESKTOP,
+        Accept: 'application/json, text/plain, */*',
+        Referer: referer || url
+      }
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function coverList(src) {
+  const hit = coverCache.get(src);
+  if (hit && Date.now() - hit.at < COVER_TTL) return hit.list;
+  let list = [];
+  try {
+    if (src === 'toutiao') {
+      const j = await getJson('https://www.toutiao.com/hot-event/hot-board/?origin=toutiao_pc');
+      list = (j.data || []).map((x) => ({
+        t: x.Title,
+        u: (x.Image && (x.Image.url || (x.Image.url_list && x.Image.url_list[0] && x.Image.url_list[0].url))) || ''
+      }));
+    } else if (src === 'douyin') {
+      const j = await getJson('https://www.douyin.com/aweme/v1/web/hot/search/list/?device_platform=webapp&aid=6383&channel=channel_pc_web&detail_list=1', 'https://www.douyin.com/');
+      const wl = (j.data && j.data.word_list) || j.word_list || [];
+      list = wl.map((x) => ({
+        t: x.word,
+        u: (x.word_cover && ((x.word_cover.url_list && x.word_cover.url_list[0]) || x.word_cover.url)) || ''
+      }));
+    } else if (src === 'bilibili') {
+      const j = await getJson('https://api.bilibili.com/x/web-interface/ranking/v2?rid=0&type=all', 'https://www.bilibili.com/');
+      list = ((j.data && j.data.list) || []).map((x) => ({
+        t: x.title,
+        u: String(x.pic || '').replace(/^http:/, 'https:')
+      }));
+    }
+  } catch (e) { /* 这个源拿不到就当没有封面 */ }
+  list = list.filter((x) => x.u && x.t);
+  coverCache.set(src, { at: Date.now(), list });
+  return list;
+}
+
+async function coverFor(src, title) {
+  const k = imgKey(title);
+  if (!k) return { ok: false };
+  const chain = [src, 'toutiao', 'douyin'].filter((v, i, a) => v && a.indexOf(v) === i);
+  for (const s of chain) {
+    const list = await coverList(s);
+    if (!list.length) continue;
+    let hit = list.find((x) => imgKey(x.t) === k);
+    if (!hit && s === src) {
+      hit = list.find((x) => {
+        const k2 = imgKey(x.t);
+        return k2 && ((k.length >= 8 && k2.indexOf(k) >= 0) || (k2.length >= 8 && k.indexOf(k2) >= 0));
+      });
+    }
+    if (hit) return { ok: true, head: hit.u.replace(/&amp;/g, '&'), matched: hit.t, from: s };
+  }
+  return { ok: false };
+}
+
 /* ---------------- HTTP ---------------- */
 
 const CORS = {
@@ -516,6 +589,13 @@ export default {
       } catch (e) {
         return json({ ok: false, error: (e && e.message) || '取不到页面信息' }, 200);
       }
+    }
+
+    if (url.pathname === '/api/cover') {
+      const src = url.searchParams.get('src') || '';
+      const title = url.searchParams.get('title') || '';
+      if (!src || !title) return json({ ok: false, error: '缺少参数' }, 400);
+      return json(await coverFor(src, title));
     }
 
     if (url.pathname === '/' || url.pathname === '/index.html') {

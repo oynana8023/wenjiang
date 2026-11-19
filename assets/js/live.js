@@ -851,11 +851,30 @@ window.WJLive = (function () {
     throw new Error('返回格式不认识');
   }
 
+  /* 榜单封面：微博/抖音/头条这类条目只有搜索页，图片要到榜单接口里按标题匹配 */
+  async function cover(src, title) {
+    if (!src || !title) return '';
+    var call = async function (b) {
+      var d = await getJSON(apiUrl(b, '/api/cover', { src: src, title: title }), 15000);
+      if (!d || !d.ok || !d.head) throw new Error('没有封面');
+      return d.head;
+    };
+    var bases = parseBases();
+    try {
+      if (await hasServer()) {
+        try { return await call(''); } catch (e) { /* 站内没有就继续走云端 */ }
+      }
+      if (bases.length) return await raceCall(bases, call);
+    } catch (e) { return ''; }
+    return '';
+  }
+
   return {
     SOURCES: SOURCES,
     hot: hot,
     parseLink: parseLink,
     meta: meta,
+    cover: cover,
     parseBase: parseBase,
     setParseBase: setParseBase,
     parseBases: parseBases,
