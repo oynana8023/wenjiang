@@ -858,7 +858,7 @@ window.WJLive = (function () {
       var d = await getJSON(apiUrl(b, '/api/cover', { src: src, title: title }), 18000);
       if (!d || !d.ok || !d.head) throw new Error('没有封面');
       /* 新浪图床只认 weibo.com 的 Referer，浏览器改不了，走服务端转发一次 */
-      if (d.proxy) return (b || '') + '/api/img?u=' + encodeURIComponent(d.head);
+      if (d.proxy) return apiUrl(b, '/api/img', { u: d.head });
       return d.head;
     };
     var bases = parseBases();
