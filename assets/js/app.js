@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI;
 
-  var VERSION = 'v2.0.0';
+  var VERSION = 'v2.1.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -922,25 +922,62 @@
   }
 
   /* 解析失败 */
-  /* 解析服务：默认走云端 Node 后端，也可填自己的地址 */
+  /* 解析服务：多地址 + 口令 + 一键检测 */
   function openParseService() {
-    var cur = L.parseBase();
-    var name = !cur ? '已关闭' : (cur === L.CLOUD_DEFAULT ? '云端（默认）' : '自定义地址');
+    var list = L.parseBases();
+    var key = L.parseKey ? L.parseKey() : '';
     var html =
       '<p style="color:var(--ink-2)">浏览器读不了别人的网页（跨域限制），取正文必须有一台服务器代抓。' +
-      '默认用云端实例，成功率最高；也可以填自己的服务地址。</p>' +
-      '<div class="badge" style="margin:12px 0 0">' + esc(name) + '</div>' +
+      '可以填多个地址，解析时并行竞速：一条挂了自动换另一条。</p>' +
       '<div class="field mt-m"><div class="field-head"><span class="lbl">服务地址</span>' +
-      '<span class="sec-sub">留空 = 关闭云端</span></div>' +
-      '<input data-field="parsebase" value="' + esc(cur) + '" placeholder="' + esc(L.CLOUD_DEFAULT) + '" spellcheck="false"></div>' +
-      '<div class="note mt-s">' + U.ic('alert', 14) +
-      '<div>需要支持 <b>GET /api/parse?url=</b> 并返回 <b>{ok,title,text}</b>。仓库里的 <b>server.js</b> 就是这个实现，' +
-      '也可以放到 Cloudflare Worker、VPS 或任意 Node 机器上。</div></div>';
+      '<span class="sec-sub">一行一个，留空 = 关闭</span></div>' +
+      '<textarea data-field="parsebases" rows="4" spellcheck="false" placeholder="' + esc(L.CLOUD_DEFAULT) + '">' +
+      esc(list.join('\n')) + '</textarea></div>' +
+      '<div class="field mt-s"><div class="field-head"><span class="lbl">访问口令</span>' +
+      '<span class="sec-sub">Worker 设了 PARSE_KEY 才需要填</span></div>' +
+      '<input data-field="parsekey" value="' + esc(key) + '" spellcheck="false" placeholder="可留空"></div>' +
+      '<div id="parse-test" class="note mt-s">' + U.ic('alert', 14) +
+      '<div>接口只要支持 <b>GET /api/health</b> 和 <b>GET /api/parse?url=</b>，返回 <b>{ok,title,text}</b> 即可。' +
+      '仓库里的 <b>worker/index.js</b> 是 Cloudflare Worker 版，免费额度每天 10 万次，' +
+      '点 README 里的「一键部署」三分钟就能有一条永久属于自己的解析通道，再把地址填到上面。</div></div>';
     openSheet(html, {
       title: '解析服务',
-      foot: '<button class="btn btn-primary btn-block" data-act="save-parse">保存并测试</button>' +
+      foot: '<button class="btn btn-primary btn-block" data-act="save-parse">保存并检测</button>' +
+        '<button class="btn btn-ghost btn-block" data-act="test-parse">只检测，不保存</button>' +
         '<button class="btn btn-ghost btn-block" data-act="reset-parse">恢复默认云端</button>'
     });
+  }
+
+  function parseTestHtml(rows) {
+    if (!rows || !rows.length) return '<div class="sec-sub">没有可检测的地址</div>';
+    return rows.map(function (r) {
+      var name = r.base || '站内同源';
+      var ok = !!r.ok;
+      var tail = ok
+        ? ('在线 · ' + r.ms + 'ms' + (r.version ? ' · v' + r.version : ''))
+        : ('连不上 · ' + (r.error || '无响应'));
+      return '<div style="padding:9px 0;border-top:1px solid var(--line)">' +
+        '<div style="font-size:13px;font-weight:600;word-break:break-all;line-height:1.45">' + esc(name) + '</div>' +
+        '<div style="margin-top:2px;font-family:var(--f-mono);font-size:11px;color:' + (ok ? 'var(--ok)' : 'var(--danger)') + '">' +
+        esc(tail) + '</div></div>';
+    }).join('');
+  }
+
+  function readParseForm() {
+    var ta = document.querySelector("[data-field='parsebases']");
+    var ki = document.querySelector("[data-field='parsekey']");
+    var lines = ta ? String(ta.value || '').split(/[\n,，;；\s]+/) : [];
+    return { list: lines.filter(Boolean), key: ki ? String(ki.value || '').trim() : '' };
+  }
+
+  async function runParseTest(list) {
+    var box = document.getElementById('parse-test');
+    if (!box) return [];
+    box.innerHTML = '<div style="width:100%" class="sec-sub">正在检测…</div>';
+    var rows = await L.checkBases(list);
+    rows.sort(function (a, b) { return (b.ok ? 1 : 0) - (a.ok ? 1 : 0) || a.ms - b.ms; });
+    box.innerHTML = '<div style="width:100%">' + parseTestHtml(rows) + '</div>';
+    return rows;
   }
 
   function openParseFail(err) {
@@ -1459,22 +1496,31 @@
         break;
 
       case 'reset-parse':
-        L.setParseBase(L.CLOUD_DEFAULT);
+        L.setParseBases([L.CLOUD_DEFAULT]);
+        if (L.setParseKey) L.setParseKey('');
+        if (L.invalidateProbe) L.invalidateProbe();
         closeSheet();
-        toast('已恢复云端解析');
+        toast('已恢复默认云端解析');
         render('tab');
         break;
 
+      case 'test-parse': {
+        var tf = readParseForm();
+        runParseTest(tf.list.length ? tf.list : [L.CLOUD_DEFAULT]);
+        break;
+      }
+
       case 'save-parse': {
-        var pinp = document.querySelector("[data-field='parsebase']");
-        var pv = pinp ? String(pinp.value || '').trim() : '';
-        L.setParseBase(pv);
-        closeSheet();
-        if (!pv) { toast('已关闭云端解析'); render('tab'); break; }
-        toast('正在测试…');
-        L.cloudHealth(pv).then(function (ok) {
-          toast(ok ? '解析服务可用' : '连不上这个地址');
-          render('tab');
+        var f = readParseForm();
+        L.setParseBases(f.list);
+        if (L.setParseKey) L.setParseKey(f.key);
+        if (L.invalidateProbe) L.invalidateProbe();
+        render('tab');
+        if (!f.list.length) { closeSheet(); toast('已关闭解析服务'); break; }
+        toast('正在检测…');
+        runParseTest(f.list).then(function (rows) {
+          var alive = rows.filter(function (r) { return r.ok; }).length;
+          toast(alive ? (alive + ' / ' + rows.length + ' 条通道在线') : '都连不上，检查一下地址');
         });
         break;
       }

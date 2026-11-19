@@ -586,8 +586,10 @@ window.WJUI = (function () {
     h += '<button class="row" data-act="open-data"><span class="ri">' + ic('globe', 15) + '</span>' +
       '<span class="rt"><b>数据来源与标注规则</b><small>哪些是实时数据，哪些是示例</small></span>' +
       '<span class="chev">' + ic('right', 15) + '</span></button>';
-    var _pb = window.WJLive.parseBase();
-    var _pbName = !_pb ? '已关闭' : (_pb === window.WJLive.CLOUD_DEFAULT ? '云端（默认）' : '自定义');
+    var _pbs = window.WJLive.parseBases ? window.WJLive.parseBases() : [window.WJLive.parseBase()].filter(Boolean);
+    var _pbName = !_pbs.length ? '已关闭'
+      : (_pbs.length === 1 && _pbs[0] === window.WJLive.CLOUD_DEFAULT ? '云端（默认）'
+        : _pbs.length + ' 条通道');
     h += '<button class="row" data-act="parse-service"><span class="ri">' + ic('wand', 15) + '</span>' +
       '<span class="rt"><b>解析服务</b><small>粘贴链接取正文用的后端</small></span>' +
       '<span class="rv">' + _pbName + '</span>' +

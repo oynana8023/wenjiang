@@ -1,0 +1,7 @@
+name = "wenjiang-parse"
+main = "index.js"
+compatibility_date = "2025-06-01"
+workers_dev = true
+
+# 想要自定义域名，取消下面注释并改成自己的域名（需先在 Cloudflare 里托管该域名）
+# routes = [{ pattern = "parse.example.com/*", custom_domain = true }]

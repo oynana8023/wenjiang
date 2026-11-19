@@ -11,35 +11,164 @@ window.WJLive = (function () {
   var AGG = 'https://api-hot.imsyy.top';
   var SNAPSHOT = 'data/hot.json';
 
-  /* 云端解析：静态托管（GitHub Pages）没有自己的后端，浏览器又跨不过 CORS。
-     默认指向已经跑着 server.js 的实例，页面直接调它的 /api/parse。
-     想换成自己的服务（Cloudflare Worker / VPS / 本地 Node），在「我的 → 解析服务」里改地址即可。 */
+  /* 统计托管（GitHub Pages）没有自己的后端，浏览器又跨不过 CORS，取正文必须有一台服务器代抓。
+     这里支持配「多个」地址：云端实例、自建 Cloudflare Worker、自己的 VPS 都可以一起填，
+     解析时并行探活、谁先返回用谁，一条挂了不影响另一条。 */
   var CLOUD_DEFAULT = 'https://ae4456e3164821b38.app.workbuddy.host';
   var CLOUD_CODE = 'KQNPRGHZG2';
+  var BASES_KEY = 'wj.parse.bases';
+  var KEY_KEY = 'wj.parse.key';
+
+  function tidyBase(v) {
+    var s = String(v || '').trim().replace(/\/+$/, '');
+    if (!s) return '';
+    if (/^https?:\/\//i.test(s)) return s;
+    if (/^[\w.-]+\.[a-z]{2,}(:\d+)?(\/|$)/i.test(s)) return 'https://' + s;
+    return '';
+  }
+
+  function parseKey() {
+    try { return localStorage.getItem(KEY_KEY) || ''; } catch (e) { return ''; }
+  }
+
+  function setParseKey(v) {
+    try { localStorage.setItem(KEY_KEY, String(v || '').trim()); } catch (e) { /* ignore */ }
+  }
+
+  /* 地址列表：新格式 wj.parse.bases（JSON 数组），老格式 wj.parse.base 继续兼容 */
+  function parseBases() {
+    var raw = null;
+    try { raw = localStorage.getItem(BASES_KEY); } catch (e) { /* ignore */ }
+    if (raw !== null) {
+      try {
+        var arr = JSON.parse(raw);
+        if (Array.isArray(arr)) {
+          var out = [];
+          arr.forEach(function (x) {
+            var b = tidyBase(x);
+            if (b && out.indexOf(b) < 0) out.push(b);
+          });
+          return out;
+        }
+      } catch (e) { /* ignore */ }
+    }
+    var one = null;
+    try { one = localStorage.getItem('wj.parse.base'); } catch (e) { /* ignore */ }
+    if (one === null) return [CLOUD_DEFAULT];
+    one = tidyBase(one);
+    return one ? [one] : [];
+  }
+
+  function setParseBases(list) {
+    var arr = [];
+    (list || []).forEach(function (x) {
+      var b = tidyBase(x);
+      if (b && arr.indexOf(b) < 0) arr.push(b);
+    });
+    try { localStorage.setItem(BASES_KEY, JSON.stringify(arr)); } catch (e) { /* ignore */ }
+  }
 
   function parseBase() {
-    var v = null;
-    try { v = localStorage.getItem('wj.parse.base'); } catch (e) { /* ignore */ }
-    if (v === null) return CLOUD_DEFAULT;
-    return String(v || '').replace(/\s+/g, '');
+    var l = parseBases();
+    return l.length ? l[0] : '';
   }
 
   function setParseBase(v) {
+    setParseBases(v ? [v] : []);
+  }
+
+  /* base 为空 = 同源（页面自己被 node server.js 托管时的零跨域路径） */
+  function apiUrl(base, path, params) {
+    var b = base ? String(base).replace(/\/+$/, '') : '';
+    var q = [];
+    if (params) {
+      Object.keys(params).forEach(function (k) {
+        if (params[k] !== undefined && params[k] !== null) q.push(k + '=' + encodeURIComponent(params[k]));
+      });
+    }
+    var k = parseKey();
+    if (k) q.push('key=' + encodeURIComponent(k));
+    /* 默认云端用内置的分享码；站内同源 / 自建服务沿用页面 URL 里的 sharecode（没有就不带） */
+    var sc = b === CLOUD_DEFAULT ? CLOUD_CODE : shareCode();
+    if (sc) q.push('sharecode=' + encodeURIComponent(sc));
+    return b + path + (q.length ? '?' + q.join('&') : '');
+  }
+
+  var probeCache = {};
+  var PROBE_TTL = 3 * 60000;
+
+  async function probeBase(base, ms) {
+    var k = base || '(same)';
+    var c = probeCache[k];
+    if (c && Date.now() - c.at < PROBE_TTL) return c;
+    var t0 = Date.now();
+    var res = { base: base, ok: false, ms: 0, at: Date.now(), version: '' };
     try {
-      if (v) localStorage.setItem('wj.parse.base', String(v).trim());
-      else localStorage.setItem('wj.parse.base', '');
-    } catch (e) { /* ignore */ }
+      var d = await getJSON(apiUrl(base, '/api/health'), ms || 5000);
+      res.ok = !!(d && d.ok);
+      res.version = (d && d.version) || '';
+      res.runtime = (d && d.runtime) || '';
+    } catch (e) {
+      res.error = e.message || '连不上';
+    }
+    res.ms = Date.now() - t0;
+    res.at = Date.now();
+    probeCache[k] = res;
+    return res;
+  }
+
+  /* 一次性检测所有地址，给「解析服务」面板用 */
+  async function checkBases(list) {
+    var arr = (list && list.length) ? list : parseBases();
+    var tasks = arr.map(function (b) { return probeBase(b, 6000); });
+    if (await hasServer()) tasks.unshift(probeBase('', 4000));
+    return Promise.all(tasks);
   }
 
   async function cloudHealth(base) {
-    var b = (base === undefined ? parseBase() : base);
-    if (!b) return false;
-    try {
-      var d = await getJSON(b.replace(/\/+$/, '') + '/api/health?sharecode=' + CLOUD_CODE, 7000);
-      return !!(d && d.ok);
-    } catch (e) {
-      return false;
+    if (base !== undefined && base !== null) {
+      if (!base) return false;
+      var r = await probeBase(tidyBase(base), 6000);
+      return !!r.ok;
     }
+    var all = await checkBases();
+    return all.some(function (x) { return x.ok; });
+  }
+
+  function invalidateProbe() {
+    probeCache = {};
+  }
+
+  async function callBase(base, url, minLen, ms) {
+    var d = await getJSON(apiUrl(base, '/api/parse', { url: url }), ms || 22000);
+    if (!d) throw new Error('返回为空');
+    if (!d.ok) throw new Error(d.error || '解析失败');
+    var text = String(d.text || '');
+    if (text.length < minLen) throw new Error('正文只有 ' + text.length + ' 字');
+    return { title: d.title || '', text: text.slice(0, 12000), chars: text.length };
+  }
+
+  /* 多地址并行竞速：谁先拿到合格正文就用谁，其余自动丢弃 */
+  function raceParse(bases, url, minLen) {
+    return new Promise(function (resolve, reject) {
+      if (!bases.length) return reject(new Error('没有可用的解析服务'));
+      var left = bases.length, settled = false, errs = [];
+      bases.forEach(function (b) {
+        callBase(b, url, minLen, 22000).then(function (r) {
+          if (settled) return;
+          settled = true;
+          resolve(r);
+        }).catch(function (e) {
+          errs.push((b || '站内解析') + '：' + (e.message || '失败'));
+          if (--left === 0 && !settled) {
+            settled = true;
+            var err = new Error('服务端都没解析成功');
+            err.detail = errs.join('\n');
+            reject(err);
+          }
+        });
+      });
+    });
   }
 
   var SOURCES = [
@@ -224,16 +353,13 @@ window.WJLive = (function () {
 
   /* ---------------- 链接解析 ---------------- */
 
-  /* 解析通道：先自己人，再公共代理。
+  /* 公共代理只当最后的兜底。公开服务这两年收缩得很厉害，能通的越来越少，
+     所以主力必须是自己的服务端（云端实例 / 自建 Worker / VPS）。
      每条通道单独限时，失败不影响下一条；全部失败时把每条的原因摊开给用户看 */
   var PROXIES = [
-    { id: 'server', label: '站内解析', wrap: null },
-    { id: 'jina', label: '阅读器 A', wrap: function (u) { return 'https://r.jina.ai/' + u; }, text: true },
-    { id: 'allorigins', label: '代理 A', wrap: function (u) { return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u); } },
-    { id: 'codetabs', label: '代理 B', wrap: function (u) { return 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u); } },
-    { id: 'corslol', label: '代理 C', wrap: function (u) { return 'https://api.cors.lol/?url=' + encodeURIComponent(u); } },
-    { id: 'alloriginsJson', label: '代理 D', wrap: function (u) { return 'https://api.allorigins.win/get?url=' + encodeURIComponent(u); }, json: true },
-    { id: 'corsproxy', label: '代理 E', wrap: function (u) { return 'https://corsproxy.io/?' + encodeURIComponent(u); } }
+    { id: 'codetabs', label: '公共代理 1', wrap: function (u) { return 'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(u); } },
+    { id: 'allorigins', label: '公共代理 2', wrap: function (u) { return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u); } },
+    { id: 'jina', label: '阅读器', wrap: function (u) { return 'https://r.jina.ai/' + u; }, text: true }
   ];
 
   /* 时政/军事/外交类条目不适合做二创，统一过滤，并如实告知过滤了多少条 */
@@ -330,40 +456,42 @@ window.WJLive = (function () {
     } catch (e) { /* ignore */ }
 
     var errors = [];
-    var useServer = await hasServer();
-    var cloud = parseBase();
     var isWx = urlKind(url) === 'wechat';
     var minLen = isWx ? 90 : 120;
 
-    var channels = [];
-    if (cloud) channels.push({ id: 'cloud', label: '云端解析' });
-    channels.push({ id: 'server', label: '站内解析' });
-    channels = channels.concat(PROXIES);
+    function save(r, via) {
+      var out = { title: r.title || '', text: r.text, chars: r.chars || (r.text || '').length, via: via, at: Date.now() };
+      try { localStorage.setItem(cacheKey, JSON.stringify(out)); } catch (e) { /* ignore */ }
+      return out;
+    }
 
-    for (var i = 0; i < channels.length; i++) {
-      var p = channels[i];
-      if (p.id === 'server' && !useServer) continue;
-      if (onStep) onStep(p.label, i + 1, channels.length);
+    /* 1) 同源服务：页面本身由 server.js 托管时走这条，零跨域、最快 */
+    var same = await hasServer();
+    if (same) {
+      if (onStep) onStep('站内服务', 1, 2);
       try {
-        if (p.id === 'cloud') {
-          var cd = await getJSON(cloud.replace(/\/+$/, '') + '/api/parse?url=' + encodeURIComponent(url) +
-            '&sharecode=' + encodeURIComponent(CLOUD_CODE), 30000);
-          if (!cd || !cd.ok) throw new Error((cd && cd.error) || '云端解析失败');
-          if (!cd.text || cd.text.length < minLen) throw new Error('正文只有 ' + ((cd.text || '').length) + ' 字');
-          var cout = { title: cd.title || '', text: cd.text.slice(0, 12000), via: 'cloud', at: Date.now() };
-          localStorage.setItem(cacheKey, JSON.stringify(cout));
-          return cout;
-        }
+        return save(await callBase('', url, minLen, 22000), 'server');
+      } catch (e) {
+        errors.push('站内服务：' + (e.message || '失败'));
+      }
+    }
 
-        if (p.id === 'server') {
-          var sd = await getJSON(withShare('/api/parse?url=' + encodeURIComponent(url)), 25000);
-          if (!sd || !sd.ok) throw new Error((sd && sd.error) || '服务端解析失败');
-          if (!sd.text || sd.text.length < minLen) throw new Error('正文只有 ' + ((sd.text || '').length) + ' 字');
-          var sout = { title: sd.title || '', text: sd.text.slice(0, 12000), via: 'server', at: Date.now() };
-          localStorage.setItem(cacheKey, JSON.stringify(sout));
-          return sout;
-        }
+    /* 2) 配置的服务端：云端实例 / 自建 Worker / VPS，多地址并行竞速 */
+    var bases = parseBases();
+    if (bases.length) {
+      if (onStep) onStep('解析服务', 2, 2);
+      try {
+        return save(await raceParse(bases, url, minLen), 'cloud');
+      } catch (e) {
+        errors.push(e.detail || ('解析服务：' + (e.message || '失败')));
+      }
+    }
 
+    /* 3) 公共代理：只当兜底，这两年能通的越来越少 */
+    for (var i = 0; i < PROXIES.length; i++) {
+      var p = PROXIES[i];
+      if (onStep) onStep(p.label, i + 3, PROXIES.length + 2);
+      try {
         var target = p.wrap(url);
         var body, text;
         if (p.text) {
@@ -371,32 +499,23 @@ window.WJLive = (function () {
           body = body.replace(/^Title:.*$/gm, '').replace(/^URL Source:.*$/gm, '').trim();
           text = clean(body);
           if (text.length < minLen) throw new Error('正文只有 ' + text.length + ' 字');
-          var outT = { title: '', text: text.slice(0, 12000), via: p.id, at: Date.now() };
-          localStorage.setItem(cacheKey, JSON.stringify(outT));
-          return outT;
+          return save({ title: '', text: text.slice(0, 12000), chars: text.length }, p.id);
         }
 
-        if (p.json) {
-          var wrap = await getJSON(target, 9000);
-          body = (wrap && (wrap.contents || wrap.body)) || '';
-          if (!body) throw new Error('代理返回空');
-        } else {
-          body = await getText(target, 9000);
-        }
+        body = await getText(target, 10000);
         var parsed = extractHtml(body);
         if (!parsed || parsed.text.length < minLen) {
           throw new Error('没取到正文（' + hostOf(url) + ' 可能要求登录或限制了抓取）');
         }
-        var out = { title: parsed.title, text: parsed.text.slice(0, 12000), via: p.id, at: Date.now() };
-        localStorage.setItem(cacheKey, JSON.stringify(out));
-        return out;
+        return save({ title: parsed.title, text: parsed.text.slice(0, 12000), chars: parsed.text.length }, p.id);
       } catch (e) {
-        if (p.id === 'server' && e && /HTTP 40[34]/.test(e.message)) useServer = false;
         errors.push(p.label + '：' + (e.message || '失败'));
       }
     }
 
-    var err = new Error(cloud || useServer ? '所有解析通道都没成功' : '没有可用的解析服务');
+    var err = new Error(
+      (bases.length || same) ? '所有解析通道都没成功' : '没有配置解析服务'
+    );
     err.detail = errors.join('\n');
     err.url = url;
     err.kind = urlKind(url);
@@ -555,6 +674,13 @@ window.WJLive = (function () {
     parseLink: parseLink,
     parseBase: parseBase,
     setParseBase: setParseBase,
+    parseBases: parseBases,
+    setParseBases: setParseBases,
+    parseKey: parseKey,
+    setParseKey: setParseKey,
+    checkBases: checkBases,
+    probeBase: probeBase,
+    invalidateProbe: invalidateProbe,
     cloudHealth: cloudHealth,
     CLOUD_DEFAULT: CLOUD_DEFAULT,
     urlKind: urlKind,

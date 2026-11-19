@@ -3,7 +3,7 @@
    热榜这类数据优先取网络，拿不到再用上一次的缓存。
    改版时把 VERSION 加一，旧缓存会在 activate 时清掉。 */
 
-const VERSION = 'wj-v3';
+const VERSION = 'wj-v4';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon.svg', './icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -38,6 +38,20 @@ self.addEventListener('fetch', (e) => {
           return r;
         })
         .catch(() => caches.match(req).then((m) => m || Response.error()))
+    );
+    return;
+  }
+
+  /* 页面本身：先网络，离线再用缓存。否则改了代码要等第二次打开才生效 */
+  if (req.mode === 'navigate' || /\/index\.html$/.test(url.pathname) || url.pathname === '/') {
+    e.respondWith(
+      fetch(req)
+        .then((r) => {
+          const copy = r.clone();
+          caches.open(VERSION).then((c) => c.put(req, copy)).catch(() => {});
+          return r;
+        })
+        .catch(() => caches.match(req).then((m) => m || caches.match('./index.html')))
     );
     return;
   }

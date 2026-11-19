@@ -1,0 +1,13 @@
+{
+  "name": "wenjiang-parse",
+  "version": "3.0.0",
+  "private": true,
+  "description": "文匠 AI 的链接正文解析服务（Cloudflare Worker）",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
