@@ -62,14 +62,25 @@ GH_TOKEN=github_pat_xxx node scripts/deploy.mjs
 
 Token 用 fine-grained 的，只勾这一个仓库，权限给 **Contents: Read and write**、**Pages: Read and write**、**Workflows: Read and write**，有效期 7 天。
 
-### 方式 A：只传一个文件（手机上最快的路）
+### 方式 A：网页上传（不需要任何凭据）
 
-`index.html` 是**单文件自包含**的：CSS、JS、热榜快照全部内联，没有任何外链依赖。所以：
+要传的文件只有 5 个，全部在仓库根目录：
 
-1. GitHub 网页 → New repository → 名字随便（例如 `wenjiang`）→ Public → Create。
-2. 仓库页 → Add file → Upload files → 选 `index.html` → Commit。
-3. Settings → Pages → Source 选 `Deploy from a branch` → 分支 `main`、目录 `/ (root)` → Save。
-4. 等 1 分钟，访问 `https://<你的用户名>.github.io/wenjiang/`，手机直接可用，也可以「添加到主屏幕」。
+```
+index.html              必需，整个应用都在里面
+manifest.webmanifest    安装成 App 用（可选但建议）
+sw.js                   断网可用（可选但建议）
+icon.svg                图标
+icon-512.png            图标（iOS 主屏幕用）
+```
+
+1. GitHub 网页 → New repository → 名字例如 `wenjiang` → **Public** → Create repository。
+2. 仓库页 → Add file → **Upload files** → 一次选这 5 个文件 → Commit changes。
+3. Settings → Pages → Source 选 `Deploy from a branch`，分支 `main`、目录 `/ (root)` → Save。
+4. 等 1 分钟，访问 `https://<你的用户名>.github.io/wenjiang/`。
+5. 手机上用 Safari / Chrome 打开 → 分享 → 添加到主屏幕，就是一个全屏 App。
+
+只传 `index.html` 也能跑，只是没有离线缓存和 Android 的「安装应用」入口。
 
 这样部署出来的站点热榜显示为 `快照`（内联的那一份，页面会标出抓取时间）；联网正常时会先尝试实时接口，成功就显示 `实时`。
 

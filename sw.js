@@ -4,7 +4,7 @@
    改版时把 VERSION 加一，旧缓存会在 activate 时清掉。 */
 
 const VERSION = 'wj-v1';
-const SHELL = ['./', './index.html', './manifest.webmanifest', './assets/icon-192.png', './assets/icon-512.png'];
+const SHELL = ['./', './index.html', './manifest.webmanifest', './icon.svg', './icon-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()).catch(() => self.skipWaiting()));
