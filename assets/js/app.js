@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI;
 
-  var VERSION = 'v2.1.0';
+  var VERSION = 'v2.2.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -29,13 +29,14 @@
     works: [],
     settings: {
       base: '', key: '', model: '', imageModel: '',
+      providers: [], activeId: '',
       models: [], defaultStyle: 'news', deai: true, faithful: true, declare: true
     },
     hot: { bySrc: {}, active: 'weibo', loading: false, updatedAt: 0, okCount: 0 },
     compose: {
       mode: 'link', link1: '', text1: '', text2: '',
       style: 'news', strength: 2, platform: 'toutiao',
-      extra: '', deai: true, faithful: true, adv: false, sourceTitle: ''
+      extra: '', deai: true, faithful: true, adv: false, sourceTitle: '', sourceUrl: ''
     },
     result: null,
     resultTab: 'body',
@@ -73,6 +74,71 @@
       state.quota = { used: 0, total: DAILY, day: dayKey() };
     }
     state.compose.style = state.compose.style || state.settings.defaultStyle || 'news';
+    migrateProviders();
+  }
+
+  /* ---------------- 多服务商 ---------------- */
+
+  function uid() {
+    return 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+  }
+
+  /* 老版本只有一组 base/key/model，升上来时包成一个服务商 */
+  function migrateProviders() {
+    var s = state.settings;
+    if (!Array.isArray(s.providers)) s.providers = [];
+    if (!s.providers.length && (s.base || s.key || s.model)) {
+      s.providers.push({
+        id: uid(),
+        name: hostName(s.base) || '我的服务商',
+        base: s.base || '',
+        key: s.key || '',
+        models: s.models || [],
+        model: s.model || '',
+        imageModel: s.imageModel || '',
+        at: Date.now()
+      });
+    }
+    var ps = s.providers;
+    if (!s.activeId || !ps.some(function (p) { return p.id === s.activeId; })) {
+      s.activeId = ps.length ? ps[0].id : '';
+    }
+    /* 老的字段留空，避免两套配置打架 */
+    s.base = ''; s.key = ''; s.model = ''; s.imageModel = '';
+  }
+
+  function hostName(base) {
+    try { return new URL(/^https?:/.test(base) ? base : 'https://' + base).hostname.replace(/^www\./, ''); }
+    catch (e) { return ''; }
+  }
+
+  function providers() {
+    if (!Array.isArray(state.settings.providers)) state.settings.providers = [];
+    return state.settings.providers;
+  }
+
+  function activeProvider() {
+    var ps = providers();
+    if (!ps.length) return null;
+    for (var i = 0; i < ps.length; i++) if (ps[i].id === state.settings.activeId) return ps[i];
+    return ps[0];
+  }
+
+  function providerById(id) {
+    var ps = providers();
+    for (var i = 0; i < ps.length; i++) if (ps[i].id === id) return ps[i];
+    return null;
+  }
+
+  /* 调用顺序：默认服务商优先，其余按添加顺序排队当备用 */
+  function providerChain(kind) {
+    var act = activeProvider();
+    return providers().filter(function (p) {
+      if (!p.base || !p.key) return false;
+      return kind === 'image' ? !!p.imageModel : !!p.model;
+    }).sort(function (a, b) {
+      return (b === act ? 1 : 0) - (a === act ? 1 : 0);
+    });
   }
 
   function save() {
@@ -96,11 +162,11 @@
 
   /* ---------------- 工具 ---------------- */
 
-  function toast(msg) {
+  function toast(msg, ms) {
     toastEl.textContent = msg;
     toastEl.classList.add('on');
     clearTimeout(toast._t);
-    toast._t = setTimeout(function () { toastEl.classList.remove('on'); }, 2200);
+    toast._t = setTimeout(function () { toastEl.classList.remove('on'); }, ms || 2200);
   }
 
   function buzz(ms) {
@@ -148,6 +214,15 @@
     if (route === 'compose' && opts.mode) {
       state.compose.mode = opts.mode;
     }
+    /* 已经在这个标签页了：再点一次就是回顶部，别整页重画 */
+    if (route === state.route && !opts.fromHistory && NAV_ROUTES.indexOf(route) > -1 && opts.nav === 'tab') {
+      scrollMem[route] = 0;
+      if (viewEl) {
+        try { viewEl.scrollTo({ top: 0, behavior: 'smooth' }); }
+        catch (e) { viewEl.scrollTop = 0; }
+      }
+      return;
+    }
     var dir = opts.nav || (NAV_ROUTES.indexOf(route) > -1 ? 'tab' : 'push');
     if (dir === 'push' && NAV_ROUTES.indexOf(state.route) === -1 && route === 'result') dir = 'push';
     state.route = route;
@@ -161,8 +236,22 @@
     else go('home', { nav: 'pop' });
   }
 
+  var scrollMem = { home: 0, rank: 0, works: 0, me: 0 };
+  var hscrollMem = {};
+  var lastRoute = 'home';
+
   function render(navDir) {
     var route = state.route;
+
+    /* 记住上一个页面的滚动位置：切标签页、切热榜源都不该把人弹回顶部 */
+    var prevRoute = lastRoute;
+    var prevTop = viewEl ? viewEl.scrollTop : 0;
+    if (viewEl && scrollMem.hasOwnProperty(prevRoute)) scrollMem[prevRoute] = prevTop;
+    if (viewEl) {
+      var hs0 = viewEl.querySelector('.hscroll');
+      if (hs0) hscrollMem[prevRoute] = hs0.scrollLeft;
+    }
+
     var html = '';
 
     if (state.genLoading) {
@@ -189,9 +278,27 @@
     viewHost.innerHTML = '<div class="view" id="view"></div>';
     viewEl = document.getElementById('view');
     viewEl.className = 'view ' + (state.genLoading ? 'is-root' :
-      navDir === 'push' ? 'is-push' : navDir === 'pop' ? 'is-pop' : 'is-tab');
+      navDir === 'push' ? 'is-push' : navDir === 'pop' ? 'is-pop' :
+        navDir === 'same' ? 'is-same' : 'is-tab');
     viewEl.innerHTML = html;
-    viewEl.scrollTop = 0;
+
+    /* 同页重渲染（换热榜源、刷新）原地不动；换标签页回到该页上次的位置 */
+    var keep = 0;
+    if (navDir === 'same' || (navDir === 'tab' && prevRoute === route)) keep = prevTop;
+    else if (navDir === 'tab' || navDir === 'pop') keep = scrollMem[route] || 0;
+    viewEl.scrollTop = keep;
+    topbar.classList.toggle('solid', keep > 6);
+    var hs1 = viewEl.querySelector('.hscroll');
+    if (hs1 && hscrollMem[route]) hs1.scrollLeft = hscrollMem[route];
+    if (keep) {
+      requestAnimationFrame(function () {
+        if (!viewEl) return;
+        viewEl.scrollTop = keep;
+        var hs2 = viewEl.querySelector('.hscroll');
+        if (hs2 && hscrollMem[route]) hs2.scrollLeft = hscrollMem[route];
+      });
+    }
+    lastRoute = route;
     viewEl.addEventListener('scroll', onScroll, { passive: true });
 
     /* 底部 */
@@ -347,8 +454,11 @@
   /* ---------------- 热榜 ---------------- */
 
   async function loadHot(srcId) {
-    state.hot.loading = true;
-    if (state.route === 'home' || state.route === 'rank') render('tab');
+    var id = srcId || state.hot.active;
+    var existed = state.hot.bySrc[id] && state.hot.bySrc[id].items && state.hot.bySrc[id].items.length;
+    /* 已经有数据就别切成骨架屏，否则列表高度塌了，滚动位置会被夹回去 */
+    state.hot.loading = !existed;
+    if (state.route === 'home' || state.route === 'rank') render('same');
     var r;
     try {
       r = await L.hot(srcId || state.hot.active);
@@ -364,7 +474,7 @@
       var best = pickBestSource();
       if (best) state.hot.active = best;
     }
-    if (state.route === 'home' || state.route === 'rank') render('tab');
+    if (state.route === 'home' || state.route === 'rank') render('same');
   }
 
   function recalcHot() {
@@ -381,7 +491,7 @@
   function softRender() {
     if (state.route !== 'home' && state.route !== 'rank') return;
     clearTimeout(renderTimer);
-    renderTimer = setTimeout(function () { render('tab'); }, 160);
+    renderTimer = setTimeout(function () { render('same'); }, 160);
   }
 
   async function loadAllHot() {
@@ -408,7 +518,7 @@
     /* 全部拉完后，切回优先级最高的可用源，避免默认落在 B 站这类娱乐榜 */
     var best = pickBestSource();
     if (best) state.hot.active = best;
-    if (state.route === 'home' || state.route === 'rank') render('tab');
+    if (state.route === 'home' || state.route === 'rank') render('same');
   }
 
   function pickBestSource() {
@@ -448,6 +558,7 @@
         if (el) el.textContent = state.genNote;
       });
       if (r.title) state.compose.sourceTitle = r.title;
+      state.compose.sourceUrl = c.link1.trim();
       return r.text;
     }
     if (c.mode === 'merge') {
@@ -494,34 +605,42 @@
 
   async function build(src) {
     var c = state.compose;
-    var useAI = !!(state.settings.base && state.settings.model && state.settings.key);
+    var chain = providerChain('chat');
 
-    if (useAI) {
-      state.genNote = '模型正在写';
+    if (chain.length) {
+      state.genNote = chain.length > 1 ? '模型正在写（' + chain.length + ' 家待命）' : '模型正在写';
       setStep(2);
-      var txt = await L.chat(state.settings, aiPrompt(src, c));
-      var o = parseAI(txt);
-      var body = o.body;
-      var titles = (o.titles || []).filter(Boolean).slice(0, 4);
-      var title = o.title || titles[0] || '未命名';
-      if (titles.indexOf(title) === -1) titles.unshift(title);
-      var simA = Math.round(E.similarity(src, body) * 100);
-      return {
-        title: title,
-        titles: titles.slice(0, 4),
-        body: body,
-        source: src,
-        sourceTitle: state.compose.sourceTitle,
-        words: E.countWords(body),
-        sim: simA,
-        dupes: 0,
-        score: Math.max(35, Math.min(96, 100 - simA)),
-        styleKey: c.style,
-        styleName: U.styleName(c.style),
-        platformName: platformName(c.platform),
-        modelName: state.settings.model,
-        at: Date.now()
-      };
+      try {
+        var res = await L.chatChain(chain, aiPrompt(src, c));
+        if (res.switched) toast('默认服务商没响应，已自动切到 ' + (res.provider.name || '备用'), 3000);
+        var txt = res.text;
+        var o = parseAI(txt);
+        var body = o.body;
+        var titles = (o.titles || []).filter(Boolean).slice(0, 4);
+        var title = o.title || titles[0] || '未命名';
+        if (titles.indexOf(title) === -1) titles.unshift(title);
+        var simA = Math.round(E.similarity(src, body) * 100);
+        return {
+          title: title,
+          titles: titles.slice(0, 4),
+          body: body,
+          source: src,
+          sourceTitle: state.compose.sourceTitle,
+          words: E.countWords(body),
+          sim: simA,
+          dupes: 0,
+          score: Math.max(35, Math.min(96, 100 - simA)),
+          styleKey: c.style,
+          styleName: U.styleName(c.style),
+          platformName: platformName(c.platform),
+          modelName: (res.provider.name ? res.provider.name + ' · ' : '') + res.model,
+          at: Date.now()
+        };
+      } catch (e) {
+        /* 都调不通就退回本机引擎，而不是把人卡在报错页 */
+        toast('模型都没调通，已用本机引擎', 3000);
+        if (e && e.detail) state.genNote = '模型失败，改用本机引擎';
+      }
     }
 
     state.genNote = '本机引擎正在写';
@@ -612,6 +731,11 @@
 
     out.id = 'w' + Date.now();
     out.at = Date.now();
+    /* 记住原文地址：配图页要用它去取原文里的真实图片 */
+    out.url = String(
+      (state.compose.mode === 'link' ? state.compose.link1 : '') ||
+      state.compose.sourceUrl || ''
+    ).trim();
     state.result = out;
     state.genLoading = false;
     state.quota.used += 1;
@@ -725,6 +849,82 @@
   }
 
   /* 热榜条目 */
+  /* ---------------- 热点详情 ---------------- */
+
+  function fmtPublished(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    var pad = function (n) { return ('0' + n).slice(-2); };
+    var hm = pad(d.getHours()) + ':' + pad(d.getMinutes());
+    var md = (d.getMonth() + 1) + '月' + d.getDate() + '日';
+    var diff = Date.now() - d.getTime();
+    if (diff >= 0 && diff < 864e5) return '今天 ' + hm;
+    if (diff >= 864e5 && diff < 1728e5) return '昨天 ' + hm;
+    if (d.getFullYear() === new Date().getFullYear()) return md + ' ' + hm;
+    return d.getFullYear() + '年' + md;
+  }
+
+  function metaSkeleton() {
+    return '<div style="display:flex;gap:8px;margin:2px 0 4px">' +
+      '<span class="sk" style="width:56px;height:20px;border-radius:999px"></span>' +
+      '<span class="sk" style="width:60px;height:20px;border-radius:999px"></span>' +
+      '<span class="sk" style="width:84px;height:20px;border-radius:999px"></span></div>';
+  }
+
+  function metaChip(text, tone) {
+    if (!text) return '';
+    var style = tone === 'acc'
+      ? 'background:var(--acc-soft);color:var(--acc)'
+      : 'background:var(--surface-2);color:var(--ink-2)';
+    return '<span style="display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 9px;border-radius:999px;' +
+      'font-size:11.5px;font-weight:600;letter-spacing:.01em;' + style + '">' + esc(text) + '</span>';
+  }
+
+  function fillHotMeta(url, srcId, it) {
+    var s = state.hot.bySrc[srcId];
+    var fallback =
+      '<div style="display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 2px">' +
+      metaChip(U.sourceName(srcId), 'acc') +
+      (it.hot ? metaChip('热度 ' + U.fmtHot(it.hot)) : '') +
+      metaChip(s && s.via === 'live' ? '实时' : '快照') +
+      '</div>';
+
+    L.meta(url, srcId).then(function (m) {
+      var box = document.getElementById('hotMeta');
+      if (!box) return;
+      if (!m || (!m.title && !m.head && !m.category)) {
+        box.innerHTML = fallback +
+          '<div class="sec-sub" style="margin-top:6px">原文详情没取到（站点限制），不影响下面的解析。</div>';
+        return;
+      }
+      var when = fmtPublished(m.published);
+      var bits = [when, m.site, m.author].filter(Boolean);
+      box.innerHTML =
+        '<div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 2px">' +
+        metaChip(m.category || U.sourceName(srcId), 'acc') +
+        (it.hot ? metaChip('热度 ' + U.fmtHot(it.hot)) : '') +
+        metaChip(s && s.via === 'live' ? '实时' : '快照') +
+        (m.section ? metaChip(m.section) : '') +
+        '</div>' +
+        (bits.length ? '<div class="sec-sub" style="margin-top:7px">' + esc(bits.join(' · ')) + '</div>' : '') +
+        (m.desc ? '<p style="margin:9px 0 0;font-size:13px;line-height:1.7;color:var(--ink-2)">' + esc(m.desc) + '</p>' : '');
+
+      /* 头图先验证尺寸：不少站点的 og:image 指向 1px 占位图 */
+      if (m.head) {
+        var probe = new Image();
+        probe.onload = function () {
+          if (probe.naturalWidth < 400 || probe.naturalHeight < 200) return;
+          var slot = document.getElementById('hotCover');
+          if (!slot) return;
+          slot.innerHTML = '<div class="hot-cover" style="margin-bottom:12px">' +
+            '<img src="' + esc(m.head) + '" alt="" loading="lazy"></div>';
+        };
+        probe.src = m.head;
+      }
+    });
+  }
+
   function openHotItem(srcId, i) {
     var s = state.hot.bySrc[srcId];
     if (!s || !s.items || !s.items[i]) return;
@@ -733,15 +933,14 @@
     var kind = L.urlKind(url);
     var isSearch = kind === 'search';
     var isBlocked = kind === 'blocked';
+    var canMeta = url && !isSearch;
 
-    var html = '<div class="badge live" style="margin-bottom:10px">' +
-      (s.via === 'live' ? '实时抓取' : '定时快照') + '</div>' +
-      '<h2 style="font-size:18px;line-height:1.45;font-weight:640;letter-spacing:-.02em;margin:0 0 10px">' + esc(it.title) + '</h2>' +
-      '<div class="sec-sub">' + esc(U.sourceName(srcId)) + ' · 热度 ' + U.fmtHot(it.hot) +
-      ' · ' + U.fmtTime(s.at) + ' 抓取</div>';
+    var html = (canMeta ? '<div id="hotCover"></div>' : '') +
+      '<h2 style="font-size:18px;line-height:1.45;font-weight:640;letter-spacing:-.02em;margin:10px 0 8px">' + esc(it.title) + '</h2>' +
+      '<div id="hotMeta">' + (canMeta ? metaSkeleton() : '') + '</div>';
 
     if (url) {
-      html += '<div class="field mt-m"><div class="field-head"><span class="lbl">' +
+      html += '<div class="field mt-s"><div class="field-head"><span class="lbl">' +
         (isSearch ? '榜单页' : '原文链接') + '</span>' +
         '<span class="sec-sub">' + esc(L.hostOf(url)) + '</span></div>' +
         '<div class="urlbox" data-url="' + esc(url) + '">' + esc(url) + '</div></div>';
@@ -752,7 +951,7 @@
           ? '<div class="note mt-s">' + U.ic('alert', 14) +
             '<div>这个站点对非浏览器访问有<b>强风控</b>（知乎、B站、36氪、头条热搜都这样），站内解析基本取不到正文。建议点「打开链接」在浏览器里读，复制正文后粘到创作页，效果一样。</div></div>'
           : '<div class="note mt-s">' + U.ic('alert', 14) +
-            '<div>热榜接口只给标题和热度，正文要另外去原页面取。点下面的<b>解析正文</b>，取不到会把每条通道的原因列出来。</div></div>';
+            '<div>分类、发布时间和头图都是从原文页面读的；正文要点<b>解析正文</b>，取不到会把每条通道的原因列出来。</div></div>';
     } else {
       html += '<div class="note mt-m">' + U.ic('alert', 14) +
         '<div>这个源只提供标题，没有配原文链接。可以复制标题去搜，或者直接用它当选题自己写。</div></div>';
@@ -764,7 +963,6 @@
         U.ic('wand', 16) + ' 解析正文并开写</button>';
     }
     if (url && isBlocked) {
-      /* 风控站点仍然允许试一次，但说清楚大概率失败，主按钮换成「用标题写」 */
       foot += '<button class="btn btn-ghost btn-block" data-act="hot-parse" data-url="' + esc(url) + '" data-title="' + esc(it.title) + '">' +
         U.ic('wand', 15) + ' 仍然尝试解析一次</button>';
     }
@@ -779,6 +977,7 @@
     foot += '<button class="btn btn-ghost btn-block" data-act="copy" data-text="' + esc(it.title) + '">复制标题</button>';
 
     openSheet(html, { title: '这条热榜', foot: foot });
+    if (canMeta) fillHotMeta(url, srcId, it);
   }
 
   /* 额度 */
@@ -827,67 +1026,155 @@
   }
 
   /* 模型配置 */
+  /* ---------------- 模型服务商 ---------------- */
+
+  var draft = null;   /* 正在编辑的服务商草稿（含模型列表），保存前不落盘 */
+
+  function provSummary(p) {
+    var bits = [];
+    if (p.model) bits.push('文案 ' + p.model);
+    if (p.imageModel) bits.push('出图 ' + p.imageModel);
+    return bits.join(' · ') || '还没选模型';
+  }
+
+  function providerCard(p) {
+    var isActive = p.id === state.settings.activeId;
+    return '<div class="prov' + (isActive ? ' on' : '') + '">' +
+      '<div class="pv-top">' +
+      '<div class="pv-name">' + esc(p.name || hostName(p.base) || '未命名') +
+      (isActive ? '<span class="pv-badge">默认</span>' : '') + '</div>' +
+      '<div class="pv-host">' + esc(hostName(p.base) || '未填地址') + '</div>' +
+      '</div>' +
+      '<div class="pv-meta">' + esc(provSummary(p)) + '</div>' +
+      '<div class="pv-acts">' +
+      (isActive ? '' : '<button data-act="provider-default" data-id="' + p.id + '">设为默认</button>') +
+      '<button data-act="provider-edit" data-id="' + p.id + '">编辑</button>' +
+      '<button data-act="provider-del" data-id="' + p.id + '">删除</button>' +
+      '</div></div>';
+  }
+
   function openModelSheet() {
-    var s = state.settings;
+    var ps = providers();
+    var act = activeProvider();
+    var html = '<p style="color:var(--ink-2)">可以同时接好几家服务商。生成时用<b>默认</b>那家；它超时、限流或 Key 失效，会自动换下一家，不打断你。' +
+      '配了出图模型的，配图时自动挑一家能出图的用。</p>';
+
+    if (ps.length) {
+      html += '<div class="provs mt-m">' + ps.map(providerCard).join('') + '</div>';
+    } else {
+      html += '<div class="note mt-m">' + U.ic('cpu', 14) +
+        '<div>还没接服务商。接上以后，改写用你自己的额度，生成的稿子质量比本机引擎高一个档。</div></div>';
+    }
+
+    html += '<button class="btn btn-soft btn-block mt-m" data-act="provider-add">' +
+      U.ic('plus', 15) + ' 添加服务商</button>';
+
+    html += '<div class="note mt-s">' + U.ic('key', 14) +
+      '<div>Key 只存在这台设备的浏览器里，不会上传。请求直接发给你填的服务商。' +
+      (act ? '<br>当前默认：<b>' + esc(act.name || hostName(act.base)) + '</b>' : '') + '</div></div>';
+
+    openSheet(html, { title: '模型服务商' });
+  }
+
+  function openProviderSheet(id) {
+    var p = id ? providerById(id) : null;
+    draft = p
+      ? { id: p.id, name: p.name, base: p.base, key: p.key, model: p.model, imageModel: p.imageModel, models: (p.models || []).slice(), isNew: false }
+      : { id: uid(), name: '', base: '', key: '', model: '', imageModel: '', models: [], isNew: true };
+
     var html = '';
-    html += '<div class="field"><div class="field-head"><span class="lbl">Base URL</span>' +
+    html += '<div class="field"><div class="field-head"><span class="lbl">名字</span>' +
+      '<span class="cnt">随手起，方便认</span></div>' +
+      '<input data-mfield="name" value="' + esc(draft.name) + '" placeholder="OpenAI / 硅基流动 / 本地 Ollama"></div>';
+    html += '<div class="field mt-s"><div class="field-head"><span class="lbl">Base URL</span>' +
       '<span class="cnt">OpenAI 兼容</span></div>' +
-      '<input data-mfield="base" value="' + esc(s.base) + '" placeholder="https://api.openai.com/v1" autocapitalize="off" autocorrect="off"></div>';
+      '<input data-mfield="base" value="' + esc(draft.base) + '" placeholder="https://api.openai.com/v1" autocapitalize="off" autocorrect="off"></div>';
     html += '<div class="field mt-s"><div class="field-head"><span class="lbl">API Key</span></div>' +
-      '<input data-mfield="key" type="password" value="' + esc(s.key) + '" placeholder="sk-..." autocapitalize="off"></div>';
+      '<input data-mfield="key" type="password" value="' + esc(draft.key) + '" placeholder="sk-..." autocapitalize="off"></div>';
     html += '<button class="btn btn-primary btn-block mt-s" data-act="fetch-models">' +
       U.ic('refresh', 16) + ' 连接并获取可用模型</button>';
+    html += '<div class="field mt-s"><div class="field-head"><span class="lbl">模型名</span>' +
+      '<span class="cnt">拉不到列表时手填</span></div>' +
+      '<input data-mfield="model" value="' + esc(draft.model) + '" placeholder="gpt-4o-mini / deepseek-chat / qwen-plus" autocapitalize="off"></div>';
     html += '<div id="modelStatus" class="sec-sub" style="margin:12px 0 8px;min-height:16px">' +
-      (s.models.length ? '上次拉到 ' + s.models.length + ' 个模型' : '还没拉取过模型列表') + '</div>';
+      (draft.models.length ? '已拉到 ' + draft.models.length + ' 个模型' : '还没拉取过模型列表') + '</div>';
     html += '<div id="modelList">' + modelListHtml() + '</div>';
-    html += '<div class="note mt-s">' + U.ic('key', 14) +
-      '<div>Key 只存在这台设备的浏览器里，不会上传。请求直接发给你填的服务商。</div></div>';
+    html += '<div class="note mt-s">' + U.ic('image', 14) +
+      '<div>标了 <b>出图</b> 的模型会出现在上面的「出图模型」里，选中后配图页就能直接生成；没选出图模型就用提示词方案。</div></div>';
 
     openSheet(html, {
-      title: '大模型配置',
-      foot: '<button class="btn btn-primary btn-block" data-act="save-model">保存并使用</button>' +
-        (s.model ? '<button class="btn btn-ghost btn-block" data-act="test-model">测试当前模型能不能用</button>' : '')
+      title: draft.isNew ? '添加服务商' : '编辑服务商',
+      foot: '<button class="btn btn-primary btn-block" data-act="save-provider">保存</button>' +
+        (draft.model || draft.imageModel ? '<button class="btn btn-ghost btn-block" data-act="test-model">测试当前模型能不能用</button>' : '') +
+        '<button class="btn btn-ghost btn-block" data-act="back-providers">返回服务商列表</button>'
     });
   }
 
   function modelListHtml() {
-    var models = state.settings.models || [];
+    var models = (draft && draft.models) || [];
     if (!models.length) {
       return '<div class="note">' + U.ic('cpu', 14) +
         '<div>点上面的按钮，会读 <b>/models</b> 接口，把你能用的模型全列出来，并标出各自擅长什么。</div></div>';
     }
-    return models.map(function (m) {
-      var on = m.id === state.settings.model;
-      var tags = (m.tags || []).map(function (t) {
-        var label = { vision: '看图', image: '出图', reason: '推理', fast: '快', heavy: '大' }[t] || t;
-        return '<span class="tg ' + t + '">' + label + '</span>';
+    var chat = models.filter(function (m) { return m.kind === 'chat'; });
+    var imgs = models.filter(function (m) { return m.kind === 'image'; });
+
+    var h = '';
+    if (chat.length) {
+      h += '<div class="sec-head" style="margin-bottom:6px"><div class="h2" style="font-size:13px">文案模型</div>' +
+        '<span class="sec-sub">选一个当主力</span></div>';
+      h += chat.map(function (m) {
+        var on = m.id === draft.model;
+        var tags = (m.tags || []).map(function (t) {
+          var label = { vision: '看图', image: '出图', reason: '推理', fast: '快', heavy: '大' }[t] || t;
+          return '<span class="tg ' + t + '">' + label + '</span>';
+        }).join('');
+        return '<button class="model' + (on ? ' on' : '') + '" data-act="pick-model" data-id="' + esc(m.id) + '">' +
+          '<span class="mt"><span class="mn">' + esc(m.id) + '</span>' +
+          '<span class="md">' + esc(m.family) + ' · ' + esc(m.good) + '</span>' +
+          '<span class="tags">' + tags + '</span></span>' +
+          (on ? '<span style="color:var(--acc)">' + U.ic('check', 16) + '</span>' : '') +
+          '</button>';
       }).join('');
-      return '<button class="model' + (on ? ' on' : '') + '" data-act="pick-model" data-id="' + esc(m.id) + '">' +
-        '<span class="mt"><span class="mn">' + esc(m.id) + '</span>' +
-        '<span class="md">' + esc(m.family) + ' · ' + esc(m.good) + '</span>' +
-        '<span class="tags">' + tags + '</span></span>' +
-        (on ? '<span style="color:var(--acc)">' + U.ic('check', 16) + '</span>' : '') +
-        '</button>';
-    }).join('');
+    }
+    if (imgs.length) {
+      h += '<div class="sec-head mt-m" style="margin-bottom:6px"><div class="h2" style="font-size:13px">出图模型</div>' +
+        '<span class="sec-sub">可留空，留空就用提示词</span></div>';
+      h += '<div class="hscroll" style="padding-right:0">' + imgs.map(function (m) {
+        var on = m.id === draft.imageModel;
+        return '<button class="chip' + (on ? ' on' : '') + '" data-act="pick-image-model" data-id="' + esc(m.id) + '">' +
+          esc(m.id) + '</button>';
+      }).join('') + (draft.imageModel ? '<button class="chip" data-act="pick-image-model" data-id="">清除</button>' : '') + '</div>';
+    }
+    return h;
   }
 
   async function fetchModels() {
     var st = document.getElementById('modelStatus');
     var list = document.getElementById('modelList');
-    if (!state.settings.base) { toast('先填 Base URL'); return; }
+    if (!draft) return;
+    readProviderForm();
+    if (!draft.base) { toast('先填 Base URL'); return; }
     if (st) st.textContent = '正在请求 /models …';
     if (list) list.innerHTML = '<div class="sk" style="height:44px;margin-bottom:8px"></div><div class="sk" style="height:44px;margin-bottom:8px"></div><div class="sk" style="height:44px"></div>';
     try {
-      var models = await L.listModels(state.settings);
-      state.settings.models = models;
-      save();
+      var models = await L.listModels({ base: draft.base, key: draft.key });
+      draft.models = models;
       if (st) st.innerHTML = '拿到 <b style="color:var(--acc)">' + models.length + '</b> 个模型，点一个选中';
       if (list) list.innerHTML = modelListHtml();
       var chat = models.filter(function (m) { return m.kind === 'chat'; });
-      if (chat.length && !state.settings.model) {
-        state.settings.model = chat[0].id;
-        save();
+      if (chat.length && !draft.model) {
+        draft.model = chat[0].id;
         if (list) list.innerHTML = modelListHtml();
+      }
+      var imgs = models.filter(function (m) { return m.kind === 'image'; });
+      if (imgs.length && !draft.imageModel) {
+        draft.imageModel = imgs[0].id;
+        if (list) list.innerHTML = modelListHtml();
+      }
+      if (!draft.name) {
+        var inp = document.querySelector("[data-mfield='name']");
+        if (inp && !inp.value) inp.value = hostName(draft.base);
       }
       toast('已获取 ' + models.length + ' 个模型');
     } catch (e) {
@@ -897,28 +1184,44 @@
     }
   }
 
-  function openImageModelSheet() {
-    var s = state.settings;
-    var imgs = (s.models || []).filter(function (m) { return m.kind === 'image'; });
-    var html = '<p>出图走 OpenAI 的 <b>/images/generations</b>。填一个文生图模型名即可，Base URL 和 Key 沿用上面的配置。</p>';
-    html += '<div class="field mt-s"><div class="field-head"><span class="lbl">Image model</span></div>' +
-      '<input data-mfield="imageModel" value="' + esc(s.imageModel) + '" placeholder="gpt-image-1 / dall-e-3 / flux-schnell"></div>';
-    if (imgs.length) {
-      html += '<div class="sec-head mt-m"><div class="h2" style="font-size:13px">你账号里的出图模型</div></div>' +
-        '<div class="hscroll" style="padding-right:0">' + imgs.map(function (m) {
-          return '<button class="chip" data-act="pick-image-model" data-id="' + esc(m.id) + '">' + esc(m.id) + '</button>';
-        }).join('') + '</div>';
-    } else {
-      html += '<div class="note mt-s">' + U.ic('image', 14) +
-        '<div>还没在模型列表里看到出图模型。先去「大模型配置」点一次<b>获取可用模型</b>，这里会自动列出图像类模型。</div></div>';
-    }
-    html += '<div class="note mt-s">' + U.ic('alert', 14) +
-      '<div>有些服务商不开放图像接口，或不允许浏览器直接调用。失败时会自动退回<b>提示词方案</b>，不会卡住流程。</div></div>';
-    openSheet(html, {
-      title: '出图模型',
-      foot: '<button class="btn btn-primary btn-block" data-act="save-image-model">保存</button>' +
-        (s.imageModel ? '<button class="btn btn-ghost btn-block" data-act="clear-image-model">清除</button>' : '')
-    });
+  function readProviderForm() {
+    if (!draft) return;
+    var get = function (f) {
+      var el = document.querySelector("[data-mfield='" + f + "']");
+      return el ? String(el.value || '').trim() : '';
+    };
+    draft.name = get('name');
+    draft.base = get('base');
+    var k = document.querySelector("[data-mfield='key']");
+    if (k) draft.key = String(k.value || '').trim();
+    var mm = document.querySelector("[data-mfield='model']");
+    if (mm && String(mm.value || '').trim()) draft.model = String(mm.value).trim();
+    if (!draft.name && draft.base) draft.name = hostName(draft.base);
+  }
+
+  function saveProvider() {
+    readProviderForm();
+    if (!draft.base) { toast('先填 Base URL'); return; }
+    var ps = providers();
+    var i = -1;
+    for (var j = 0; j < ps.length; j++) if (ps[j].id === draft.id) i = j;
+    var rec = {
+      id: draft.id,
+      name: draft.name || hostName(draft.base) || '服务商',
+      base: draft.base,
+      key: draft.key,
+      model: draft.model,
+      imageModel: draft.imageModel,
+      models: draft.models || [],
+      at: Date.now()
+    };
+    if (i > -1) ps[i] = rec;
+    else ps.push(rec);
+    if (!state.settings.activeId) state.settings.activeId = rec.id;
+    save();
+    toast(i > -1 ? '已更新' : '已添加 ' + rec.name, 2400);
+    openModelSheet();
+    render('same');
   }
 
   /* 解析失败 */
@@ -1075,7 +1378,8 @@
       '<div class="hr"></div>' +
       '<div class="rows">' +
       '<div class="row"><span class="rt"><b>版本</b></span><span class="rv">' + VERSION + '</span></div>' +
-      '<div class="row"><span class="rt"><b>生成</b></span><span class="rv">' + (state.settings.model ? '自有模型' : '本机引擎') + '</span></div>' +
+      '<div class="row"><span class="rt"><b>生成</b></span><span class="rv">' +
+      (providerChain('chat').length ? esc(activeProvider().name || activeProvider().model) : '本机引擎') + '</span></div>' +
       '<div class="row"><span class="rt"><b>托管</b></span><span class="rv">GitHub Pages</span></div>' +
       '</div>' +
       '<div class="note mt-m">' + U.ic('shield', 14) +
@@ -1224,13 +1528,25 @@
 
       case 'rtab':
         state.resultTab = t.dataset.tab;
-        render('tab');
+        render('same');
+        if (state.resultTab === 'images') loadRealImages();
         break;
 
       case 'tab-to-images':
         state.resultTab = 'images';
-        render('tab');
+        render('same');
+        loadRealImages();
         break;
+
+      case 'use-real-image': {
+        var r0 = state.result;
+        if (!r0) break;
+        r0.cover = t.dataset.url || '';
+        save();
+        render('same');
+        toast('已设为封面（来源：原文配图）', 2600);
+        break;
+      }
 
       case 'dl-md':
         closeSheet();
@@ -1262,11 +1578,16 @@
         break;
       }
 
-      case 'hot-src':
-        state.hot.active = t.dataset.src;
-        render('tab');
-        if (!state.hot.bySrc[state.hot.active]) loadHot(state.hot.active);
+      case 'hot-src': {
+        var want = t.dataset.src;
+        if (want === state.hot.active) break;
+        state.hot.active = want;
+        /* 原地换列表：不整页重建、不回到顶部，只有列表本身做一次淡入 */
+        render('same');
+        var have = state.hot.bySrc[want];
+        if (!have || !have.items || !have.items.length) loadHot(want);
         break;
+      }
 
       case 'hot-reload':
         toast('正在抓取…');
@@ -1303,6 +1624,7 @@
           state.compose.mode = 'text';
           state.compose.text1 = pr.text;
           state.compose.sourceTitle = pr.title || t.dataset.title || '';
+          state.compose.sourceUrl = pu;
           state.result = null;
           go('compose', { nav: 'push' });
           toast('已取到 ' + pr.text.length + ' 字正文');
@@ -1406,59 +1728,80 @@
         openModelSheet();
         break;
 
+      case 'open-image-model':
+        openModelSheet();
+        break;
+
+      case 'provider-add':
+        openProviderSheet(null);
+        break;
+
+      case 'provider-edit':
+        openProviderSheet(t.dataset.id);
+        break;
+
+      case 'provider-del': {
+        var delId = t.dataset.id;
+        state.settings.providers = providers().filter(function (p) { return p.id !== delId; });
+        if (state.settings.activeId === delId) {
+          state.settings.activeId = providers().length ? providers()[0].id : '';
+        }
+        save();
+        openModelSheet();
+        render('same');
+        toast('已删除');
+        break;
+      }
+
+      case 'provider-default':
+        state.settings.activeId = t.dataset.id;
+        save();
+        openModelSheet();
+        render('same');
+        toast('默认服务商已切换', 2200);
+        break;
+
+      case 'back-providers':
+        openModelSheet();
+        break;
+
+      case 'save-provider':
+        saveProvider();
+        break;
+
       case 'fetch-models':
         fetchModels();
         break;
 
       case 'pick-model':
-        state.settings.model = t.dataset.id;
-        save();
-        document.getElementById('modelList').innerHTML = modelListHtml();
-        toast('已选中 ' + t.dataset.id);
+        if (draft) {
+          draft.model = t.dataset.id;
+          var mi = document.querySelector("[data-mfield='model']");
+          if (mi) mi.value = draft.model;
+          var ml = document.getElementById('modelList');
+          if (ml) ml.innerHTML = modelListHtml();
+          toast('已选中 ' + t.dataset.id);
+        }
         break;
 
-      case 'save-model':
-        if (!state.settings.base) { toast('先填 Base URL'); return; }
-        save();
-        closeSheet();
-        render('tab');
-        toast(state.settings.model ? '已启用 ' + state.settings.model : '已保存，但还没选模型');
+      case 'pick-image-model':
+        if (draft) {
+          draft.imageModel = t.dataset.id || '';
+          var ml2 = document.getElementById('modelList');
+          if (ml2) ml2.innerHTML = modelListHtml();
+        }
         break;
 
       case 'test-model':
+        if (!draft) return;
+        readProviderForm();
         toast('测试中…');
         try {
-          var tr = await L.testModel(state.settings);
+          var tr = await L.testModel({ base: draft.base, key: draft.key, model: draft.model }, draft.model);
           toast('连通：' + tr.text.slice(0, 12));
         } catch (e) {
           toast('失败：' + (e.message || ''));
         }
-        break;
-
-      case 'open-image-model':
-        openImageModelSheet();
-        break;
-
-      case 'pick-image-model':
-        state.settings.imageModel = t.dataset.id;
-        save();
-        closeSheet();
-        render('tab');
-        break;
-
-      case 'save-image-model':
-        state.settings.imageModel = (document.querySelector("[data-mfield='imageModel']") || {}).value || state.settings.imageModel;
-        save();
-        closeSheet();
-        render('tab');
-        toast('已保存');
-        break;
-
-      case 'clear-image-model':
-        state.settings.imageModel = '';
-        save();
-        closeSheet();
-        render('tab');
         break;
 
       case 'open-style':
@@ -1591,27 +1934,55 @@
   async function genImage() {
     var r = state.result;
     if (!r) return;
-    if (!state.settings.imageModel || !state.settings.base) {
-      openImageModelSheet();
+    var chain = providerChain('image');
+    if (!chain.length) {
+      toast('没有配置出图模型，直接用下面的提示词更快', 3000);
+      if (state.resultTab !== 'images') { state.resultTab = 'images'; render('same'); }
       return;
     }
     var vs = E.visuals(r.body, { title: r.title, style: r.styleKey });
     if (!vs.length) return;
     state.imgLoading = true;
     state.resultTab = 'images';
-    render('tab');
+    render('same');
     try {
-      var cfg = { base: state.settings.base, key: state.settings.key, model: state.settings.imageModel };
-      var url = await L.genImage(cfg, vs[0].prompt, '1024x1024');
-      r.images = (r.images || []).concat([url]);
+      var res = await L.genImageChain(chain, vs[0].prompt, '1024x1024');
+      r.images = (r.images || []).concat([res.url]);
+      r.imageBy = res.provider.name || res.model;
       var w = state.works.filter(function (x) { return x.id === r.id; })[0];
       if (w) w.data.images = r.images;
       save();
+      toast('已用 ' + (r.imageBy || '出图模型') + ' 生成', 2600);
     } catch (e) {
-      toast('出图失败：' + (e.message || '') + '，用提示词吧');
+      toast('出图失败：' + (e.message || '') + '，已保留提示词', 3000);
     }
     state.imgLoading = false;
-    render('tab');
+    render('same');
+  }
+
+  /* 原文里的真实配图：先取元信息，再逐张预加载，滤掉小图和坏链 */
+  function loadRealImages() {
+    var r = state.result;
+    if (!r || r.realTried || !r.url) return;
+    r.realTried = true;
+    L.meta(r.url, '').then(function (m) {
+      var list = (m && m.images) || [];
+      if (!list.length) { r.realImages = []; return; }
+      var keep = [], left = Math.min(list.length, 5);
+      list.slice(0, 5).forEach(function (u, i) {
+        var img = new Image();
+        var done = function (ok) {
+          if (ok) keep[i] = u;
+          if (--left === 0) {
+            r.realImages = keep.filter(Boolean);
+            if (state.resultTab === 'images' && state.route === 'result') render('same');
+          }
+        };
+        img.onload = function () { done(img.naturalWidth >= 420 && img.naturalHeight >= 200); };
+        img.onerror = function () { done(false); };
+        img.src = u;
+      });
+    }).catch(function () { r.realImages = []; });
   }
 
   /* ---------------- 示例 ---------------- */

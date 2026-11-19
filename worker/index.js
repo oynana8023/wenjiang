@@ -187,7 +187,7 @@ async function parseUrl(raw) {
   if (!/^https?:$/.test(target.protocol)) throw new Error('只支持 http/https');
   if (isPrivateHost(target.hostname)) throw new Error('不支持内网地址');
 
-  const hit = cachedGet(target.href);
+  const hit = cachedGet('p:' + target.href);
   if (hit) return hit;
 
   let lastErr = '';
@@ -204,7 +204,7 @@ async function parseUrl(raw) {
       const need = isWx ? 90 : 120;
       if (out.text.length >= need) {
         const value = { title: out.title, text: out.text.slice(0, TEXT_LIMIT), chars: out.text.length };
-        cachedSet(target.href, value);
+        cachedSet('p:' + target.href, value);
         return value;
       }
       lastErr = '正文只有 ' + out.text.length + ' 字（这个页面可能由脚本渲染，或要求登录）';
@@ -213,6 +213,165 @@ async function parseUrl(raw) {
     }
   }
   throw new Error(lastErr || '解析失败');
+}
+
+/* ---------------- 元信息：分类 / 发布时间 / 头图 / 原图 ---------------- */
+
+const CATS = [
+  ['科技数码', /(手机|芯片|处理器|半导体|AI|人工智能|大模型|模型|苹果|iPhone|华为|小米|OPPO|vivo|荣耀|三星|特斯拉|SpaceX|机器人|算法|开源|软件|系统|鸿蒙|安卓|iOS|笔记本|显卡|GPU|算力|数据中心|卫星|火箭|量子|发布会|新品)/g],
+  ['财经商业', /(股价|市值|营收|财报|融资|上市|IPO|收购|并购|裁员|降薪|涨价|降价|消费|电商|零售|品牌|市场|经济|投资|基金|利率|关税|供应链|工厂|产能)/g],
+  ['汽车出行', /(汽车|车型|续航|试驾|新能源|电车|充电|智驾|自动驾驶|车企|比亚迪|理想|蔚来|小鹏|问界|油车)/g],
+  ['娱乐影视', /(电影|剧集|电视剧|综艺|明星|演员|导演|票房|演唱会|音乐|专辑|番剧|动漫|二次元|红毯|官宣)/g],
+  ['游戏电竞', /(游戏|电竞|主机|Steam|手游|版本更新|玩家|开服|联动|抽卡|赛事|战队)/g],
+  ['体育竞技', /(比赛|球队|赛季|冠军|奥运|球员|联赛|进球|夺冠|决赛|NBA|中超|世界杯|全运会)/g],
+  ['健康医疗', /(健康|医生|医院|疾病|药品|疫苗|睡眠|减肥|体检|心理|抑郁|养生)/g],
+  ['教育学习', /(学生|考试|高考|中考|考研|大学|课程|教师|留学|作业|招生)/g],
+  ['生活方式', /(美食|餐厅|旅行|旅游|城市|天气|家居|穿搭|咖啡|露营|宠物|摄影|探店)/g],
+  ['社会民生', /(交通|地铁|高铁|房价|租房|社区|物业|外卖|快递|就业|工资|社保|养老|诈骗|消防)/g]
+];
+
+const SOURCE_CAT = {
+  ithome: '科技数码', geekpark: '科技数码', sspai: '数字生活',
+  '36kr': '财经商业', zhihu: '话题讨论', bilibili: '视频热门',
+  douyin: '短视频', weibo: '社交热搜', baidu: '搜索热榜', toutiao: '资讯热点'
+};
+
+function metaTags(h) {
+  const out = {};
+  const re = /<meta\b[^>]*>/gi;
+  let m;
+  while ((m = re.exec(h))) {
+    const tag = m[0];
+    const k = (tag.match(/(?:property|name|itemprop)\s*=\s*["']([^"']+)["']/i) || [])[1];
+    const v = (tag.match(/content\s*=\s*["']([^"']*)["']/i) || [])[1];
+    if (k && v != null) out[k.toLowerCase()] = decode(v).trim();
+  }
+  return out;
+}
+
+function classify(title, extra, fallback) {
+  let best = '', bestScore = 0;
+  for (const [name, re] of CATS) {
+    const n = (String(title).match(re) || []).length * 2 + (String(extra).match(re) || []).length;
+    if (n > bestScore) { bestScore = n; best = name; }
+  }
+  if (bestScore >= 2) return best;
+  return fallback || '';
+}
+
+function absUrl(u, base) {
+  if (!u) return '';
+  let s = String(u).trim().replace(/^["']|["']$/g, '');
+  if (!s || /^data:|^javascript:/i.test(s)) return '';
+  if (s.startsWith('//')) s = 'https:' + s;
+  if (/^https?:\/\//i.test(s)) return s;
+  if (!base) return '';
+  try { return new URL(s, base).href; } catch (e) { return ''; }
+}
+
+function normTime(v) {
+  if (!v) return '';
+  const s = String(v).trim();
+  if (/^\d{10}$/.test(s)) return new Date(Number(s) * 1000).toISOString();
+  if (/^\d{13}$/.test(s)) return new Date(Number(s)).toISOString();
+  const d = new Date(s.replace(/\./g, '-'));
+  if (!isNaN(d.getTime()) && d.getFullYear() > 2000) return d.toISOString();
+  return '';
+}
+
+function metaOf(html, target, srcId) {
+  const h = String(html);
+  const m = metaTags(h);
+  const base = target.origin + '/';
+
+  const ld = {};
+  for (const b of h.matchAll(/<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const j = JSON.parse(b[1].trim());
+      for (const one of (Array.isArray(j) ? j : [j])) {
+        if (!one || typeof one !== 'object') continue;
+        if (one['@graph']) for (const g of one['@graph']) Object.assign(ld, g);
+        else Object.assign(ld, one);
+      }
+    } catch (e) { /* 站点写坏的 JSON-LD 很常见 */ }
+  }
+
+  const title = m['og:title'] || m['twitter:title'] || ld.headline ||
+    (h.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '';
+  const desc = m['og:description'] || m['description'] || m['twitter:description'] || ld.description || '';
+  const wxCt = (h.match(/var\s+ct\s*=\s*["'](\d{9,13})["']/) || [])[1];
+  const wxName = (h.match(/var\s+nickname\s*=\s*["']([^"']+)["']/) || [])[1];
+
+  const published = normTime(
+    m['article:published_time'] || m['og:release_date'] || m['pubdate'] ||
+    ld.datePublished || ld.dateCreated || wxCt ||
+    (h.match(/<time[^>]+datetime=["']([^"']+)["']/i) || [])[1]
+  );
+
+  const site = m['og:site_name'] || wxName || (ld.publisher && ld.publisher.name) ||
+    target.hostname.replace(/^www\./, '');
+  const author = m['article:author'] || m['author'] || wxName ||
+    (ld.author && (ld.author.name || (Array.isArray(ld.author) ? ld.author[0].name : ''))) || '';
+  const section = m['article:section'] || '';
+  const keywords = (m['keywords'] || ld.keywords || '')
+    .split(/[,，;；|]/).map((x) => x.trim()).filter((x) => x && x.length < 16).slice(0, 6);
+
+  const raw = [
+    m['og:image'], m['og:image:url'], m['twitter:image'], m['twitter:image:src'],
+    (h.match(/var\s+msg_cdn_url\s*=\s*["']([^"']+)["']/) || [])[1],
+    typeof ld.image === 'string' ? ld.image : (Array.isArray(ld.image) ? ld.image[0] : (ld.image && ld.image.url))
+  ];
+  const inner = [...h.matchAll(/<img[^>]+?(?:data-src|data-original|data-echo|src)\s*=\s*["']([^"']+)["']/gi)]
+    .map((x) => x[1]).slice(0, 14);
+
+  const images = [];
+  for (const u of raw.concat(inner)) {
+    const a = absUrl(u, base);
+    if (!a) continue;
+    if (/logo|avatar|icon|qrcode|erweima|blank|spacer|pixel|1x1|sprite|emoji|placeholder/i.test(a)) continue;
+    if (/\/t\.(png|jpg|gif)$|\/default\.(png|jpg)$|\/loading[^/]*\.(gif|png)$/i.test(a)) continue;
+    if (/\.(svg|ico)(\?|$)/i.test(a)) continue;
+    /* 同一张图常被 CDN 用两个域名各给一份，按文件名去重 */
+    var baseName = a.split('?')[0].split('/').pop().toLowerCase();
+    if (images.indexOf(a) < 0 && !images.some(function (x) { return x.split('?')[0].split('/').pop().toLowerCase() === baseName; })) {
+      images.push(a);
+    }
+    if (images.length >= 8) break;
+  }
+
+  return {
+    title: tidyText(stripTags(title)).slice(0, 120),
+    desc: tidyText(stripTags(desc)).slice(0, 260),
+    site: String(site || '').slice(0, 40),
+    author: String(author || '').slice(0, 40),
+    published,
+    section: String(section || '').slice(0, 20),
+    category: classify(title, [desc, keywords.join(' '), section].join(' '), SOURCE_CAT[srcId] || ''),
+    keywords,
+    images,
+    head: images[0] || ''
+  };
+}
+
+async function metaFor(url, srcId) {
+  const target = new URL(url);
+  if (!/^https?:$/.test(target.protocol)) throw new Error('只支持 http/https');
+  if (isPrivateHost(target.hostname)) throw new Error('不支持内网地址');
+
+  const hit = cachedGet('h:' + target.href);
+  if (hit) return metaOf(hit.html, target, srcId);
+
+  let lastErr = '';
+  for (const ua of [UA_MOBILE, UA_DESKTOP]) {
+    try {
+      const { html } = await grab(target, ua);
+      cachedSet('h:' + target.href, { html });
+      return metaOf(html, target, srcId);
+    } catch (e) {
+      lastErr = e && e.name === 'AbortError' ? '抓取超时' : (e && e.message) || '抓取失败';
+    }
+  }
+  throw new Error(lastErr || '取不到页面信息');
 }
 
 /* ---------------- HTTP ---------------- */
@@ -248,7 +407,7 @@ const LANDING = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <h1>文匠解析服务 <span class="ok">运行中</span></h1>
 <p>把下面这个地址填进 App 的「我的 → 解析服务」即可：</p>
 <p><code id="u"></code></p>
-<p>接口：<code>GET /api/parse?url=</code> · 健康检查 <code>GET /api/health</code></p>
+<p>接口：<code>GET /api/parse?url=</code> · <code>GET /api/meta?url=</code> · 健康检查 <code>GET /api/health</code></p>
 <p>把 <code>/api/health</code> 这段去掉，剩下的就是根地址。</p>
 <script>document.getElementById('u').textContent=location.origin;</script>
 </div></body></html>`;
@@ -281,6 +440,17 @@ export default {
         return json({ ok: true, title: out.title, text: out.text, chars: out.chars, via: 'worker' });
       } catch (e) {
         return json({ ok: false, error: (e && e.message) || '解析失败' }, 200);
+      }
+    }
+
+    if (url.pathname === '/api/meta') {
+      const target = url.searchParams.get('url');
+      if (!target) return json({ ok: false, error: '缺少 url 参数' }, 400);
+      try {
+        const meta = await metaFor(target, url.searchParams.get('src') || '');
+        return json(Object.assign({ ok: true }, meta));
+      } catch (e) {
+        return json({ ok: false, error: (e && e.message) || '取不到页面信息' }, 200);
       }
     }
 

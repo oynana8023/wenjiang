@@ -149,12 +149,12 @@ window.WJLive = (function () {
   }
 
   /* 多地址并行竞速：谁先拿到合格正文就用谁，其余自动丢弃 */
-  function raceParse(bases, url, minLen) {
+  function raceCall(bases, fn) {
     return new Promise(function (resolve, reject) {
       if (!bases.length) return reject(new Error('没有可用的解析服务'));
       var left = bases.length, settled = false, errs = [];
       bases.forEach(function (b) {
-        callBase(b, url, minLen, 22000).then(function (r) {
+        fn(b).then(function (r) {
           if (settled) return;
           settled = true;
           resolve(r);
@@ -162,13 +162,62 @@ window.WJLive = (function () {
           errs.push((b || '站内解析') + '：' + (e.message || '失败'));
           if (--left === 0 && !settled) {
             settled = true;
-            var err = new Error('服务端都没解析成功');
+            var err = new Error('服务端都没响应');
             err.detail = errs.join('\n');
             reject(err);
           }
         });
       });
     });
+  }
+
+  function raceParse(bases, url, minLen) {
+    return raceCall(bases, function (b) { return callBase(b, url, minLen); });
+  }
+
+  /* ---------------- 元信息：分类 / 发布时间 / 头图 ---------------- */
+
+  async function callMeta(base, url, srcId, ms) {
+    var d = await getJSON(apiUrl(base, '/api/meta', { url: url, src: srcId }), ms || 20000);
+    if (!d) throw new Error('返回为空');
+    if (!d.ok) throw new Error(d.error || '取不到页面信息');
+    return d;
+  }
+
+  function metaCacheKey(url) { return 'wj.meta.' + url; }
+
+  function readMetaCache(url) {
+    try {
+      var c = JSON.parse(localStorage.getItem(metaCacheKey(url)) || 'null');
+      if (c && c.at && Date.now() - c.at < 6 * 3600e3) return c.data;
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+
+  function writeMetaCache(url, data) {
+    try { localStorage.setItem(metaCacheKey(url), JSON.stringify({ at: Date.now(), data: data })); } catch (e) { /* ignore */ }
+  }
+
+  /* 拿不到就返回 null，不抛错——详情只是锦上添花，不该挡住「解析正文」 */
+  async function meta(url, srcId) {
+    var hit = readMetaCache(url);
+    if (hit) return hit;
+    var bases = parseBases();
+    try {
+      if (await hasServer()) {
+        var d0 = await callMeta('', url, srcId, 20000);
+        writeMetaCache(url, d0);
+        return d0;
+      }
+      if (bases.length) {
+        var d1 = await raceCall(bases, function (b) { return callMeta(b, url, srcId, 20000); });
+        writeMetaCache(url, d1);
+        return d1;
+      }
+    } catch (e) {
+      return null;
+    }
+    return null;
   }
 
   var SOURCES = [
@@ -638,6 +687,45 @@ window.WJLive = (function () {
     return { ok: true, text: String(txt || '').trim() || '已连通', usage: d.usage || null };
   }
 
+  /* ---------------- 多服务商：按顺序降级 ---------------- */
+
+  /* list: [{ id, name, base, key, model, imageModel, models }]
+     默认服务商失败（401 / 429 / 超时 / 余额）就自动换下一家，返回是谁接的活 */
+  async function chatChain(list, messages, opts) {
+    var errs = [];
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i];
+      try {
+        var txt = await chat({ base: p.base, key: p.key, model: p.model }, messages, opts);
+        return { text: txt, provider: p, model: p.model, switched: i > 0, from: i };
+      } catch (e) {
+        var msg = (e && e.message) || '调用失败';
+        if (/HTTP 40[13]/.test(msg)) msg += '（Key 无效或没权限）';
+        if (/HTTP 429/.test(msg)) msg += '（触发限流）';
+        errs.push((p.name || p.base) + '：' + msg);
+      }
+    }
+    var err = new Error('所有模型服务商都没调通');
+    err.detail = errs.join('\n');
+    throw err;
+  }
+
+  async function genImageChain(list, prompt, size) {
+    var errs = [];
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i];
+      try {
+        var url = await genImage({ base: p.base, key: p.key, model: p.imageModel }, prompt, size);
+        return { url: url, provider: p, model: p.imageModel };
+      } catch (e) {
+        errs.push((p.name || p.base) + '：' + ((e && e.message) || '出图失败'));
+      }
+    }
+    var err = new Error('没有能出图的服务商');
+    err.detail = errs.join('\n');
+    throw err;
+  }
+
   async function chat(cfg, messages, opts) {
     var base = normBase(cfg.base);
     var d = await getJSON(base + '/chat/completions', 90000, {
@@ -680,6 +768,7 @@ window.WJLive = (function () {
     SOURCES: SOURCES,
     hot: hot,
     parseLink: parseLink,
+    meta: meta,
     parseBase: parseBase,
     setParseBase: setParseBase,
     parseBases: parseBases,
@@ -697,6 +786,8 @@ window.WJLive = (function () {
     listModels: listModels,
     testModel: testModel,
     chat: chat,
+    chatChain: chatChain,
+    genImageChain: genImageChain,
     genImage: genImage,
     annotate: annotate,
     normBase: normBase

@@ -400,11 +400,11 @@ window.WJUI = (function () {
       '<div class="d">' + r.score + '% 的文字与原文不重合；另有 ' + (r.sim || 0) + '% 是连续 12 字以上的重合片段。' +
       '本机统计，与平台判定无关。</div></div></div>';
 
-    if (!state.settings.model && r.words > 600) {
+    if ((!r.modelName || r.modelName === '本机引擎') && r.words > 600) {
       h += '<div class="note mt-s">' + ic('alert', 14) +
         '<div>这篇 ' + r.words + ' 字。本机引擎对长文只能做轻度改写，段落几乎照原顺序走；<b>接模型后差别会很明显</b>。</div></div>';
     }
-    if (!state.settings.model) {
+    if (!r.modelName || r.modelName === '本机引擎') {
       h += '<button class="note mt-s" data-act="open-model" style="width:100%;text-align:left;align-items:center">' +
         ic('cpu', 14) + '<div style="flex:1">当前用的是<b>本机规则引擎</b>。接一个自己的模型，改写幅度通常能再高一大截。<span style="color:var(--acc)">去配置 →</span></div></button>';
     }
@@ -459,14 +459,44 @@ window.WJUI = (function () {
 
   function images(state) {
     var r = state.result;
+    var s = state.settings;
+    var imgProv = (s.providers || []).filter(function (p) { return p.imageModel && p.base && p.key; });
     var h = '<div class="sec-head mt-m"><div class="h2" style="font-size:15px">配图</div>' +
-      '<span class="sec-sub">' + (state.settings.imageModel ? '已配置出图模型' : '未配置出图模型') + '</span></div>';
+      '<span class="sec-sub">' + (imgProv.length ? imgProv.length + ' 个出图模型可用' : '未配置出图模型') + '</span></div>';
+
+    /* 真实配图：能用原文的就别生成，至少保真 */
+    if (r.cover) {
+      h += '<div class="coverbox"><img src="' + esc(r.cover) + '" alt="">' +
+        '<span class="cbtag">封面 · 原文配图</span></div>';
+    }
+
+    if (r.realImages && r.realImages.length) {
+      h += '<div class="sec-head mt-m" style="margin-bottom:8px"><div class="h2" style="font-size:13px">原文配图</div>' +
+        '<span class="sec-sub">取自原文页面，真实可考</span></div>';
+      h += '<div class="imgrid real">' + r.realImages.map(function (src) {
+        return '<div class="im"><img src="' + esc(src) + '" alt="" loading="lazy">' +
+          '<div class="imtools">' +
+          '<button data-act="use-real-image" data-url="' + esc(src) + '">设为封面</button>' +
+          '<button data-act="copy" data-text="' + esc(src) + '">复制地址</button>' +
+          '</div></div>';
+      }).join('') + '</div>';
+      h += '<div class="note mt-s">' + ic('shield', 14) +
+        '<div>这些是文章自己的图，做资讯号时优先用它，比 AI 生成更站得住脚。点「设为封面」会放进成稿。</div></div>';
+    } else if (r.url && !r.realTried) {
+      h += '<div class="sk" style="height:76px;border-radius:12px;margin-top:10px"></div>';
+    } else if (r.url) {
+      h += '<div class="note mt-s">' + ic('image', 14) +
+        '<div>这篇原文没有可用的配图（或站点把图片交给了脚本加载），所以走下面的提示词方案。</div></div>';
+    }
 
     if (r.images && r.images.length) {
+      h += '<div class="sec-head mt-m" style="margin-bottom:8px"><div class="h2" style="font-size:13px">已生成</div>' +
+        '<span class="sec-sub">' + esc(r.imageBy || '出图模型') + '</span></div>';
       h += '<div class="imgrid">' + r.images.map(function (src) {
-        return '<div class="im"><img src="' + src + '" alt=""></div>';
+        return '<div class="im"><img src="' + esc(src) + '" alt=""></div>';
       }).join('') + '</div>';
-      h += '<div class="dock-row mt-s"><button class="btn btn-soft btn-block" data-act="gen-image">' + ic('image', 15) + ' 再生成一组</button></div>';
+      h += '<div class="dock-row mt-s"><button class="btn btn-soft btn-block" data-act="gen-image">' +
+        ic('image', 15) + ' 再生成一组</button></div>';
       return h;
     }
 
@@ -476,9 +506,9 @@ window.WJUI = (function () {
       return h;
     }
 
-    h += '<div class="note">' + ic('image', 14) +
-      '<div>' + (state.settings.imageModel
-        ? '用已配置的出图模型生成封面；若接口不支持会保留下面的提示词。'
+    h += '<div class="note mt-m">' + ic('wand', 14) +
+      '<div>' + (imgProv.length
+        ? '没有合适的原图时，用已配置的出图模型生成一张；也可以直接复制下面的提示词去即梦、豆包、MJ。'
         : '没有可用的出图模型。<b>下面是为这篇稿子写好的提示词</b>，复制到即梦、豆包、Midjourney 都能用。') + '</div></div>';
 
     var vs = window.WJEngine.visuals(r.body, { title: r.title, style: r.styleKey });
@@ -490,8 +520,8 @@ window.WJUI = (function () {
     }).join('') + '</div>';
 
     h += '<div class="dock-row mt-s">' +
-      '<button class="btn btn-soft btn-block" data-act="gen-image">' + ic('wand', 15) +
-      (state.settings.imageModel ? ' 直接生成封面' : ' 去配置出图模型') + '</button></div>';
+      '<button class="btn btn-soft btn-block" data-act="gen-image">' + ic('image', 15) +
+      (imgProv.length ? ' 直接生成封面' : ' 生成封面') + '</button></div>';
     return h;
   }
 

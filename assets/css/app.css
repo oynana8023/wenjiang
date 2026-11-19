@@ -153,7 +153,19 @@ a {
   animation: popIn 0.36s var(--ease-out) both;
 }
 .view.is-tab {
-  animation: tabIn 0.4s var(--ease-out) both;
+  animation: tabIn 0.32s var(--ease-out) both;
+}
+/* 同一个页面内的局部刷新（换热榜源、刷新数据）：整体不转场，只让列表轻轻换一下 */
+.view.is-same {
+  animation: none;
+}
+.view.is-same .stagger > * {
+  animation: none;
+}
+.view.is-same .rank-list,
+.view.is-same .panel,
+.view.is-same .hero .h1 {
+  animation: softSwap 0.26s var(--ease-out) both;
 }
 .view.is-root {
   animation: fadeUp 0.5s var(--ease-out) both;
@@ -181,12 +193,22 @@ a {
 }
 @keyframes tabIn {
   from {
-    transform: translate3d(0, 14px, 0);
-    opacity: 0;
+    transform: translate3d(0, 7px, 0);
+    opacity: 0.45;
   }
   to {
     transform: none;
     opacity: 1;
+  }
+}
+@keyframes softSwap {
+  from {
+    opacity: 0.35;
+    transform: translate3d(0, 4px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
 @keyframes fadeUp {
@@ -1884,4 +1906,154 @@ a {
 }
 [data-theme="light"] .bar > i {
   background: #1b1b20;
+}
+
+/* ---------- 真实配图 / 封面 ---------- */
+.hot-cover {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.hot-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.coverbox {
+  position: relative;
+  border-radius: var(--r-m);
+  overflow: hidden;
+  margin-top: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.coverbox img {
+  width: 100%;
+  display: block;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+}
+.cbtag {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  font-family: var(--f-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  padding: 5px 9px;
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+}
+
+.imgrid.real .imtools {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  gap: 6px;
+  padding: 7px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.62));
+}
+.imgrid.real .imtools button {
+  flex: 1;
+  height: 26px;
+  border: 0;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #111;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+}
+.imgrid.real .imtools button:active {
+  transform: scale(0.97);
+}
+
+/* ---------- 模型服务商卡片 ---------- */
+.provs {
+  display: grid;
+  gap: 10px;
+}
+.prov {
+  border: 1px solid var(--line);
+  border-radius: var(--r-m);
+  background: var(--surface);
+  padding: 13px 14px 10px;
+  transition: border-color 0.2s var(--ease-out), background 0.2s var(--ease-out);
+}
+.prov.on {
+  border-color: rgba(217, 255, 75, 0.34);
+  background: linear-gradient(180deg, rgba(217, 255, 75, 0.06), transparent 70%);
+}
+.pv-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pv-name {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pv-badge {
+  font-family: var(--f-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--acc-soft);
+  color: var(--acc);
+}
+.pv-host {
+  font-family: var(--f-mono);
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+.pv-meta {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--ink-2);
+  font-family: var(--f-mono);
+  word-break: break-all;
+}
+.pv-acts {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
+.pv-acts button {
+  flex: 1;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-size: 11.5px;
+  font-family: inherit;
+  font-weight: 600;
+}
+.pv-acts button:active {
+  transform: scale(0.98);
+  color: var(--ink);
+}
+[data-theme='light'] .prov.on {
+  border-color: rgba(16, 16, 20, 0.22);
+  background: linear-gradient(180deg, rgba(16, 16, 20, 0.04), transparent 70%);
+}
+
+.imgrid.real .im {
+  aspect-ratio: 4 / 3;
 }

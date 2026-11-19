@@ -10,11 +10,13 @@
 | `GET /` | 状态页，会把你该填进 App 的地址显示出来 |
 | `GET /api/health` | `{ ok, version, runtime }`，App 用它探活 |
 | `GET /api/parse?url=` | 抓取正文 → `{ ok, title, text, chars }` |
+| `GET /api/meta?url=&src=` | 只读元信息 → `{ ok, title, desc, category, published, author, site, images[] }`，给详情页和「原文配图」用 |
 
 - 公众号（`mp.weixin.qq.com`）带 `Referer` 直取 `#js_content`，能识别「环境异常 / 文章已删除」
 - 普通站点按 `#js_content` → `#paragraph` → `.post_content` → `article` → 通用内容容器的优先级定位正文，
   再按「评论 / 推荐 / 责任编辑 / 免责声明」截掉尾巴
-- 内置 10 分钟小缓存、UA 轮换、13 秒超时、内网地址拦截
+- `/api/meta` 把分类、发布时间（og / JSON-LD / 公众号 `var ct`）、头图与正文配图一并解出来，按文件名去重、滤掉占位图
+- 内置 10 分钟小缓存（正文与页面分开存，点完详情再点解析不会重复抓）、UA 轮换、13 秒超时、内网地址拦截
 - 免费额度：**每天 10 万次请求**，个人用绰绰有余
 
 ## 三种上线方式，选一个
