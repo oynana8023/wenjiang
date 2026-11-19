@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI;
 
-  var VERSION = 'v2.2.3';
+  var VERSION = 'v2.2.4';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -902,6 +902,8 @@
     var ph = function () { slot.innerHTML = coverPlaceholder(srcId, reason || '原文没有可用的头图'); };
     if (!head) return ph();
     var probe = new Image();
+    /* 新浪图床认 Referer：带本站 referer 会 403，置空才给图 */
+    probe.referrerPolicy = 'no-referrer';
     probe.onload = function () {
       /* 不少站点的 og:image 指向 1px 占位图，尺寸不够宁可不显示 */
       if (probe.naturalWidth < 400 || probe.naturalHeight < 200) return ph();
@@ -911,7 +913,7 @@
       var bg = ratio > 1.08
         ? '<div class="bc" style="background-image:url(' + esc(head) + ')"></div>'
         : '';
-      slot.innerHTML = '<div class="' + cls + '">' + bg + '<img src="' + esc(head) + '" alt="" loading="lazy"></div>';
+      slot.innerHTML = '<div class="' + cls + '">' + bg + '<img src="' + esc(head) + '" alt="" loading="lazy" referrerpolicy="no-referrer"></div>';
     };
     probe.onerror = ph;
     probe.src = head;
@@ -976,7 +978,7 @@
     var html = '<div id="hotCover">' +
       (willTry
         ? '<div class="hot-cover sk"></div>'
-        : coverPlaceholder(srcId, isSearch ? '这个榜单只给搜索页，抓不到头图' : '没有原文链接，无配图')) +
+        : coverPlaceholder(srcId, isSearch ? '这个榜单没有配图' : '没有原文链接，无配图')) +
       '</div>' +
       '<h2 style="font-size:18px;line-height:1.45;font-weight:640;letter-spacing:-.02em;margin:12px 0 9px">' + esc(it.title) + '</h2>' +
       '<div id="hotMeta">' + metaChips(cat, when, it.hot, '') + '</div>';
@@ -988,7 +990,7 @@
         '<div class="urlbox" data-url="' + esc(url) + '">' + esc(url) + '</div></div>';
       html += isSearch
         ? '<div class="note mt-s">' + U.ic('info', 14) +
-          '<div>热搜榜给的是<b>搜索页</b>，不是文章正文，所以这条没法解析全文。上面的头图取自该榜单的<b>官方封面</b>；想看全文，点「打开链接」或把标题复制去搜。</div></div>'
+          '<div>热搜榜给的是<b>搜索页</b>，不是文章正文，所以这条没法解析全文。上面的头图取自该话题下的<b>真实配图</b>（微博）或榜单官方封面（抖音/头条）；想看全文，点「打开链接」或把标题复制去搜。</div></div>'
         : isBlocked
           ? '<div class="note mt-s">' + U.ic('info', 14) +
             '<div>这个站点对非浏览器访问有<b>强风控</b>（知乎、B站、36氪、头条热搜都这样），解析基本取不到正文。建议点「打开链接」在浏览器里读，复制正文后粘到创作页，效果一样。</div></div>'

@@ -461,6 +461,116 @@ async function getJson(url, referer) {
   }
 }
 
+/* 微博：热搜条目本身没有配图，但话题搜索结果里博主发的博文带真实图片。
+   m.weibo.cn 要求 .weibo.cn 的访客票（visitor.passport.weibo.cn 签），这里自己取一张并缓存。 */
+let wbVisitor = { ck: '', at: 0 };
+const wbCache = new Map();
+
+async function wbCookie(force) {
+  if (!force && wbVisitor.ck && Date.now() - wbVisitor.at < 30 * 60 * 1000) return wbVisitor.ck;
+  const H = { 'User-Agent': UA_MOBILE, Referer: 'https://m.weibo.cn/' };
+  const g = await fetch('https://visitor.passport.weibo.cn/visitor/genvisitor2', {
+    method: 'POST',
+    headers: { ...H, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      cb: 'visitor_gray_callback',
+      ver: '20250916',
+      request_id: 'd410864507027615f10f72d7165434e4',
+      tid: '',
+      from: 'weibo',
+      webdriver: 'false',
+      rid: String(Date.now()),
+      return_url: 'https://m.weibo.cn/'
+    }).toString()
+  });
+  const gt = await g.text();
+  const tid = (gt.match(/"tid":"([^"]+)"/) || [])[1] || '';
+  if (!tid) throw new Error('微博访客凭证获取失败');
+  const inc = await fetch('https://visitor.passport.weibo.cn/visitor/visitor?a=incarnate&t=' +
+    encodeURIComponent(tid) + '&w=2&c=095&gc=&cb=cross_domain&from=weibo&_rand=0.5', { headers: H });
+  const it = await inc.text();
+  const sub = (it.match(/"sub":"([^"]+)"/) || [])[1] || '';
+  const subp = (it.match(/"subp":"([^"]+)"/) || [])[1] || '';
+  if (!sub) throw new Error('微博访客凭证换取失败');
+  const ck = 'SUB=' + sub + (subp ? '; SUBP=' + subp : '');
+  wbVisitor = { ck, at: Date.now() };
+  return ck;
+}
+
+async function wbJson(path) {
+  let last = '';
+  for (let i = 0; i < 2; i += 1) {
+    const ck = await wbCookie(i > 0);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 12000);
+    try {
+      const res = await fetch('https://m.weibo.cn' + path, {
+        signal: ctrl.signal,
+        redirect: 'manual',
+        headers: {
+          'User-Agent': UA_MOBILE,
+          Accept: 'application/json, text/plain, */*',
+          Referer: 'https://m.weibo.cn/',
+          Cookie: ck
+        }
+      });
+      if (res.status === 200) return await res.json();
+      last = 'HTTP ' + res.status;
+    } catch (e) {
+      last = e.message;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw new Error(last || '微博接口不可用');
+}
+
+/* 取该话题下第一条带图的博文；头像、表情、榜单角标这类小图直接跳过 */
+async function weiboCover(title) {
+  const t = String(title || '').replace(/^#+|#+$/g, '').replace(/\s+/g, ' ').trim();
+  if (!t) return { ok: false };
+  const hit = wbCache.get(t);
+  if (hit && Date.now() - hit.at < COVER_TTL) return hit.v;
+  let out = { ok: false };
+  try {
+    const cid = '100103type=1&t=10&q=#' + t + '#';
+    const j = await wbJson('/api/container/getIndex?containerid=' + encodeURIComponent(cid) + '&page_type=searchall');
+    const cands = [];
+    for (const c of (j.data && j.data.cards) || []) {
+      const mb = c && c.card_type === 9 && c.mblog;
+      if (!mb) continue;
+      const add = (u, w, h) => {
+        const s = String(u || '').replace(/^http:/, 'https:');
+        if (s) cands.push({ u: s, w: Number(w) || 0, h: Number(h) || 0 });
+      };
+      for (const p of mb.pics || []) {
+        const lg = p.large || {};
+        const geo = lg.geo || p.geo || {};
+        add(lg.url || p.url, geo.width, geo.height);
+      }
+      if (mb.page_info && mb.page_info.page_pic && mb.page_info.page_pic.url) {
+        const pp = mb.page_info.page_pic;
+        add(String(pp.url).replace('/orj480/', '/large/'), pp.width, pp.height);
+      }
+      if (!(mb.pics || []).length && mb.original_pic) add(mb.original_pic, 0, 0);
+      if (cands.length >= 30) break;
+    }
+    /* 横图优先：竖版截图裁成 16:9 会很难看，只有实在没有横图才用它 */
+    let best = null;
+    let bestScore = 0;
+    for (const x of cands) {
+      const ratio = x.h ? x.w / x.h : 1.6;
+      let sc = 1;
+      if (x.w >= 480 && x.h >= 260) sc = 2;
+      if (x.w >= 640 && x.h >= 360 && ratio >= 1.1 && ratio <= 2.4) sc = 3;
+      if (sc > bestScore) { bestScore = sc; best = x; }
+    }
+    if (best) out = { ok: true, head: best.u, proxy: true, matched: t, from: 'weibo' };
+  } catch (e) { /* 微博接口拿不到就当没有，绝不编图 */ }
+  wbCache.set(t, { at: Date.now(), v: out });
+  return out;
+}
+
 async function coverList(src) {
   const hit = coverCache.get(src);
   if (hit && Date.now() - hit.at < COVER_TTL) return hit.list;
@@ -495,6 +605,11 @@ async function coverList(src) {
 async function coverFor(src, title) {
   const k = imgKey(title);
   if (!k) return { ok: false };
+  /* 微博：走话题搜索，拿博主博文里的真实配图 */
+  if (src === 'weibo') {
+    const w = await weiboCover(title);
+    if (w.ok) return w;
+  }
   const chain = [src, 'toutiao', 'douyin'].filter((v, i, a) => v && a.indexOf(v) === i);
   for (const s of chain) {
     const list = await coverList(s);
@@ -507,6 +622,10 @@ async function coverFor(src, title) {
       });
     }
     if (hit) return { ok: true, head: hit.u.replace(/&amp;/g, '&'), matched: hit.t, from: s };
+  }
+  if (src === 'zhihu') {
+    const w = await weiboCover(title);
+    if (w.ok) return w;
   }
   return { ok: false };
 }
@@ -591,6 +710,31 @@ export default {
       }
     }
 
+    if (url.pathname === '/api/img') {
+      const target = url.searchParams.get('u') || '';
+      let t;
+      try { t = new URL(target); } catch (e) { return new Response('bad url', { status: 400 }); }
+      if (!/^https?:$/.test(t.protocol) || !/(^|\.)(sinaimg\.cn|weibocdn\.com)$/i.test(t.hostname)) {
+        return new Response('forbidden host', { status: 403 });
+      }
+      const r = await fetch(t.href, {
+        headers: {
+          'User-Agent': UA_DESKTOP,
+          Accept: 'image/avif,image/webp,image/*,*/*;q=0.8',
+          Referer: 'https://weibo.com/'
+        }
+      });
+      if (!r.ok) return new Response('upstream ' + r.status, { status: 502 });
+      const ct = r.headers.get('content-type') || '';
+      if (!/^image\//i.test(ct)) return new Response('not image', { status: 502 });
+      return new Response(r.body, {
+        headers: {
+          'Content-Type': ct,
+          'Cache-Control': 'public, max-age=86400',
+          'Access-Control-Allow-Origin': '*'
+        }
+      });
+    }
     if (url.pathname === '/api/cover') {
       const src = url.searchParams.get('src') || '';
       const title = url.searchParams.get('title') || '';
