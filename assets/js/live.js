@@ -11,6 +11,37 @@ window.WJLive = (function () {
   var AGG = 'https://api-hot.imsyy.top';
   var SNAPSHOT = 'data/hot.json';
 
+  /* 云端解析：静态托管（GitHub Pages）没有自己的后端，浏览器又跨不过 CORS。
+     默认指向已经跑着 server.js 的实例，页面直接调它的 /api/parse。
+     想换成自己的服务（Cloudflare Worker / VPS / 本地 Node），在「我的 → 解析服务」里改地址即可。 */
+  var CLOUD_DEFAULT = 'https://ae4456e3164821b38.app.workbuddy.host';
+  var CLOUD_CODE = 'KQNPRGHZG2';
+
+  function parseBase() {
+    var v = null;
+    try { v = localStorage.getItem('wj.parse.base'); } catch (e) { /* ignore */ }
+    if (v === null) return CLOUD_DEFAULT;
+    return String(v || '').replace(/\s+/g, '');
+  }
+
+  function setParseBase(v) {
+    try {
+      if (v) localStorage.setItem('wj.parse.base', String(v).trim());
+      else localStorage.setItem('wj.parse.base', '');
+    } catch (e) { /* ignore */ }
+  }
+
+  async function cloudHealth(base) {
+    var b = (base === undefined ? parseBase() : base);
+    if (!b) return false;
+    try {
+      var d = await getJSON(b.replace(/\/+$/, '') + '/api/health?sharecode=' + CLOUD_CODE, 7000);
+      return !!(d && d.ok);
+    } catch (e) {
+      return false;
+    }
+  }
+
   var SOURCES = [
     { id: 'weibo', name: '微博', nick: '热搜' },
     { id: 'zhihu', name: '知乎', nick: '热榜' },
@@ -227,7 +258,7 @@ window.WJLive = (function () {
     var nodes = doc.querySelectorAll('script,style,noscript,iframe,svg,form,nav,footer,header');
     for (var i = 0; i < nodes.length; i++) nodes[i].remove();
 
-    var pools = ['#js_content', 'article', '.rich_media_content', '.article-content',
+    var pools = ['#js_content', '#paragraph', 'article', '.rich_media_content', '.post_content', '.artical-content', '.article-content', '.entry-content',
       '.post-content', '.content', '#content', '.main-content', 'main'];
     var best = null, bestLen = 0;
     pools.forEach(function (sel) {
@@ -300,14 +331,30 @@ window.WJLive = (function () {
 
     var errors = [];
     var useServer = await hasServer();
+    var cloud = parseBase();
     var isWx = urlKind(url) === 'wechat';
     var minLen = isWx ? 90 : 120;
 
-    for (var i = 0; i < PROXIES.length; i++) {
-      var p = PROXIES[i];
+    var channels = [];
+    if (cloud) channels.push({ id: 'cloud', label: '云端解析' });
+    channels.push({ id: 'server', label: '站内解析' });
+    channels = channels.concat(PROXIES);
+
+    for (var i = 0; i < channels.length; i++) {
+      var p = channels[i];
       if (p.id === 'server' && !useServer) continue;
-      if (onStep) onStep(p.label, i + 1, PROXIES.length);
+      if (onStep) onStep(p.label, i + 1, channels.length);
       try {
+        if (p.id === 'cloud') {
+          var cd = await getJSON(cloud.replace(/\/+$/, '') + '/api/parse?url=' + encodeURIComponent(url) +
+            '&sharecode=' + encodeURIComponent(CLOUD_CODE), 30000);
+          if (!cd || !cd.ok) throw new Error((cd && cd.error) || '云端解析失败');
+          if (!cd.text || cd.text.length < minLen) throw new Error('正文只有 ' + ((cd.text || '').length) + ' 字');
+          var cout = { title: cd.title || '', text: cd.text.slice(0, 12000), via: 'cloud', at: Date.now() };
+          localStorage.setItem(cacheKey, JSON.stringify(cout));
+          return cout;
+        }
+
         if (p.id === 'server') {
           var sd = await getJSON(withShare('/api/parse?url=' + encodeURIComponent(url)), 25000);
           if (!sd || !sd.ok) throw new Error((sd && sd.error) || '服务端解析失败');
@@ -320,7 +367,7 @@ window.WJLive = (function () {
         var target = p.wrap(url);
         var body, text;
         if (p.text) {
-          body = await getText(target, 20000, { headers: { Accept: 'text/plain' } });
+          body = await getText(target, 12000, { headers: { Accept: 'text/plain' } });
           body = body.replace(/^Title:.*$/gm, '').replace(/^URL Source:.*$/gm, '').trim();
           text = clean(body);
           if (text.length < minLen) throw new Error('正文只有 ' + text.length + ' 字');
@@ -330,11 +377,11 @@ window.WJLive = (function () {
         }
 
         if (p.json) {
-          var wrap = await getJSON(target, 20000);
+          var wrap = await getJSON(target, 9000);
           body = (wrap && (wrap.contents || wrap.body)) || '';
           if (!body) throw new Error('代理返回空');
         } else {
-          body = await getText(target, 20000);
+          body = await getText(target, 9000);
         }
         var parsed = extractHtml(body);
         if (!parsed || parsed.text.length < minLen) {
@@ -349,7 +396,7 @@ window.WJLive = (function () {
       }
     }
 
-    var err = new Error(useServer ? '所有解析通道都没成功' : '当前没有后端，公共通道也没成功');
+    var err = new Error(cloud || useServer ? '所有解析通道都没成功' : '没有可用的解析服务');
     err.detail = errors.join('\n');
     err.url = url;
     err.kind = urlKind(url);
@@ -506,6 +553,10 @@ window.WJLive = (function () {
     SOURCES: SOURCES,
     hot: hot,
     parseLink: parseLink,
+    parseBase: parseBase,
+    setParseBase: setParseBase,
+    cloudHealth: cloudHealth,
+    CLOUD_DEFAULT: CLOUD_DEFAULT,
     urlKind: urlKind,
     hostOf: hostOf,
     hasServer: hasServer,
