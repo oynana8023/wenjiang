@@ -184,8 +184,6 @@ window.WJLive = (function () {
     { id: 'geekpark', name: '极客公园', nick: '最新' }
   ];
 
-  var serverFlags = null;
-
   /* 部分托管平台要求所有请求带访问凭据，同源请求时自动补上。
      首次带 sharecode 打开后就记下来，之后即使从桌面图标、无参数链接进来也能用 */
   var SC_KEY = 'wj.sharecode';
@@ -240,16 +238,17 @@ window.WJLive = (function () {
     }
   }
 
-  /* 探测是否有同源后端（本机 node server.js 或自建部署） */
-  async function hasServer() {
-    if (serverFlags !== null) return serverFlags;
-    try {
-      var d = await getJSON(withShare('/api/health'), 3500);
-      serverFlags = !!(d && d.ok);
-    } catch (e) {
-      serverFlags = false;
+  /* 探测是否有同源后端（本机 node server.js 或自建部署）。
+     缓存的是 Promise 而不是结果：页面渲染时十几个地方同时问，
+     只该发一次请求，否则静态托管下一屏能刷出十几个 404。 */
+  var serverProbe = null;
+  function hasServer() {
+    if (!serverProbe) {
+      serverProbe = getJSON(withShare('/api/health'), 3500)
+        .then(function (d) { return !!(d && d.ok); })
+        .catch(function () { return false; });
     }
-    return serverFlags;
+    return serverProbe;
   }
 
   /* ---------------- 热榜 ---------------- */
