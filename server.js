@@ -357,7 +357,7 @@ function metaOf(html, target, sourceId) {
   const isBaiduSearch = /(^|\.)baidu\.com$/i.test(target.hostname) && /^\/s\b/.test(target.pathname);
   let titleOut = titlePlain;
   let descOut = tidyText(stripTags(desc)).slice(0, 260);
-  let authorOut = String(author || '').slice(0, 40);
+  let authorOut = String(author || '').trim().slice(0, 40);
   if (isBaiduSearch) {
     titleOut = titlePlain.replace(/\s*[-_|]\s*百度.*$/i, '').trim() || titlePlain;
     const sum = (h.match(/"summary"\s*:\s*"((?:[^"\\]|\\.)*)"/) || [])[1];
@@ -365,7 +365,7 @@ function metaOf(html, target, sourceId) {
     else if (/^来自百度的搜索结果$/.test(descOut)) descOut = '';
     if (!authorOut) {
       const src = (h.match(/"sourceList"\s*:\s*\[\s*\{\s*"text"\s*:\s*"([^"]+)"/) || [])[1];
-      if (src) authorOut = src;
+      if (src) authorOut = String(src).trim();
     }
   }
 

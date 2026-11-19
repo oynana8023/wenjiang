@@ -928,7 +928,7 @@
       }
 
       var when = m.published ? ('发布 ' + fmtPublished(m.published)) : (stamp ? ('上榜 ' + stamp) : '');
-      var meta = [m.site, m.author].filter(Boolean).join(' · ');
+      var meta = [m.site, m.author].filter(function (x) { return x && String(x).trim(); }).join(' · ');
       box2.innerHTML = metaChips(m.category || cat, when, it.hot, meta ? metaChip(meta) : '') +
         (m.desc ? '<p style="margin:9px 0 0;font-size:13px;line-height:1.7;color:var(--ink-2)">' + esc(m.desc) + '</p>' : '');
 
