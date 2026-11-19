@@ -2142,6 +2142,14 @@
       await loadAllHot();
     })();
 
+    /* 顺手把解析服务叫醒：云端实例睡眠时首个请求会 502，
+       页面打开就先 ping 一次，用户点「解析」时它已经在跑了 */
+    var warm = function () {
+      if (document.hidden) return;
+      L.parseBases().forEach(function (b) { L.pingBase(b); });
+    };
+    setTimeout(warm, 1500);
+
     /* 每 5 分钟自动刷新一次热榜 */
     setInterval(function () {
       if (document.hidden) return;

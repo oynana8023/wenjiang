@@ -125,6 +125,12 @@ window.WJLive = (function () {
     return Promise.all(tasks);
   }
 
+  /* 预热：只为了把睡着的实例叫醒，不关心结果 */
+  function pingBase(base) {
+    if (!base) return Promise.resolve(false);
+    return probeBase(base, 4000).then(function (r) { return !!r.ok; }).catch(function () { return false; });
+  }
+
   async function cloudHealth(base) {
     if (base !== undefined && base !== null) {
       if (!base) return false;
@@ -293,6 +299,11 @@ window.WJLive = (function () {
   var serverProbe = null;
   function hasServer() {
     if (!serverProbe) {
+      /* 纯静态托管上必然没有 /api/health，别去讨一个 404 */
+      if (/\.github\.io$|\.pages\.dev$|\.netlify\.app$|\.vercel\.app$/.test(location.hostname)) {
+        serverProbe = Promise.resolve(false);
+        return serverProbe;
+      }
       serverProbe = getJSON(withShare('/api/health'), 3500)
         .then(function (d) { return !!(d && d.ok); })
         .catch(function () { return false; });
@@ -631,25 +642,27 @@ window.WJLive = (function () {
       return shape(win.data, win.task.via);
     }
 
-    try {
-      return await attempt();
-    } catch (e) {
-      /* 云端实例重启的那十几秒会回 502，等它一下再来一轮，比让用户自己点重试好 */
-      if (/HTTP 50[234]/.test(String(e.detail || ''))) {
-        if (onStep) onStep('解析服务正在重启，稍等重试', 1, 1);
-        await new Promise(function (r) { setTimeout(r, 3000); });
-        try {
-          /* 只重跑服务端那几条：公共代理刚才已经证明不通，再等一轮没意义 */
-          return await attempt(tasks.filter(function (t) { return t.via === 'cloud' || t.via === 'server'; }));
-        } catch (e2) {
-          e = e2;
+    /* 云端实例睡觉或重启时会回 502，唤醒通常要几秒，给两次退避重试 */
+    var serverOnly = tasks.filter(function (t) { return t.via === 'cloud' || t.via === 'server'; });
+    var waits = [2500, 7000];
+
+    for (var round = 0; ; round++) {
+      try {
+        /* 第二轮起只跑服务端通道：公共代理刚才已经证明不通，没必要再等 */
+        return await attempt(round === 0 ? tasks : serverOnly);
+      } catch (e) {
+        var lost = /HTTP 50[234]/.test(String((e && e.detail) || ''));
+        if (lost && round < waits.length && serverOnly.length) {
+          if (onStep) onStep('解析服务正在唤醒，稍等重试', 1, 1);
+          await new Promise(function (r) { setTimeout(r, waits[round]); });
+          continue;
         }
+        var err = new Error('所有解析通道都没成功');
+        err.detail = (e && e.detail) || (e && e.message);
+        err.url = url;
+        err.kind = urlKind(url);
+        throw err;
       }
-      var err = new Error('所有解析通道都没成功');
-      err.detail = e.detail || e.message;
-      err.url = url;
-      err.kind = urlKind(url);
-      throw err;
     }
   }
 
@@ -853,6 +866,7 @@ window.WJLive = (function () {
     probeBase: probeBase,
     invalidateProbe: invalidateProbe,
     cloudHealth: cloudHealth,
+    pingBase: pingBase,
     CLOUD_DEFAULT: CLOUD_DEFAULT,
     urlKind: urlKind,
     hostOf: hostOf,
