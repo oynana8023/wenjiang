@@ -736,8 +736,11 @@ async function proxyImage(target) {
       'Cache-Control': 'public, max-age=86400',
       'Access-Control-Allow-Origin': '*'
     };
-    if (imgCache.size > 200) imgCache.clear();
-    imgCache.set(key, { at: Date.now(), headers, body: buf });
+    /* 只缓存 1.5MB 以内的图，最多 80 张，别把进程内存吃满 */
+    if (buf.length <= 1.5 * 1024 * 1024) {
+      if (imgCache.size > 80) imgCache.clear();
+      imgCache.set(key, { at: Date.now(), headers, body: buf });
+    }
     return { code: 200, headers, body: buf };
   } catch (e) {
     return { code: 502, headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: 'upstream ' + e.message };
