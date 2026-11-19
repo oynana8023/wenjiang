@@ -221,10 +221,33 @@ function absUrl(u, base) {
   if (!u) return '';
   let s = String(u).trim().replace(/^["']|["']$/g, '');
   if (!s || /^data:/i.test(s) || /^javascript:/i.test(s)) return '';
+  /* 页面里的图片地址常被转义成 &amp; / &#x2F;，不还原就会 404 */
+  s = s.replace(/&amp;/g, '&').replace(/&#x2[fF];|&#47;/g, '/').replace(/&quot;/g, '');
   if (s.startsWith('//')) s = 'https:' + s;
   if (/^https?:\/\//i.test(s)) return s;
   if (!base) return '';
   try { return new URL(s, base).href; } catch (e) { return ''; }
+}
+
+/* 图片地址和标题做「去标点、去空白」的归一化，用来判断哪张图配的是这条热搜 */
+function imgKey(s) {
+  return String(s || '').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+
+/* 一堆候选中挑最像头图的那张：百度缩略图带 size=w931 / r1,1，图标是 size=f54_54 这种 */
+function pickHead(list) {
+  let best = '', score = -99;
+  for (const u of list) {
+    let s = 0;
+    if (/[?&]size=w\d{3,}/.test(u)) s += 3;
+    if (/[?&]size=r\d+,\d+/.test(u)) s += 2;
+    const f = u.match(/[?&]size=f(\d+)_(\d+)/);
+    if (f && Number(f[1]) < 320) s -= 6;
+    if (/logo|avatar|icon|qrcode/i.test(u)) s -= 6;
+    if (/^https?:\/\/gips\d?\.baidu\.com/i.test(u) && !/[?&]size=w\d{3,}/.test(u)) s -= 3;
+    if (s > score) { score = s; best = u; }
+  }
+  return best;
 }
 
 function normTime(v) {
@@ -284,7 +307,23 @@ function metaOf(html, target, sourceId) {
     .split(/[,，;；|]/).map((x) => x.trim()).filter((x) => x && x.length < 16).slice(0, 6);
 
   /* 图片候选：og / twitter / JSON-LD / 公众号 msg_cdn_url / 正文里的图 */
+  /* 百度热搜这类「榜单页」没有 og:image，大图藏在内嵌 JSON 里：
+     {"poster":"https://gips1.baidu.com/...size=w931...","title":"这条热搜的标题"} */
+  const mediaPics = [];
+  for (const mm of h.matchAll(/"poster"\s*:\s*"([^"]+)"[\s\S]{0,800}?"title"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) {
+    mediaPics.push({ u: mm[1].replace(/\\\//g, '/'), t: mm[2] });
+    if (mediaPics.length >= 8) break;
+  }
+  const pageKey = imgKey(String(title).replace(/\s*[-_|]\s*百度.*$/, ''));
+  const poster = (pageKey
+    ? mediaPics.find((x) => {
+        const k = imgKey(x.t);
+        return k && (k.indexOf(pageKey.slice(0, 12)) >= 0 || pageKey.indexOf(k.slice(0, 12)) >= 0);
+      })
+    : null) || mediaPics[0];
+
   const raw = [
+    poster && poster.u,
     m['og:image'], m['og:image:url'], m['twitter:image'], m['twitter:image:src'],
     h.match(/var\s+msg_cdn_url\s*=\s*["']([^"']+)["']/), h.match(/var\s+cdn_url\s*=\s*["']([^"']+)["']/),
     typeof ld.image === 'string' ? ld.image : (Array.isArray(ld.image) ? ld.image[0] : (ld.image && ld.image.url))
@@ -300,6 +339,9 @@ function metaOf(html, target, sourceId) {
     if (/logo|avatar|icon|qrcode|erweima|blank|spacer|pixel|1x1|sprite|emoji|placeholder/i.test(a)) continue;
     if (/\/t\.(png|jpg|gif)$|\/default\.(png|jpg)$|\/loading[^/]*\.(gif|png)$/i.test(a)) continue;
     if (/\.(svg|ico)(\?|$)/i.test(a)) continue;
+    /* 百度把图标、箭头都做成 gips 图，带 size=f54_54 / f186_48 这种小尺寸 */
+    const small = a.match(/[?&]size=f(\d+)_(\d+)/);
+    if (small && Number(small[1]) < 320) continue;
     /* 同一张图常被 CDN 用两个域名各给一份，按文件名去重 */
     var baseName = a.split('?')[0].split('/').pop().toLowerCase();
     if (images.indexOf(a) < 0 && !images.some(function (x) { return x.split('?')[0].split('/').pop().toLowerCase() === baseName; })) {
@@ -310,17 +352,34 @@ function metaOf(html, target, sourceId) {
 
   const titlePlain = tidyText(stripTags(title)).slice(0, 120);
 
+  /* 百度搜索页：标题尾巴挂「 - 百度」，描述是「来自百度的搜索结果」，都不能直接用；
+     真正的摘要和来源（新华社这类）藏在内嵌 JSON 的 summary / sourceList 里 */
+  const isBaiduSearch = /(^|\.)baidu\.com$/i.test(target.hostname) && /^\/s\b/.test(target.pathname);
+  let titleOut = titlePlain;
+  let descOut = tidyText(stripTags(desc)).slice(0, 260);
+  let authorOut = String(author || '').slice(0, 40);
+  if (isBaiduSearch) {
+    titleOut = titlePlain.replace(/\s*[-_|]\s*百度.*$/i, '').trim() || titlePlain;
+    const sum = (h.match(/"summary"\s*:\s*"((?:[^"\\]|\\.)*)"/) || [])[1];
+    if (sum) descOut = tidyText(sum.replace(/\\"/g, '"').replace(/\\\//g, '/')).slice(0, 260);
+    else if (/^来自百度的搜索结果$/.test(descOut)) descOut = '';
+    if (!authorOut) {
+      const src = (h.match(/"sourceList"\s*:\s*\[\s*\{\s*"text"\s*:\s*"([^"]+)"/) || [])[1];
+      if (src) authorOut = src;
+    }
+  }
+
   return {
-    title: titlePlain,
-    desc: tidyText(stripTags(desc)).slice(0, 260),
+    title: titleOut,
+    desc: descOut,
     site: String(site || '').slice(0, 40),
-    author: String(author || '').slice(0, 40),
+    author: authorOut,
     published,
     section: String(section || '').slice(0, 20),
-    category: classify(title, [desc, keywords.join(' '), section].join(' '), SOURCE_CAT[sourceId] || ''),
+    category: classify(titleOut, [descOut, keywords.join(' '), section].join(' '), SOURCE_CAT[sourceId] || ''),
     keywords,
     images,
-    head: images[0] || ''
+    head: pickHead(images)
   };
 }
 

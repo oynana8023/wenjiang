@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI;
 
-  var VERSION = 'v2.2.1';
+  var VERSION = 'v2.2.2';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -946,7 +946,9 @@
     var kind = L.urlKind(url);
     var isSearch = kind === 'search';
     var isBlocked = kind === 'blocked';
-    var canMeta = !!url && !isSearch;
+    /* 百度的「搜索页」里其实带了大图（内嵌 JSON 的 poster），微博/抖音的搜索页要登录或纯前端渲染，取不到 */
+    var isBaidu = /(^|\.)baidu\.com$/.test(L.hostOf(url));
+    var canMeta = !!url && (!isSearch || isBaidu);
 
     var cat = U.catOf(it.title, srcId);
     var stamp = s.at ? U.fmtTime(s.at) : '';
@@ -955,7 +957,7 @@
     var html = '<div id="hotCover">' +
       (canMeta
         ? '<div class="hot-cover sk"></div>'
-        : coverPlaceholder(srcId, isSearch ? '这个榜单只给标题，没有配图' : '没有原文链接，无配图')) +
+        : coverPlaceholder(srcId, isSearch ? '这个榜单只给搜索页，抓不到头图' : '没有原文链接，无配图')) +
       '</div>' +
       '<h2 style="font-size:18px;line-height:1.45;font-weight:640;letter-spacing:-.02em;margin:12px 0 9px">' + esc(it.title) + '</h2>' +
       '<div id="hotMeta">' + metaChips(cat, when, it.hot, '') + '</div>';
@@ -967,7 +969,7 @@
         '<div class="urlbox" data-url="' + esc(url) + '">' + esc(url) + '</div></div>';
       html += isSearch
         ? '<div class="note mt-s">' + U.ic('info', 14) +
-          '<div>热搜榜给的是<b>搜索页</b>，不是文章正文，所以这条没法直接解析。分类和上榜时间来自榜单本身；想看全文，点「打开链接」或把标题复制去搜。</div></div>'
+          '<div>热搜榜给的是<b>搜索页</b>，不是文章正文，所以这条没法解析全文。上面的头图和摘要取自搜索页里的原卡片；想看全文，点「打开链接」或把标题复制去搜。</div></div>'
         : isBlocked
           ? '<div class="note mt-s">' + U.ic('info', 14) +
             '<div>这个站点对非浏览器访问有<b>强风控</b>（知乎、B站、36氪、头条热搜都这样），解析基本取不到正文。建议点「打开链接」在浏览器里读，复制正文后粘到创作页，效果一样。</div></div>'
