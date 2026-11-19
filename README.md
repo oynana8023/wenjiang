@@ -132,6 +132,14 @@ node build.mjs && node server.js   # http://localhost:3000
 
 自带 `/api/health`、`/api/hot`、`/api/parse`。前端启动时会探测 `/api/health`，有后端就优先用它，链接解析和热榜都走同源，没有跨域问题。
 
+放在自己机器上长期跑，用 pm2 守着（崩了自动拉起，重启机器后 `pm2 resurrect` 恢复）：
+
+```bash
+npm i -g pm2
+PORT=3000 pm2 start server.js --name wenjiang
+pm2 save
+```
+
 ## 关于「原创度」
 
 没有做「原创度评分」这种无法验证的东西。页面上是两个可核对的数字：

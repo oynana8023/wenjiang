@@ -63,10 +63,16 @@ function refreshHot() {
 
 async function getHot(src) {
   if (!hotCache) hotCache = readHot();
-  const age = hotCache ? Date.now() - new Date(hotCache.updatedAt).getTime() : Infinity;
-  if (!hotCache || age > 10 * 60 * 1000) {
+  if (!hotCache) {
+    /* 冷启动、连快照文件都没有：只能等一次抓取 */
     await refreshHot();
     hotCache = readHot();
+  } else if (Date.now() - new Date(hotCache.updatedAt).getTime() > 10 * 60 * 1000) {
+    /* 过期就后台刷新，本次先把手上的快照发出去——热榜抓一轮要十几秒，
+       让前端干等会把 /api/hot 拖成超时，前端就误判「后端挂了」。 */
+    refreshHot()
+      .then(() => { hotCache = readHot(); })
+      .catch(() => { /* 下一轮再试 */ });
   }
   const snap = hotCache || { sources: {} };
   if (src && src !== 'all') {

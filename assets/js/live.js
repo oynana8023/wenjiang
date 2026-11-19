@@ -299,6 +299,15 @@ window.WJLive = (function () {
       if (d && d.ok) return normList(d);
       throw new Error((d && d.error) || '抓取失败');
     }
+    /* 静态托管时，借解析服务那台机器上的 /api/hot 拿实时榜单
+       （它抓的是官方接口，不依赖 GitHub 定时任务是否准点） */
+    var bases = parseBases();
+    if (bases.length) {
+      try {
+        var cd = await getJSON(apiUrl(bases[0], '/api/hot', { src: id }), 12000);
+        if (cd && cd.ok && Array.isArray(cd.items) && cd.items.length) return normList(cd.items);
+      } catch (e) { /* 换公共聚合接口 */ }
+    }
     var payload = await getJSON(AGG + '/' + id, 8000);
     var list = normList(payload);
     if (!list.length) throw new Error('接口没有返回条目');
