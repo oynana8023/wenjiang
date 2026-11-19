@@ -1,0 +1,15 @@
+{
+  "name": "wenjiang-ai",
+  "version": "2.0.0",
+  "private": true,
+  "description": "文匠 AI — 把一条链接，写成你的稿",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "hot": "node scripts/fetch-hot.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
