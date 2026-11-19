@@ -732,6 +732,7 @@
     var url = it.url || '';
     var kind = L.urlKind(url);
     var isSearch = kind === 'search';
+    var isBlocked = kind === 'blocked';
 
     var html = '<div class="badge live" style="margin-bottom:10px">' +
       (s.via === 'live' ? '实时抓取' : '定时快照') + '</div>' +
@@ -747,17 +748,25 @@
       html += isSearch
         ? '<div class="note mt-s">' + U.ic('alert', 14) +
           '<div>热搜榜给的是<b>搜索页</b>，不是文章正文，所以这条没法直接解析。可以打开榜单看原文，或者把标题复制去搜。</div></div>'
-        : '<div class="note mt-s">' + U.ic('alert', 14) +
-          '<div>热榜接口只给标题和热度，正文要另外去原页面取。点下面的<b>解析正文</b>，取不到会把每条通道的原因列出来。</div></div>';
+        : isBlocked
+          ? '<div class="note mt-s">' + U.ic('alert', 14) +
+            '<div>这个站点对非浏览器访问有<b>强风控</b>（知乎、B站、36氪、头条热搜都这样），站内解析基本取不到正文。建议点「打开链接」在浏览器里读，复制正文后粘到创作页，效果一样。</div></div>'
+          : '<div class="note mt-s">' + U.ic('alert', 14) +
+            '<div>热榜接口只给标题和热度，正文要另外去原页面取。点下面的<b>解析正文</b>，取不到会把每条通道的原因列出来。</div></div>';
     } else {
       html += '<div class="note mt-m">' + U.ic('alert', 14) +
         '<div>这个源只提供标题，没有配原文链接。可以复制标题去搜，或者直接用它当选题自己写。</div></div>';
     }
 
     var foot = '';
-    if (url && !isSearch) {
+    if (url && !isSearch && !isBlocked) {
       foot += '<button class="btn btn-primary btn-block" data-act="hot-parse" data-url="' + esc(url) + '" data-title="' + esc(it.title) + '">' +
         U.ic('wand', 16) + ' 解析正文并开写</button>';
+    }
+    if (url && isBlocked) {
+      /* 风控站点仍然允许试一次，但说清楚大概率失败，主按钮换成「用标题写」 */
+      foot += '<button class="btn btn-ghost btn-block" data-act="hot-parse" data-url="' + esc(url) + '" data-title="' + esc(it.title) + '">' +
+        U.ic('wand', 15) + ' 仍然尝试解析一次</button>';
     }
     if (url) {
       foot += '<div class="row2">' +

@@ -266,7 +266,11 @@ window.WJLive = (function () {
     return m ? m[0] : '';
   }
 
-  /* 链接分两类：能取正文的内容页 / 只有搜索结果的榜单页 */
+  /* 链接分四类：
+     search  —— 榜单/搜索页，本来就没有正文
+     blocked —— 站点有强风控，站内解析基本取不到（如实告诉用户，不让他白等）
+     wechat  —— 公众号，正文在 #js_content，单独处理
+     article —— 正文可抓的普通文章页 */
   function urlKind(u) {
     var s = String(u || '');
     if (!s) return 'none';
@@ -275,6 +279,8 @@ window.WJLive = (function () {
     if (/douyin\.com\/search\//.test(s)) return 'search';
     if (/weixin\.sogou\.com/.test(s)) return 'search';
     if (/mp\.weixin\.qq\.com/.test(s)) return 'wechat';
+    if (/toutiao\.com\/trending\//.test(s)) return 'blocked';
+    if (/zhihu\.com\/(question|search)|bilibili\.com|b23\.tv|36kr\.com\/p\/|douyin\.com\/video/.test(s)) return 'blocked';
     return 'article';
   }
 
