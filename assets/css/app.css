@@ -2057,3 +2057,42 @@ a {
 .imgrid.real .im {
   aspect-ratio: 4 / 3;
 }
+
+/* ---------- 热榜详情：标签行 / 无图占位 ---------- */
+.metarow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.hot-cover.ph {
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(120% 120% at 12% 0%, rgba(217, 255, 75, 0.14), transparent 58%),
+    linear-gradient(135deg, var(--surface-2), var(--surface));
+  border: 1px dashed var(--line-2);
+}
+.hot-cover.ph .ph-in {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  text-align: center;
+  padding: 0 18px;
+}
+.hot-cover.ph .ph-in b {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--ink-2);
+}
+.hot-cover.ph .ph-in span {
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.hot-cover.sk {
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border-radius: 14px;
+}

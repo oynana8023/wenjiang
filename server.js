@@ -269,7 +269,10 @@ function metaOf(html, target, sourceId) {
   const published = normTime(
     m['article:published_time'] || m['og:release_date'] || m['pubdate'] || m['publishdate'] ||
     ld.datePublished || ld.dateCreated || wxCt ||
-    (h.match(/<time[^>]+datetime=["']([^"']+)["']/i) || [])[1]
+    (h.match(/<time[^>]+datetime=["']([^"']+)["']/i) || [])[1] ||
+    /* 国内站点大多把时间写在 span 里，没有 og / JSON-LD */
+    (h.match(/(?:pubtime|publish[-_]?time|post[-_]?time|article[-_]?time|time[-_]?source)[^>]*>\s*([^<]{8,32})</i) || [])[1] ||
+    (h.match(/(20\d{2}[-/年]\s?\d{1,2}[-/月]\s?\d{1,2}日?\s+\d{1,2}:\d{2})/) || [])[1]
   );
 
   const site = m['og:site_name'] || wxName || ld.publisher && ld.publisher.name ||

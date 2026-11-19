@@ -419,8 +419,53 @@ window.WJLive = (function () {
     { id: 'jina', label: '阅读器', wrap: function (u) { return 'https://r.jina.ai/' + u; }, text: true }
   ];
 
+  /* 把底层错误翻译成人话：502 是解析服务掉线，abort 是超时，Failed to fetch 多半被网络拦了 */
+  function errMsg(e) {
+    var m = String((e && e.message) || '失败');
+    if (/HTTP 50[234]/.test(m)) return '解析服务离线（' + m + '）';
+    if (/HTTP 45[0-9]/.test(m)) return '被站点风控拦下（' + m + '）';
+    if (/abort/i.test(m)) return '超时没响应';
+    if (/Failed to fetch|NetworkError|load failed|fetch failed/i.test(m)) return '连不上（可能被网络拦截）';
+    if (/HTTP 404/.test(m)) return '接口不存在';
+    return m;
+  }
+
+  /* 所有通道同时开跑，谁先拿到合格正文就用谁；其余继续跑完也不会影响结果 */
+  function firstSuccess(tasks, budget) {
+    return new Promise(function (resolve, reject) {
+      var left = tasks.length, done = false, errs = [];
+      if (!left) return reject(new Error('没有可用的解析通道'));
+      var timer = setTimeout(function () {
+        if (done) return;
+        done = true;
+        var e = new Error('全部通道超时');
+        e.detail = errs.join('\n');
+        reject(e);
+      }, budget || 22000);
+
+      tasks.forEach(function (t) {
+        Promise.resolve()
+          .then(function () { return t.run(); })
+          .then(function (r) {
+            if (done) return;
+            done = true; clearTimeout(timer);
+            resolve({ data: r, task: t });
+          })
+          .catch(function (err) {
+            errs.push(t.label + '：' + errMsg(err));
+            if (--left === 0 && !done) {
+              done = true; clearTimeout(timer);
+              var e = new Error('所有通道都没成功');
+              e.detail = errs.join('\n');
+              reject(e);
+            }
+          });
+      });
+    });
+  }
+
   /* 时政/军事/外交类条目不适合做二创，统一过滤，并如实告知过滤了多少条 */
-  var BLOCK = /(习近平|李强|王毅|政治局|中央委员会|国务院|全国人大|政协|外交部|国防部|解放军|军队|军事|战争|停火|制裁|外交|峰会|会见|会晤|国事访问|特朗普|普京|拜登|泽连斯基|内塔尼亚胡|总统|首相|大选|选举|投票|台湾|台独|香港|新疆|西藏|疫情|核酸|封控|脱贫|党建|纪委|反腐|落马|双开|巡视|两会|党章|国旗|阅兵|主权|领土|总书记|共同体|一带一路|中国贡献|中国机遇|大国担当|菲总统|日首相|韩总统|APEC|G20|G7|上合|金砖|联合国|中方|我方|美方|外交部|发言人|大使|领馆|使馆|国事|会谈|磋商|白宫|克里姆林宫|欧盟委员会|会见|接见|访华|出访|致辞|贺信|批示|委员长|总理|外长|防长|军委|部队|导弹|演习|反制|政要|领导人|亚太合作|元首|国宴|使节|参赞|国际关系|地缘|制裁|军演|航母|战机|外交部|驻华)/;
+  var BLOCK = /(习近平|李强|王毅|政治局|中央委员会|国务院|全国人大|政协|外交部|国防部|解放军|军队|军事|战争|停火|制裁|外交|峰会|会见|会晤|国事访问|特朗普|普京|拜登|泽连斯基|内塔尼亚胡|总统|首相|大选|选举|投票|台湾|台独|香港|新疆|西藏|疫情|核酸|封控|脱贫|党建|纪委|反腐|落马|双开|巡视|两会|党章|国旗|阅兵|主权|领土|总书记|共同体|一带一路|中国贡献|中国机遇|大国担当|菲总统|日首相|韩总统|APEC|G20|G7|上合|金砖|联合国|中方|我方|美方|外交部|发言人|大使|领馆|使馆|国事|会谈|磋商|白宫|克里姆林宫|欧盟委员会|会见|接见|访华|出访|致辞|贺信|批示|委员长|总理|外长|防长|军委|部队|导弹|演习|反制|政要|领导人|亚太合作|元首|国宴|使节|参赞|国际关系|地缘|制裁|军演|航母|战机|外交部|驻华|李在明|石破茂|高市早苗|尹锡悦|马克龙|默茨|斯塔默|苏纳克|岸田|莫迪|朔尔茨|冯德莱恩|马科斯|金正恩|安倍|拜登|哈里斯|万斯|国会|参议院|众议院|白宫|唐宁街|爱丽舍宫|克里姆林宫|以色列|内塔尼亚胡|加沙|黎巴嫩|真主党|哈马斯|伊朗|俄乌|乌克兰|北约|停战|谈判|条约|宣言|联合声明|国事访问|欢迎仪式|天安门|人民大会堂)/;
 
   var NOISE = /(登录|注册|下载客户端|扫码|打开APP|广告|Copyright|版权所有|免责声明|责任编辑|点击查看|上一篇|下一篇|相关阅读|热门推荐)/;
 
@@ -512,71 +557,100 @@ window.WJLive = (function () {
       if (cached && cached.text && Date.now() - cached.at < 36e5) return cached;
     } catch (e) { /* ignore */ }
 
-    var errors = [];
     var isWx = urlKind(url) === 'wechat';
     var minLen = isWx ? 90 : 120;
 
-    function save(r, via) {
-      var out = { title: r.title || '', text: r.text, chars: r.chars || (r.text || '').length, via: via, at: Date.now() };
+    function shape(r, via) {
+      var out = {
+        title: r.title || '',
+        text: r.text,
+        chars: r.chars || (r.text || '').length,
+        via: via,
+        at: Date.now()
+      };
       try { localStorage.setItem(cacheKey, JSON.stringify(out)); } catch (e) { /* ignore */ }
       return out;
     }
 
-    /* 1) 同源服务：页面本身由 server.js 托管时走这条，零跨域、最快 */
+    /* 服务端失败一次就记下来：502 多半是实例刚重启，隔 600ms 再试一次通常就好了 */
+    function viaServer(base, label) {
+      return function () {
+        return callBase(base, url, minLen, 18000).catch(function (e) {
+          if (!/HTTP 50[234]/.test(String(e && e.message))) throw e;
+          return new Promise(function (r) { setTimeout(r, 600); })
+            .then(function () { return callBase(base, url, minLen, 15000); });
+        }).then(function (r) { return { data: r, label: label }; });
+      };
+    }
+
+    var tasks = [];
+
     var same = await hasServer();
     if (same) {
-      if (onStep) onStep('站内服务', 1, 2);
-      try {
-        return save(await callBase('', url, minLen, 22000), 'server');
-      } catch (e) {
-        errors.push('站内服务：' + (e.message || '失败'));
-      }
+      tasks.push({ label: '站内服务', via: 'server', run: function () {
+        return callBase('', url, minLen, 18000).then(function (r) { return r; });
+      } });
     }
 
-    /* 2) 配置的服务端：云端实例 / 自建 Worker / VPS，多地址并行竞速 */
-    var bases = parseBases();
-    if (bases.length) {
-      if (onStep) onStep('解析服务', 2, 2);
-      try {
-        return save(await raceParse(bases, url, minLen), 'cloud');
-      } catch (e) {
-        errors.push(e.detail || ('解析服务：' + (e.message || '失败')));
-      }
-    }
+    parseBases().forEach(function (b) {
+      tasks.push({ label: hostOf(b) || '解析服务', via: 'cloud', run: function () {
+        return viaServer(b, hostOf(b) || '解析服务')().then(function (x) { return x.data; });
+      } });
+    });
 
-    /* 3) 公共代理：只当兜底，这两年能通的越来越少 */
-    for (var i = 0; i < PROXIES.length; i++) {
-      var p = PROXIES[i];
-      if (onStep) onStep(p.label, i + 3, PROXIES.length + 2);
-      try {
+    PROXIES.forEach(function (p) {
+      tasks.push({ label: p.label, via: p.id, run: async function () {
         var target = p.wrap(url);
-        var body, text;
         if (p.text) {
-          body = await getText(target, 12000, { headers: { Accept: 'text/plain' } });
+          var body = await getText(target, 12000, { headers: { Accept: 'text/plain' } });
           body = body.replace(/^Title:.*$/gm, '').replace(/^URL Source:.*$/gm, '').trim();
-          text = clean(body);
+          var text = clean(body);
           if (text.length < minLen) throw new Error('正文只有 ' + text.length + ' 字');
-          return save({ title: '', text: text.slice(0, 12000), chars: text.length }, p.id);
+          return { title: '', text: text.slice(0, 12000), chars: text.length };
         }
-
-        body = await getText(target, 10000);
-        var parsed = extractHtml(body);
+        var html = await getText(target, 10000);
+        var parsed = extractHtml(html);
         if (!parsed || parsed.text.length < minLen) {
           throw new Error('没取到正文（' + hostOf(url) + ' 可能要求登录或限制了抓取）');
         }
-        return save({ title: parsed.title, text: parsed.text.slice(0, 12000), chars: parsed.text.length }, p.id);
-      } catch (e) {
-        errors.push(p.label + '：' + (e.message || '失败'));
-      }
+        return { title: parsed.title, text: parsed.text.slice(0, 12000), chars: parsed.text.length };
+      } });
+    });
+
+    if (!tasks.length) {
+      var none = new Error('没有配置解析服务');
+      none.detail = '到「我的 → 解析服务」填一个地址，或直接用「粘贴全文」模式。';
+      none.url = url;
+      throw none;
     }
 
-    var err = new Error(
-      (bases.length || same) ? '所有解析通道都没成功' : '没有配置解析服务'
-    );
-    err.detail = errors.join('\n');
-    err.url = url;
-    err.kind = urlKind(url);
-    throw err;
+    if (onStep) onStep('并发请求 ' + tasks.length + ' 条通道', 1, 1);
+
+    async function attempt(list) {
+      var win = await firstSuccess(list || tasks, 22000);
+      return shape(win.data, win.task.via);
+    }
+
+    try {
+      return await attempt();
+    } catch (e) {
+      /* 云端实例重启的那十几秒会回 502，等它一下再来一轮，比让用户自己点重试好 */
+      if (/HTTP 50[234]/.test(String(e.detail || ''))) {
+        if (onStep) onStep('解析服务正在重启，稍等重试', 1, 1);
+        await new Promise(function (r) { setTimeout(r, 3000); });
+        try {
+          /* 只重跑服务端那几条：公共代理刚才已经证明不通，再等一轮没意义 */
+          return await attempt(tasks.filter(function (t) { return t.via === 'cloud' || t.via === 'server'; }));
+        } catch (e2) {
+          e = e2;
+        }
+      }
+      var err = new Error('所有解析通道都没成功');
+      err.detail = e.detail || e.message;
+      err.url = url;
+      err.kind = urlKind(url);
+      throw err;
+    }
   }
 
   /* ---------------- 模型 ---------------- */

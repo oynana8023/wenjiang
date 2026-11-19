@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI;
 
-  var VERSION = 'v2.2.0';
+  var VERSION = 'v2.2.1';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -881,47 +881,60 @@
       'font-size:11.5px;font-weight:600;letter-spacing:.01em;' + style + '">' + esc(text) + '</span>';
   }
 
-  function fillHotMeta(url, srcId, it) {
-    var s = state.hot.bySrc[srcId];
-    var fallback =
-      '<div style="display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 2px">' +
-      metaChip(U.sourceName(srcId), 'acc') +
-      (it.hot ? metaChip('热度 ' + U.fmtHot(it.hot)) : '') +
-      metaChip(s && s.via === 'live' ? '实时' : '快照') +
+  function metaChips(cat, when, hot, extra) {
+    var h = '<div class="metarow">' +
+      metaChip(cat, 'acc') +
+      (when ? metaChip(when) : '') +
+      (hot ? metaChip('热度 ' + U.fmtHot(hot)) : '') +
+      (extra || '') +
       '</div>';
+    return h;
+  }
+
+  function coverPlaceholder(srcId, text) {
+    return '<div class="hot-cover ph"><div class="ph-in"><b>' + esc(U.sourceName(srcId)) + '</b>' +
+      '<span>' + esc(text || '这一条没有配图') + '</span></div></div>';
+  }
+
+  function paintCover(head, srcId) {
+    var slot = document.getElementById('hotCover');
+    if (!slot) return;
+    var ph = function () { slot.innerHTML = coverPlaceholder(srcId, '原文没有可用的头图'); };
+    if (!head) return ph();
+    var probe = new Image();
+    probe.onload = function () {
+      /* 不少站点的 og:image 指向 1px 占位图，尺寸不够宁可不显示 */
+      if (probe.naturalWidth < 400 || probe.naturalHeight < 200) return ph();
+      slot.innerHTML = '<div class="hot-cover"><img src="' + esc(head) + '" alt="" loading="lazy"></div>';
+    };
+    probe.onerror = ph;
+    probe.src = head;
+  }
+
+  function fillHotMeta(url, srcId, it, cat) {
+    var s = state.hot.bySrc[srcId];
+    var stamp = s && s.at ? U.fmtTime(s.at) : '';
+    var box = document.getElementById('hotMeta');
+    if (!box) return;
 
     L.meta(url, srcId).then(function (m) {
-      var box = document.getElementById('hotMeta');
-      if (!box) return;
-      if (!m || (!m.title && !m.head && !m.category)) {
-        box.innerHTML = fallback +
-          '<div class="sec-sub" style="margin-top:6px">原文详情没取到（站点限制），不影响下面的解析。</div>';
+      var box2 = document.getElementById('hotMeta');
+      if (!box2) return;
+
+      if (!m || (!m.head && !m.category && !m.published)) {
+        /* 取不到就当没有，但标签照旧显示，别留一片空白 */
+        paintCover('', srcId);
         return;
       }
-      var when = fmtPublished(m.published);
-      var bits = [when, m.site, m.author].filter(Boolean);
-      box.innerHTML =
-        '<div style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 2px">' +
-        metaChip(m.category || U.sourceName(srcId), 'acc') +
-        (it.hot ? metaChip('热度 ' + U.fmtHot(it.hot)) : '') +
-        metaChip(s && s.via === 'live' ? '实时' : '快照') +
-        (m.section ? metaChip(m.section) : '') +
-        '</div>' +
-        (bits.length ? '<div class="sec-sub" style="margin-top:7px">' + esc(bits.join(' · ')) + '</div>' : '') +
+
+      var when = m.published ? ('发布 ' + fmtPublished(m.published)) : (stamp ? ('上榜 ' + stamp) : '');
+      var meta = [m.site, m.author].filter(Boolean).join(' · ');
+      box2.innerHTML = metaChips(m.category || cat, when, it.hot, meta ? metaChip(meta) : '') +
         (m.desc ? '<p style="margin:9px 0 0;font-size:13px;line-height:1.7;color:var(--ink-2)">' + esc(m.desc) + '</p>' : '');
 
-      /* 头图先验证尺寸：不少站点的 og:image 指向 1px 占位图 */
-      if (m.head) {
-        var probe = new Image();
-        probe.onload = function () {
-          if (probe.naturalWidth < 400 || probe.naturalHeight < 200) return;
-          var slot = document.getElementById('hotCover');
-          if (!slot) return;
-          slot.innerHTML = '<div class="hot-cover" style="margin-bottom:12px">' +
-            '<img src="' + esc(m.head) + '" alt="" loading="lazy"></div>';
-        };
-        probe.src = m.head;
-      }
+      paintCover(m.head || '', srcId);
+    }).catch(function () {
+      paintCover('', srcId);
     });
   }
 
@@ -933,28 +946,35 @@
     var kind = L.urlKind(url);
     var isSearch = kind === 'search';
     var isBlocked = kind === 'blocked';
-    var canMeta = url && !isSearch;
+    var canMeta = !!url && !isSearch;
 
-    var html = (canMeta ? '<div id="hotCover"></div>' : '') +
-      '<h2 style="font-size:18px;line-height:1.45;font-weight:640;letter-spacing:-.02em;margin:10px 0 8px">' + esc(it.title) + '</h2>' +
-      '<div id="hotMeta">' + (canMeta ? metaSkeleton() : '') + '</div>';
+    var cat = U.catOf(it.title, srcId);
+    var stamp = s.at ? U.fmtTime(s.at) : '';
+    var when = stamp ? '上榜 ' + stamp : '';
+
+    var html = '<div id="hotCover">' +
+      (canMeta
+        ? '<div class="hot-cover sk"></div>'
+        : coverPlaceholder(srcId, isSearch ? '这个榜单只给标题，没有配图' : '没有原文链接，无配图')) +
+      '</div>' +
+      '<h2 style="font-size:18px;line-height:1.45;font-weight:640;letter-spacing:-.02em;margin:12px 0 9px">' + esc(it.title) + '</h2>' +
+      '<div id="hotMeta">' + metaChips(cat, when, it.hot, '') + '</div>';
 
     if (url) {
-      html += '<div class="field mt-s"><div class="field-head"><span class="lbl">' +
+      html += '<div class="field mt-m"><div class="field-head"><span class="lbl">' +
         (isSearch ? '榜单页' : '原文链接') + '</span>' +
         '<span class="sec-sub">' + esc(L.hostOf(url)) + '</span></div>' +
         '<div class="urlbox" data-url="' + esc(url) + '">' + esc(url) + '</div></div>';
       html += isSearch
-        ? '<div class="note mt-s">' + U.ic('alert', 14) +
-          '<div>热搜榜给的是<b>搜索页</b>，不是文章正文，所以这条没法直接解析。可以打开榜单看原文，或者把标题复制去搜。</div></div>'
+        ? '<div class="note mt-s">' + U.ic('info', 14) +
+          '<div>热搜榜给的是<b>搜索页</b>，不是文章正文，所以这条没法直接解析。分类和上榜时间来自榜单本身；想看全文，点「打开链接」或把标题复制去搜。</div></div>'
         : isBlocked
-          ? '<div class="note mt-s">' + U.ic('alert', 14) +
-            '<div>这个站点对非浏览器访问有<b>强风控</b>（知乎、B站、36氪、头条热搜都这样），站内解析基本取不到正文。建议点「打开链接」在浏览器里读，复制正文后粘到创作页，效果一样。</div></div>'
-          : '<div class="note mt-s">' + U.ic('alert', 14) +
-            '<div>分类、发布时间和头图都是从原文页面读的；正文要点<b>解析正文</b>，取不到会把每条通道的原因列出来。</div></div>';
+          ? '<div class="note mt-s">' + U.ic('info', 14) +
+            '<div>这个站点对非浏览器访问有<b>强风控</b>（知乎、B站、36氪、头条热搜都这样），解析基本取不到正文。建议点「打开链接」在浏览器里读，复制正文后粘到创作页，效果一样。</div></div>'
+          : '';
     } else {
-      html += '<div class="note mt-m">' + U.ic('alert', 14) +
-        '<div>这个源只提供标题，没有配原文链接。可以复制标题去搜，或者直接用它当选题自己写。</div></div>';
+      html += '<div class="note mt-m">' + U.ic('info', 14) +
+        '<div>这个源只提供标题，没有原文链接。可以复制标题去搜，或者直接用它当选题自己写。</div></div>';
     }
 
     var foot = '';
@@ -962,9 +982,9 @@
       foot += '<button class="btn btn-primary btn-block" data-act="hot-parse" data-url="' + esc(url) + '" data-title="' + esc(it.title) + '">' +
         U.ic('wand', 16) + ' 解析正文并开写</button>';
     }
-    if (url && isBlocked) {
+    if (url && (isBlocked || isSearch)) {
       foot += '<button class="btn btn-ghost btn-block" data-act="hot-parse" data-url="' + esc(url) + '" data-title="' + esc(it.title) + '">' +
-        U.ic('wand', 15) + ' 仍然尝试解析一次</button>';
+        U.ic('wand', 15) + (isSearch ? ' 仍然试一次这个链接' : ' 仍然尝试解析一次') + '</button>';
     }
     if (url) {
       foot += '<div class="row2">' +
@@ -977,7 +997,7 @@
     foot += '<button class="btn btn-ghost btn-block" data-act="copy" data-text="' + esc(it.title) + '">复制标题</button>';
 
     openSheet(html, { title: '这条热榜', foot: foot });
-    if (canMeta) fillHotMeta(url, srcId, it);
+    if (canMeta) fillHotMeta(url, srcId, it, cat);
   }
 
   /* 额度 */
@@ -1283,22 +1303,52 @@
     return rows;
   }
 
+  var lastFail = null;
+
   function openParseFail(err) {
-    var detail = (err && err.detail) ? '<div class="sec-sub" style="margin-top:10px;word-break:break-all">' + esc(err.detail) + '</div>' : '';
+    var d = String((err && err.detail) || '');
+    var offline = /HTTP 50[234]|连不上|timeout|超时/i.test(d);
+    lastFail = err && err.url ? { url: err.url, title: err.title || '' } : null;
+
+    var why = offline
+      ? '解析服务这会在重启或暂时连不上（免费沙盒实例每隔一阵会重启一次），公共代理在手机网络上基本不通。' +
+        '可以直接点下面的<b>再试一次</b>；要长期稳定，去<b>我的 → 解析服务</b>按说明部署自己的 Worker，地址填进去就一劳永逸。'
+      : '常见原因：公众号对非微信环境的抓取有限制、正文由脚本动态渲染、或者站点对抓取有风控。' +
+        '可以点<b>再试一次</b>，或到<b>我的 → 解析服务</b>点一次「只检测不保存」看哪条通道在线。';
+
+    var detail = d ? '<div class="sec-sub" style="margin-top:10px;word-break:break-all;line-height:1.8;white-space:pre-line">' + esc(d) + '</div>' : '';
+
     openSheet(
       '<p>' + esc((err && err.message) || '解析失败') + '</p>' +
-      '<div class="note mt-s">' + U.ic('alert', 14) +
-      '<div>常见原因：公众号对非微信环境的抓取有限制、页面正文由脚本动态渲染、或者这台设备访问不了代理通道。' +
-      '可以到<b>我的 → 解析服务</b>点一次「只检测不保存」，看哪条通道在线；实在取不到，<b>把正文复制进来，改写效果一样</b>。</div></div>' + detail,
+      '<div class="note mt-s">' + U.ic('info', 14) + '<div>' + why + '</div></div>' + detail,
       {
         title: '这个链接没解析成功',
-        foot: (err && err.url
-          ? '<button class="btn btn-soft btn-block" data-act="copy" data-text="' + esc(err.url) + '">' + U.ic('copy', 15) + ' 复制链接</button>' +
-            '<button class="btn btn-soft btn-block" data-act="open-url" data-url="' + esc(err.url) + '">' + U.ic('external', 15) + ' 用浏览器打开</button>'
+        foot: (lastFail
+          ? '<button class="btn btn-primary btn-block" data-act="retry-parse">' + U.ic('refresh', 16) + ' 再试一次</button>'
           : '') +
-          '<button class="btn btn-primary btn-block" data-act="to-text">改成粘贴全文</button>'
+          (err && err.url
+            ? '<button class="btn btn-soft btn-block" data-act="copy" data-text="' + esc(err.url) + '">' + U.ic('copy', 15) + ' 复制链接</button>' +
+              '<button class="btn btn-soft btn-block" data-act="open-url" data-url="' + esc(err.url) + '">' + U.ic('external', 15) + ' 用浏览器打开</button>'
+            : '') +
+          '<button class="btn btn-ghost btn-block" data-act="to-text">改成粘贴全文（照样能改写）</button>'
       }
     );
+  }
+
+  async function parseAndGo(url, title) {
+    toast('正在取正文…');
+    try {
+      var pr = await L.parseLink(url, function (label) { toast('解析中 · ' + label); });
+      state.compose.mode = 'text';
+      state.compose.text1 = pr.text;
+      state.compose.sourceTitle = pr.title || title || '';
+      state.compose.sourceUrl = url;
+      state.result = null;
+      go('compose', { nav: 'push' });
+      toast('已取到 ' + pr.text.length + ' 字正文');
+    } catch (e) {
+      openParseFail(e);
+    }
   }
 
   /* 安装到主屏幕 */
@@ -1615,22 +1665,16 @@
       case 'hot-parse': {
         var pu = t.dataset.url;
         if (!pu) break;
+        var pt = t.dataset.title || '';
         closeSheet();
-        toast('正在取正文…');
-        try {
-          var pr = await L.parseLink(pu, function (label, n, total) {
-            toast('解析中 · ' + label + ' ' + n + '/' + total);
-          });
-          state.compose.mode = 'text';
-          state.compose.text1 = pr.text;
-          state.compose.sourceTitle = pr.title || t.dataset.title || '';
-          state.compose.sourceUrl = pu;
-          state.result = null;
-          go('compose', { nav: 'push' });
-          toast('已取到 ' + pr.text.length + ' 字正文');
-        } catch (e) {
-          openParseFail(e);
-        }
+        await parseAndGo(pu, pt);
+        break;
+      }
+
+      case 'retry-parse': {
+        var rf = lastFail;
+        closeSheet();
+        if (rf) await parseAndGo(rf.url, rf.title);
         break;
       }
 

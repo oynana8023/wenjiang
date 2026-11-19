@@ -19,6 +19,7 @@ window.WJUI = (function () {
     sparkle: '<path d="M12 3.4l1.9 5.2 5.2 1.9-5.2 1.9L12 17.6l-1.9-5.2L4.9 10.5l5.2-1.9z"/><path d="M18.4 16.2l.8 2.1 2.1.8-2.1.8-.8 2.1-.8-2.1-2.1-.8 2.1-.8z"/>',
     copy: '<rect x="8.6" y="8.6" width="11" height="11" rx="2.2"/><path d="M15.4 5.4H6.4A1.8 1.8 0 0 0 4.6 7.2v9"/>',
     refresh: '<path d="M20 11.4a8 8 0 1 0-.7 4.6"/><path d="M20 5.6v5.8h-5.8"/>',
+    info: '<circle cx="12" cy="12" r="8.6"/><path d="M12 11v6"/><path d="M12 7.6h.01"/>',
     download: '<path d="M12 4v10.4"/><path d="m7.8 10.6 4.2 4.2 4.2-4.2"/><path d="M4.6 19.4h14.8"/>',
     image: '<rect x="3.6" y="4.6" width="16.8" height="14.8" rx="2.4"/><circle cx="9" cy="9.6" r="1.6"/><path d="m4.4 17.4 4.6-4.4 3.4 3.2 2.6-2.4 4.6 4.2"/>',
     wand: '<path d="M4.2 19.8 15 9"/><path d="m16.4 4.4.9 2.3 2.3.9-2.3.9-.9 2.3-.9-2.3-2.3-.9 2.3-.9z"/><path d="M7.6 4.2l.6 1.6 1.6.6-1.6.6-.6 1.6-.6-1.6L5.4 6.4l1.6-.6z"/>',
@@ -89,6 +90,36 @@ window.WJUI = (function () {
     if (s < 3600) return Math.floor(s / 60) + ' 分钟前';
     if (s < 86400) return Math.floor(s / 3600) + ' 小时前';
     return Math.floor(s / 86400) + ' 天前';
+  }
+
+  /* 客户端分类：原文元信息拿不到时也要有个像样的标签，不靠服务端 */
+  var CATS = [
+    ['科技数码', /(AI|人工智能|大模型|芯片|手机|苹果|iPhone|华为|小米|鸿蒙|安卓|iOS|发布|系统|相机|电池|屏幕|显卡|机器人|算力|算法|卫星|SpaceX|马斯克|电脑|平板|耳机|智能|科技|数码|App|软件)/i],
+    ['财经商业', /(股价|市值|融资|营收|财报|上市|IPO|裁员|涨价|降价|价格|消费|市场|经济|品牌|电商|直播带货|销量|亏损|投资|基金|黄金|房|贷款|利率)/],
+    ['汽车出行', /(汽车|新车|车型|车企|比亚迪|特斯拉|理想|蔚来|小鹏|问界|续航|智驾|充电|电池车|油价|航班|高铁|地铁)/],
+    ['娱乐影视', /(电影|剧集|电视剧|综艺|明星|歌手|演唱会|票房|导演|主演|官宣|恋爱|结婚|离婚|塌房|演员|网剧|动画)/],
+    ['体育赛事', /(比赛|冠军|夺冠|球队|球员|联赛|奥运|世界杯|篮球|足球|国足|NBA|CBA|中超|网球|乒乓|马拉松|运动员)/],
+    ['游戏电竞', /(游戏|版本|玩家|主机|电竞|开服|手游|Steam|任天堂|索尼|PlayStation|关卡|联机)/],
+    ['教育职场', /(高考|考研|考公|招聘|薪资|裁员|职场|大学生|就业|学校|老师|专业|毕业|简历)/],
+    ['健康医疗', /(医院|医生|疾病|药品|疫苗|医保|健康|减肥|睡眠|养生|癌症|流感|体检)/],
+    ['社会民生', /(警方|通报|事故|天气|台风|暴雨|高温|寒潮|交通|快递|物业|小区|火灾|失联|救援|游客|收费|新规)/]
+  ];
+
+  var SRC_CAT = {
+    weibo: '全网热点', zhihu: '问答热议', toutiao: '资讯热点', baidu: '全网热搜',
+    douyin: '短视频热点', bilibili: '社区热门', '36kr': '商业创投',
+    sspai: '数字生活', ithome: '科技数码', geekpark: '科技前沿'
+  };
+
+  function catOf(title, srcId) {
+    var t = String(title || '');
+    var best = '', score = 0;
+    for (var i = 0; i < CATS.length; i++) {
+      var m = t.match(new RegExp(CATS[i][1].source, 'gi'));
+      var n = m ? m.length : 0;
+      if (n > score) { score = n; best = CATS[i][0]; }
+    }
+    return score >= 1 ? best : (SRC_CAT[srcId] || '热点');
   }
 
   function sourceName(id) {
@@ -651,7 +682,7 @@ window.WJUI = (function () {
 
   return {
     ic: ic, esc: esc, fmtHot: fmtHot, fmtTime: fmtTime, ago: ago,
-    brand: brand, quotaPill: quotaPill, sourceName: sourceName,
+    brand: brand, quotaPill: quotaPill, sourceName: sourceName, catOf: catOf,
     styleName: styleName, strengthName: strengthName,
     home: home, rank: rank, compose: compose, result: result, works: works, me: me,
     emptyState: emptyState, liveBadge: liveBadge
