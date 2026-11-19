@@ -1,5 +1,6 @@
 node_modules/
 .DS_Store
 *.log
-wenjiang-ai.html
-build-single.py
+.codebuddy/
+.cloudstudio/
+package-lock.json
