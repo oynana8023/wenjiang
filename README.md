@@ -1,6 +1,6 @@
 # 文匠 AI · 二创工作台
 
-把一条链接，写成你的稿。移动端优先的静态 Web App，零构建、零后端依赖，可直接部署在 GitHub Pages，也可以添加到主屏幕当 App 用。
+把一条链接，写成你的稿。移动端优先的静态 Web App，零后端依赖。`index.html` 是单文件自包含产物，可以直接部署到 GitHub Pages、添加到主屏幕当 App 用，也可以双击本地打开。
 
 ## 现在有什么
 
@@ -26,7 +26,9 @@
 ## 目录
 
 ```
-index.html              入口
+src/index.tpl.html      页面骨架模板（构建用，不要直接打开）
+build.mjs               把模板 + CSS + JS + 热榜快照打成单文件 index.html
+index.html              构建产物：单文件，双击就能跑，也是 GitHub Pages 的入口
 assets/css/app.css      设计系统（深色优先，纸白可选）
 assets/js/data.js       词库与 12 篇示例素材
 assets/js/engine.js     本机改写引擎 + 配图提示词生成
@@ -39,20 +41,37 @@ server.js               可选：本地静态服务 + 后端代理
 .github/workflows/hot.yml
 ```
 
+改完 `assets/` 或 `src/` 里的文件，跑一次 `node build.mjs` 重新生成 `index.html`。
+
 ## 部署
 
-### GitHub Pages（推荐，纯静态）
+### 方式 A：只传一个文件（手机上最快的路）
 
-仓库 Settings → Pages → Source 选 `main` 分支根目录。访问 `https://<用户名>.github.io/<仓库名>/`。
+`index.html` 是**单文件自包含**的：CSS、JS、热榜快照全部内联，没有任何外链依赖。所以：
 
-热榜快照由 `.github/workflows/hot.yml` 定时生成并提交，无需任何密钥。第一次部署后到 Actions 页手动跑一次 `refresh-hot`，`data/hot.json` 就有内容了。
+1. GitHub 网页 → New repository → 名字随便（例如 `wenjiang`）→ Public → Create。
+2. 仓库页 → Add file → Upload files → 选 `index.html` → Commit。
+3. Settings → Pages → Source 选 `Deploy from a branch` → 分支 `main`、目录 `/ (root)` → Save。
+4. 等 1 分钟，访问 `https://<你的用户名>.github.io/wenjiang/`，手机直接可用，也可以「添加到主屏幕」。
+
+这样部署出来的站点热榜显示为 `快照`（内联的那一份，页面会标出抓取时间）；联网正常时会先尝试实时接口，成功就显示 `实时`。
+
+### 方式 B：整仓库部署（热榜能自动刷新）
+
+把仓库完整推上去（含 `data/hot.json` 和 `.github/workflows/hot.yml`），Pages 设置同方式 A。
+
+热榜快照由 Action 每 15 分钟抓一次并提交，不需要任何密钥。首次部署后去 Actions 页手动跑一次 `refresh-hot`，`data/hot.json` 就有内容。
 
 > 没有后端时，热榜会先尝试浏览器直连公共聚合接口（有 CORS），失败再退回仓库里的快照。链接解析走阅读器代理链，公众号成功率不如自建后端。
+
+### 关于白屏
+
+以前把 `index.html` 单独下载下来只有两行字，是因为旧版本的页面骨架里引用了同目录的 `assets/`，单独一个文件当然加载不到。现在 `index.html` 是构建产物，这个问题不存在了；如果哪天真白屏，页面会在 2.5 秒后自己提示原因，不会留一片黑。
 
 ### 本地 / 自建（有后端，效果最好）
 
 ```bash
-node server.js          # http://localhost:3000
+node build.mjs && node server.js   # http://localhost:3000
 ```
 
 自带 `/api/health`、`/api/hot`、`/api/parse`。前端启动时会探测 `/api/health`，有后端就优先用它，链接解析和热榜都走同源，没有跨域问题。

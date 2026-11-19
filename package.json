@@ -5,8 +5,9 @@
   "description": "文匠 AI — 把一条链接，写成你的稿",
   "type": "commonjs",
   "scripts": {
+    "build": "node build.mjs",
     "start": "node server.js",
-    "dev": "node server.js",
+    "dev": "node build.mjs && node server.js",
     "hot": "node scripts/fetch-hot.mjs"
   },
   "engines": {

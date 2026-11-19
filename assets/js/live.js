@@ -130,9 +130,14 @@ window.WJLive = (function () {
     return list;
   }
 
+  /* 快照：先读同目录 data/hot.json（部署后由 Action 定时更新），
+     读不到就用构建时内联进 HTML 的那一份（双击本地文件也能看到真实榜单） */
   async function fetchSnapshot() {
-    var d = await getJSON(withShare(SNAPSHOT + '?t=' + Math.floor(Date.now() / 60000)), 6000);
-    return d && d.sources ? d : null;
+    try {
+      var d = await getJSON(withShare(SNAPSHOT + '?t=' + Math.floor(Date.now() / 60000)), 6000);
+      if (d && d.sources) return d;
+    } catch (e) { /* 本地文件 / 未提交快照 / 网络受限，走内联兜底 */ }
+    return window.__WJ_SNAP__ || null;
   }
 
   /* 拉单个源：先接口，失败回退快照，并标注来源 */
