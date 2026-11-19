@@ -405,6 +405,9 @@
     }));
     state.hot.loading = false;
     recalcHot();
+    /* 全部拉完后，切回优先级最高的可用源，避免默认落在 B 站这类娱乐榜 */
+    var best = pickBestSource();
+    if (best) state.hot.active = best;
     if (state.route === 'home' || state.route === 'rank') render('tab');
   }
 

@@ -26,6 +26,17 @@ window.WJLive = (function () {
 
   var serverFlags = null;
 
+  /* 部分托管平台要求所有请求带访问凭据，同源请求时自动补上 */
+  function withShare(url) {
+    try {
+      var sc = new URLSearchParams(location.search).get('sharecode');
+      if (!sc) return url;
+      return url + (url.indexOf('?') > -1 ? '&' : '?') + 'sharecode=' + encodeURIComponent(sc);
+    } catch (e) {
+      return url;
+    }
+  }
+
   function timeout(ms) {
     var ctrl = new AbortController();
     var t = setTimeout(function () { ctrl.abort(); }, ms);
@@ -58,7 +69,7 @@ window.WJLive = (function () {
   async function hasServer() {
     if (serverFlags !== null) return serverFlags;
     try {
-      var d = await getJSON('/api/health', 1500);
+      var d = await getJSON(withShare('/api/health'), 3500);
       serverFlags = !!(d && d.ok);
     } catch (e) {
       serverFlags = false;
@@ -109,7 +120,7 @@ window.WJLive = (function () {
 
   async function fetchSource(id) {
     if (await hasServer()) {
-      var d = await getJSON('/api/hot?src=' + encodeURIComponent(id), 12000);
+      var d = await getJSON(withShare('/api/hot?src=' + encodeURIComponent(id)), 12000);
       if (d && d.ok) return normList(d);
       throw new Error((d && d.error) || '抓取失败');
     }
@@ -120,7 +131,7 @@ window.WJLive = (function () {
   }
 
   async function fetchSnapshot() {
-    var d = await getJSON(SNAPSHOT + '?t=' + Math.floor(Date.now() / 60000), 6000);
+    var d = await getJSON(withShare(SNAPSHOT + '?t=' + Math.floor(Date.now() / 60000)), 6000);
     return d && d.sources ? d : null;
   }
 
@@ -171,7 +182,7 @@ window.WJLive = (function () {
   ];
 
   /* 时政/军事/外交类条目不适合做二创，统一过滤，并如实告知过滤了多少条 */
-  var BLOCK = /(习近平|李强|王毅|政治局|中央委员会|国务院|全国人大|政协|外交部|国防部|解放军|军队|军事|战争|停火|制裁|外交|峰会|会见|会晤|国事访问|特朗普|普京|拜登|泽连斯基|内塔尼亚胡|总统|首相|大选|选举|投票|台湾|台独|香港|新疆|西藏|疫情|核酸|封控|脱贫|党建|纪委|反腐|落马|双开|巡视|两会|党章|国旗|阅兵|主权|领土|总书记|共同体|一带一路|中国贡献|中国机遇|大国担当|菲总统|日首相|韩总统)/;
+  var BLOCK = /(习近平|李强|王毅|政治局|中央委员会|国务院|全国人大|政协|外交部|国防部|解放军|军队|军事|战争|停火|制裁|外交|峰会|会见|会晤|国事访问|特朗普|普京|拜登|泽连斯基|内塔尼亚胡|总统|首相|大选|选举|投票|台湾|台独|香港|新疆|西藏|疫情|核酸|封控|脱贫|党建|纪委|反腐|落马|双开|巡视|两会|党章|国旗|阅兵|主权|领土|总书记|共同体|一带一路|中国贡献|中国机遇|大国担当|菲总统|日首相|韩总统|APEC|G20|G7|上合|金砖|联合国|中方|我方|美方|外交部|发言人|大使|领馆|使馆|国事|会谈|磋商|白宫|克里姆林宫|欧盟委员会|会见|接见|访华|出访|致辞|贺信|批示|委员长|总理|外长|防长|军委|部队|导弹|演习|反制|政要|领导人|亚太合作|元首|国宴|使节|参赞|国际关系|地缘|制裁|军演|航母|战机|外交部|驻华)/;
 
   var NOISE = /(登录|注册|下载客户端|扫码|打开APP|广告|Copyright|版权所有|免责声明|责任编辑|点击查看|上一篇|下一篇|相关阅读|热门推荐)/;
 
@@ -249,7 +260,7 @@ window.WJLive = (function () {
       if (p.id === 'server' && !useServer) continue;
       try {
         if (p.id === 'server') {
-          var sd = await getJSON('/api/parse?url=' + encodeURIComponent(url), 20000);
+          var sd = await getJSON(withShare('/api/parse?url=' + encodeURIComponent(url)), 20000);
           if (!sd || !sd.ok) throw new Error((sd && sd.error) || '服务端解析失败');
           if (!sd.text || sd.text.length < 150) throw new Error('正文太短');
           var sout = { title: sd.title || '', text: sd.text, via: 'server', at: Date.now() };
