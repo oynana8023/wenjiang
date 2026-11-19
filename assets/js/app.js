@@ -928,7 +928,7 @@
     var key = L.parseKey ? L.parseKey() : '';
     var html =
       '<p style="color:var(--ink-2)">浏览器读不了别人的网页（跨域限制），取正文必须有一台服务器代抓。' +
-      '可以填多个地址，解析时并行竞速：一条挂了自动换另一条。</p>' +
+      '可以填多个地址，解析时并行竞速：一条挂了自动换另一条。建议保留默认云端，把自建 Worker 加在第二行。</p>' +
       '<div class="field mt-m"><div class="field-head"><span class="lbl">服务地址</span>' +
       '<span class="sec-sub">一行一个，留空 = 关闭</span></div>' +
       '<textarea data-field="parsebases" rows="4" spellcheck="false" placeholder="' + esc(L.CLOUD_DEFAULT) + '">' +
@@ -986,7 +986,7 @@
       '<p>' + esc((err && err.message) || '解析失败') + '</p>' +
       '<div class="note mt-s">' + U.ic('alert', 14) +
       '<div>常见原因：公众号对非微信环境的抓取有限制、页面正文由脚本动态渲染、或者这台设备访问不了代理通道。' +
-      '可以到<b>我的 → 解析服务</b>确认云端是否在线；实在取不到，<b>把正文复制进来，改写效果一样</b>。</div></div>' + detail,
+      '可以到<b>我的 → 解析服务</b>点一次「只检测不保存」，看哪条通道在线；实在取不到，<b>把正文复制进来，改写效果一样</b>。</div></div>' + detail,
       {
         title: '这个链接没解析成功',
         foot: (err && err.url
