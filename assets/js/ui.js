@@ -570,6 +570,9 @@ window.WJUI = (function () {
       '<span class="rt"><b>默认风格</b></span><span class="rv">' + esc(styleName(s.defaultStyle)) + '</span>' +
       '<span class="chev">' + ic('right', 15) + '</span></button>';
     h += rowLike('shield', '复制时附带 AI 声明', s.declare ? '已开启' : '已关闭', 'toggle', 'declare', true, s.declare);
+    h += '<button class="row" data-act="install-app"><span class="ri">' + ic('download', 15) + '</span>' +
+      '<span class="rt"><b>装到主屏幕</b><small>全屏打开、断网可用</small></span>' +
+      '<span class="chev">' + ic('right', 15) + '</span></button>';
     var themeName = state.theme === 'light' ? '浅色' : state.theme === 'dark' ? '深色' : '跟随系统';
     h += '<button class="row" data-act="theme"><span class="ri">' + ic(state.theme === 'light' ? 'sun' : 'moon', 15) + '</span>' +
       '<span class="rt"><b>外观</b><small>当前：' + themeName + '</small></span>' +

@@ -51,6 +51,17 @@ server.js               可选：本地静态服务 + 后端代理
 
 ## 部署
 
+### 方式 0：一条命令推到 GitHub（需要 token）
+
+```bash
+GH_TOKEN=github_pat_xxx node scripts/deploy.mjs
+```
+
+脚本会：校验 token → 建仓库（已存在就复用）→ 推送 → 打开 Pages → 等构建 → 打印网址。
+可选：`REPO=名字`、`VISIBILITY=private`、`SKIP_WORKFLOW=1`（token 没有 Workflows 权限时用）、`DRY=1`（只检查不推送）。
+
+Token 用 fine-grained 的，只勾这一个仓库，权限给 **Contents: Read and write**、**Pages: Read and write**、**Workflows: Read and write**，有效期 7 天。
+
 ### 方式 A：只传一个文件（手机上最快的路）
 
 `index.html` 是**单文件自包含**的：CSS、JS、热榜快照全部内联，没有任何外链依赖。所以：
@@ -69,6 +80,11 @@ server.js               可选：本地静态服务 + 后端代理
 热榜快照由 Action 每 15 分钟抓一次并提交，不需要任何密钥。首次部署后去 Actions 页手动跑一次 `refresh-hot`，`data/hot.json` 就有内容。
 
 > 没有后端时，热榜会先尝试浏览器直连公共聚合接口（有 CORS），失败再退回仓库里的快照。链接解析走阅读器代理链，公众号成功率不如自建后端。
+
+### 它已经是一个 PWA
+
+仓库里带了 `manifest.webmanifest` 和 `sw.js`：在 GitHub Pages（https）打开后，Safari「分享 → 添加到主屏幕」或 Chrome「安装应用」，就是一个全屏、无地址栏、断网也能打开的独立 App。入口也在「我的 → 装到主屏幕」。
+单文件上传（方式 A）时没有 `sw.js`，iOS 仍能添加到主屏幕，但断网打不开。
 
 ### 关于白屏
 

@@ -31,6 +31,14 @@
   </div>
 </noscript>
 <script>
+/* 注册 Service Worker：装到主屏幕后断网也能打开。file:// 打开时自动跳过 */
+if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js').catch(function () { /* 不支持或被拦就安静降级 */ });
+  });
+}
+</script>
+<script>
 /* 白屏兜底：脚本没跑起来时给出能看懂的提示，而不是一片黑 */
 setTimeout(function () {
   var h = document.getElementById('viewHost');

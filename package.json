@@ -8,7 +8,8 @@
     "build": "node build.mjs",
     "start": "node server.js",
     "dev": "node build.mjs && node server.js",
-    "hot": "node scripts/fetch-hot.mjs"
+    "hot": "node scripts/fetch-hot.mjs",
+    "deploy": "node scripts/deploy.mjs"
   },
   "engines": {
     "node": ">=18"

@@ -939,6 +939,38 @@
     );
   }
 
+  /* 安装到主屏幕 */
+  var installPrompt = null;
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    installPrompt = e;
+  });
+
+  function openInstall() {
+    var standalone = false;
+    try {
+      standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+    } catch (e) { /* ignore */ }
+    if (standalone) {
+      openSheet('<p>现在就是从主屏幕打开的，已经是独立窗口，没有浏览器地址栏。</p>', { title: '已安装' });
+      return;
+    }
+    var isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    var steps = isIOS
+      ? ['用 <b>Safari</b> 打开当前网址（微信里打开的不行）', '点底部的<b>分享</b>图标', '往下找<b>添加到主屏幕</b>，确认']
+      : ['用 <b>Chrome</b> 或系统浏览器打开当前网址', '点右上角<b>三个点</b>菜单', '选<b>安装应用 / 添加到主屏幕</b>'];
+    var html = '<p style="color:var(--ink-2)">装到主屏幕后，图标和名字都在，打开是全屏、没有地址栏；断网也能打开，热榜保留最后一次抓到的内容。</p>' +
+      '<div class="rows mt-m">' + steps.map(function (t, i) {
+        return '<div class="row" style="cursor:default"><span class="ri mono">' + (i + 1) + '</span><span class="rt"><b>' + t + '</b></span></div>';
+      }).join('') + '</div>';
+    openSheet(html, {
+      title: '装到主屏幕',
+      foot: installPrompt
+        ? '<button class="btn btn-primary btn-block" data-act="do-install">现在就安装</button>'
+        : '<button class="btn btn-soft btn-block" data-act="copy" data-text="' + esc(location.href) + '">复制当前网址</button>'
+    });
+  }
+
   /* 关于 / 合规 / 数据 */
   function openData() {
     var rows = L.SOURCES.map(function (s) {
@@ -1398,6 +1430,18 @@
         closeSheet();
         render('tab');
         toast('外观：' + THEME_LABEL[state.theme]);
+        break;
+
+      case 'install-app':
+        openInstall();
+        break;
+
+      case 'do-install':
+        if (installPrompt) {
+          installPrompt.prompt();
+          installPrompt = null;
+          closeSheet();
+        }
         break;
 
       case 'open-data':
