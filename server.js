@@ -113,6 +113,30 @@ function tidyText(t) {
     .trim();
 }
 
+const BLOCK_MARKERS = [
+  /<div[^>]*id=["']js_content["'][^>]*>/i,
+  /<(?:div|section)[^>]*id=["']paragraph["'][^>]*>/i,
+  /<(?:div|section|article)[^>]*class=["'][^"']*(?:rich_media_content|post_content|article-content|artical-content|article_content|entry-content|content-detail|article-body|post-body)[^"']*["'][^>]*>/i,
+  /<article[^>]*>/i,
+  /<(?:div|section)[^>]*class=["'][^"']*(?:content|article|post)[^"']*["'][^>]*>/i
+];
+
+/* 正文结束的常见标记，切掉评论、推荐、版权等尾巴 */
+const CUT_TAIL = /(?:class|id)=["'][^"']*(?:comment|footer|related|recommend|sidebar|share-bar)[^"']*["']|相关阅读|免责声明|责任编辑|转载请注明|本文来自|举报/;
+
+function pickBlock(h) {
+  for (const re of BLOCK_MARKERS) {
+    const m = h.match(re);
+    if (!m || m.index === undefined) continue;
+    let seg = h.slice(m.index, m.index + 160000);
+    const tail = seg.slice(600).search(CUT_TAIL);
+    if (tail > 0) seg = seg.slice(0, 600 + tail);
+    const text = tidyText(stripTags(seg));
+    if (text.length >= 120) return { text, marker: String(re).slice(0, 40) };
+  }
+  return null;
+}
+
 function extract(html) {
   let h = String(html)
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -125,27 +149,18 @@ function extract(html) {
     (h.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] ||
     '';
 
-  /* 公众号：js_content 里套了多层 div，非贪婪匹配会在第一个 </div> 截断，
-     改成从开标签处向后取一段，再按微信自己的结尾标记切掉 */
-  let block = '';
-  const wxIdx = h.search(/<div[^>]*id=["']js_content["'][^>]*>/i);
-  if (wxIdx > -1) {
-    let seg = h.slice(wxIdx);
-    const cut = seg.search(/预览时标签不可点|微信扫一扫|js_article_bottom|rich_media_tool/i);
-    if (cut > 200) seg = seg.slice(0, cut);
-    block = seg.slice(0, 200000);
-  }
-  if (!block) block = (h.match(/<article[^>]*>([\s\S]*?)<\/article>/i) || [])[1];
-  if (!block) block = (h.match(/<div[^>]*class=["'][^"']*(article|content|post)[^"']*["'][^>]*>([\s\S]*?)<\/div>/i) || [])[2];
-
-  if (!block) {
+  let text = '';
+  const picked = pickBlock(h);
+  if (picked) text = picked.text;
+  if (text.length < 120) {
     const ps = [...h.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)].map((m) => m[1]);
-    block = ps.join('\n');
+    const alt = tidyText(stripTags(ps.join('\n')));
+    if (alt.length > text.length) text = alt;
   }
 
   return {
     title: tidyText(stripTags(title)).slice(0, 120),
-    text: tidyText(stripTags(block))
+    text
   };
 }
 
