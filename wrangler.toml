@@ -1,0 +1,22 @@
+# Cloudflare Workers 构建配置（仓库根目录）
+# ---------------------------------------------------------------
+# 用途：在 Cloudflare 后台「Workers 和 Pages → 创建 → 连接到 Git」
+# 选中 oynana8023/wenjiang 这个仓库时，直接读这份配置部署解析服务。
+#
+# 关键点：
+#   1. name 必须和 Cloudflare 里那个 Worker 项目同名，否则构建设置会报
+#      "The name in your Wrangler configuration must match your Worker name"
+#   2. main 指向 worker/index.js —— 解析服务本体（零依赖，10 万次/天免费）
+#   3. 静态页面仍然由 GitHub Pages 托管，这里只做 API，两者互不影响
+#
+# 部署成功后验证（把 <子域> 换成你自己的 workers.dev 子域）：
+#   curl https://wenjiang.<子域>.workers.dev/api/health
+#   → {"ok":true,"version":"3.0.0","runtime":"worker"}
+
+name = "wenjiang"
+main = "worker/index.js"
+compatibility_date = "2025-06-01"
+workers_dev = true
+
+[observability]
+enabled = true

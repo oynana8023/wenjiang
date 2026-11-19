@@ -30,6 +30,42 @@
 
 想在改代码后自动重新部署，就往仓库 Secrets 里加 `CF_API_TOKEN` 和 `CF_ACCOUNT_ID`，`.github/workflows/deploy-worker.yml` 会在 `worker/` 有改动时自动发布。细节见 `worker/README.md`。
 
+### 部署自检：两个东西别搞混
+
+这个项目有**两套彼此独立的部署**，谁也替代不了谁：
+
+| 部署 | 托管什么 | 地址长什么样 | 挂了会怎样 |
+| --- | --- | --- | --- |
+| GitHub Pages | 整个 App（`index.html`） | `https://oynana8023.github.io/wenjiang/` | 打不开 App |
+| Cloudflare Worker | 只有解析接口（`/api/parse`、`/api/meta`） | `https://wenjiang.xxx.workers.dev` | App 能开，但「解析」只能走公共代理，成功率低 |
+
+云端的 Worker 页面打开是一片 JSON 或说明页，**这是正常的**——它是给 App 调的接口，不是网页。
+
+在 Cloudflare 后台「Workers 和 Pages → wenjiang → 部署」里，判断是否真的上线只看两个数：
+
+- **流量百分比 100%**：当前版本在接流量。显示 `0%` 说明版本只是上传了、没切流量，等于没生效。
+- **调用次数**：App 里填了这个地址并点过「保存并检测」，这里才会有数。一直是 0 说明没人调它。
+
+看 `流量百分比 0%` 时，八成是这两处配置不对，去 **Settings → 构建** 改：
+
+1. **Root directory（根目录）**：留空，指向仓库根目录。填成 `worker` 会让 `name` 对不上，构建直接报 `must match your Worker name`。
+2. **Deploy command（部署命令）**：`npx wrangler deploy`。若被改成 `npx wrangler versions upload`，就只会产生一个 0% 的版本。
+
+改完点 **Deployments → 重新部署**（或随便推一次提交）。成功的标志是：版本变成 `100%`，并且下面这行能返回 JSON：
+
+```bash
+curl "https://wenjiang.<你的子域>.workers.dev/api/health"
+# {"ok":true,"version":"3.0.0","runtime":"worker"}
+```
+
+再验证真能取正文：
+
+```bash
+curl "https://wenjiang.<你的子域>.workers.dev/api/parse?url=https%3A%2F%2Fsspai.com%2Fpost%2F119191"
+```
+
+拿到 `{"ok":true,"chars":1129,...}` 之后，把它填进 App 的「我的 → 解析服务 → 新增一条」→ **保存并检测**，看到绿色 `在线 · xx ms` 就算彻底通了。
+
 **链路**
 1. 找选题：首页/热榜页点一条，弹层里直接给出**分类、发布时间、站点作者、头图与摘要**（从原文页的 og / JSON-LD / 公众号 `var ct` 读出来），下面是原文链接，可以一键打开、一键复制、一键解析正文；榜单只给搜索页的源（微博/百度/抖音）会明说「这条没法直接解析」。
 2. 取正文：同源服务、配置的解析服务、公共代理**同时开跑，谁先拿到合格正文就用谁**（不再一条条排队）；云端实例返回 502（正在重启）会自动等 3 秒重跑一轮；全失败时把每条通道的原因逐行列出，并给「再试一次 / 复制链接 / 用浏览器打开 / 改成粘贴全文」。公众号正文按 `#js_content` 单独抽取，被微信拦住会直说是被拦。
@@ -66,7 +102,8 @@ scripts/fetch-hot.mjs   抓热榜，写 data/hot.json
 data/hot.json           热榜快照（由 Action 每 15 分钟刷新）
 server.js               可选：本地静态服务 + 后端代理
 worker/index.js         解析服务（Cloudflare Worker 版，单文件零依赖）
-worker/wrangler.toml    Worker 部署配置
+worker/wrangler.toml    Worker 部署配置（在 worker/ 目录里单独部署时用）
+wrangler.toml           仓库根目录的 Cloudflare 配置（后台「连接 Git」部署时用）
 .github/workflows/hot.yml
 .github/workflows/deploy-worker.yml
 ```
