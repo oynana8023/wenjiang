@@ -23,7 +23,7 @@
 
   var state = {
     route: 'home',
-    theme: 'dark',
+    theme: 'auto',
     version: VERSION,
     quota: { used: 0, total: DAILY, day: dayKey() },
     works: [],
@@ -322,7 +322,7 @@
   function loadingHtml() {
     var h = '<div class="screen">';
     h += '<div style="padding-top:12px"><div class="eyebrow">Crafting</div>' +
-      '<h1 class="h1" style="font-size:26px">' + (state.genNote || '正在写') + '</h1></div>';
+      '<h1 class="h1" id="genNote" style="font-size:26px">' + (state.genNote || '正在写') + '</h1></div>';
     h += '<div class="card mt-l"><div class="steps">' + STEPS.map(function (s, i) {
       return '<div class="step" data-step="' + i + '"><span class="si">' + U.ic('check', 11, 2.4) + '</span>' + s + '</div>';
     }).join('') + '</div></div>';
@@ -442,7 +442,11 @@
   async function resolveSource() {
     var c = state.compose;
     if (c.mode === 'link' && c.link1.trim().length < 240) {
-      var r = await L.parseLink(c.link1);
+      var r = await L.parseLink(c.link1, function (label, i, n) {
+        state.genNote = '正在取正文 · ' + label + '（' + i + '/' + n + '）';
+        var el = document.getElementById('genNote');
+        if (el) el.textContent = state.genNote;
+      });
       if (r.title) state.compose.sourceTitle = r.title;
       return r.text;
     }
@@ -725,23 +729,47 @@
     var s = state.hot.bySrc[srcId];
     if (!s || !s.items || !s.items[i]) return;
     var it = s.items[i];
+    var url = it.url || '';
+    var kind = L.urlKind(url);
+    var isSearch = kind === 'search';
+
     var html = '<div class="badge live" style="margin-bottom:10px">' +
       (s.via === 'live' ? '实时抓取' : '定时快照') + '</div>' +
       '<h2 style="font-size:18px;line-height:1.45;font-weight:640;letter-spacing:-.02em;margin:0 0 10px">' + esc(it.title) + '</h2>' +
       '<div class="sec-sub">' + esc(U.sourceName(srcId)) + ' · 热度 ' + U.fmtHot(it.hot) +
-      ' · ' + U.fmtTime(s.at) + ' 抓取</div>' +
-      '<div class="note mt-m">' + U.ic('alert', 14) +
-      '<div>热榜接口只给标题和热度，<b>没有正文</b>。要写出有信息量的稿子，还是得有原文。</div></div>';
+      ' · ' + U.fmtTime(s.at) + ' 抓取</div>';
 
-    openSheet(html, {
-      title: '这条热榜',
-      foot:
-        '<button class="btn btn-primary btn-block" data-act="hot-link" data-src="' + srcId + '" data-i="' + i + '">' +
-        U.ic('link', 16) + ' 粘贴原文链接来改写</button>' +
-        '<button class="btn btn-soft btn-block" data-act="hot-write" data-src="' + srcId + '" data-i="' + i + '">' +
-        U.ic('edit', 15) + ' 用这个选题自己写</button>' +
-        '<button class="btn btn-ghost btn-block" data-act="copy" data-text="' + esc(it.title) + '">复制标题</button>'
-    });
+    if (url) {
+      html += '<div class="field mt-m"><div class="field-head"><span class="lbl">' +
+        (isSearch ? '榜单页' : '原文链接') + '</span>' +
+        '<span class="sec-sub">' + esc(L.hostOf(url)) + '</span></div>' +
+        '<div class="urlbox" data-url="' + esc(url) + '">' + esc(url) + '</div></div>';
+      html += isSearch
+        ? '<div class="note mt-s">' + U.ic('alert', 14) +
+          '<div>热搜榜给的是<b>搜索页</b>，不是文章正文，所以这条没法直接解析。可以打开榜单看原文，或者把标题复制去搜。</div></div>'
+        : '<div class="note mt-s">' + U.ic('alert', 14) +
+          '<div>热榜接口只给标题和热度，正文要另外去原页面取。点下面的<b>解析正文</b>，取不到会把每条通道的原因列出来。</div></div>';
+    } else {
+      html += '<div class="note mt-m">' + U.ic('alert', 14) +
+        '<div>这个源只提供标题，没有配原文链接。可以复制标题去搜，或者直接用它当选题自己写。</div></div>';
+    }
+
+    var foot = '';
+    if (url && !isSearch) {
+      foot += '<button class="btn btn-primary btn-block" data-act="hot-parse" data-url="' + esc(url) + '" data-title="' + esc(it.title) + '">' +
+        U.ic('wand', 16) + ' 解析正文并开写</button>';
+    }
+    if (url) {
+      foot += '<div class="row2">' +
+        '<button class="btn btn-soft" data-act="open-url" data-url="' + esc(url) + '">' + U.ic('external', 15) + ' 打开链接</button>' +
+        '<button class="btn btn-soft" data-act="copy" data-text="' + esc(url) + '">' + U.ic('copy', 15) + ' 复制链接</button>' +
+        '</div>';
+    }
+    foot += '<button class="btn btn-soft btn-block" data-act="hot-write" data-src="' + srcId + '" data-i="' + i + '">' +
+      U.ic('edit', 15) + ' 用这个选题自己写</button>';
+    foot += '<button class="btn btn-ghost btn-block" data-act="copy" data-text="' + esc(it.title) + '">复制标题</button>';
+
+    openSheet(html, { title: '这条热榜', foot: foot });
   }
 
   /* 额度 */
@@ -893,8 +921,11 @@
       '<div>常见原因：公众号对非微信环境的抓取有限制、页面正文由脚本动态渲染、或者这台设备访问不了代理通道。<b>直接把正文复制进来，改写效果一样。</b></div></div>' + detail,
       {
         title: '这个链接没解析成功',
-        foot: '<button class="btn btn-primary btn-block" data-act="to-text">改成粘贴全文</button>' +
-          '<button class="btn btn-soft btn-block" data-act="use-example">用示例素材试试</button>'
+        foot: (err && err.url
+          ? '<button class="btn btn-soft btn-block" data-act="copy" data-text="' + esc(err.url) + '">' + U.ic('copy', 15) + ' 复制链接</button>' +
+            '<button class="btn btn-soft btn-block" data-act="open-url" data-url="' + esc(err.url) + '">' + U.ic('external', 15) + ' 用浏览器打开</button>'
+          : '') +
+          '<button class="btn btn-primary btn-block" data-act="to-text">改成粘贴全文</button>'
       }
     );
   }
@@ -1146,6 +1177,41 @@
         openHotItem(t.dataset.src, t.dataset.i);
         break;
 
+      case 'open-url':
+        window.open(t.dataset.url, '_blank', 'noopener');
+        break;
+
+      case 'wx-parse':
+        state.compose.mode = 'link';
+        state.compose.link1 = '';
+        go('compose', { nav: 'push' });
+        setTimeout(function () {
+          var inp = document.querySelector("[data-field='link1']");
+          if (inp) inp.focus();
+        }, 260);
+        break;
+
+      case 'hot-parse': {
+        var pu = t.dataset.url;
+        if (!pu) break;
+        closeSheet();
+        toast('正在取正文…');
+        try {
+          var pr = await L.parseLink(pu, function (label, n, total) {
+            toast('解析中 · ' + label + ' ' + n + '/' + total);
+          });
+          state.compose.mode = 'text';
+          state.compose.text1 = pr.text;
+          state.compose.sourceTitle = pr.title || t.dataset.title || '';
+          state.result = null;
+          go('compose', { nav: 'push' });
+          toast('已取到 ' + pr.text.length + ' 字正文');
+        } catch (e) {
+          openParseFail(e);
+        }
+        break;
+      }
+
       case 'hot-link': {
         var hi = findHot(t.dataset.src, t.dataset.i);
         closeSheet();
@@ -1313,10 +1379,16 @@
         break;
 
       case 'theme':
-        state.theme = state.theme === 'dark' ? 'light' : 'dark';
+        openThemeSheet();
+        break;
+
+      case 'set-theme':
+        state.theme = t.dataset.v;
         applyTheme();
         save();
+        closeSheet();
         render('tab');
+        toast('外观：' + THEME_LABEL[state.theme]);
         break;
 
       case 'open-data':
@@ -1411,10 +1483,52 @@
 
   /* ---------------- 主题 ---------------- */
 
+  function resolvedTheme() {
+    if (state.theme === 'light' || state.theme === 'dark') return state.theme;
+    try {
+      return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    } catch (e) {
+      return 'dark';
+    }
+  }
+
   function applyTheme() {
-    document.documentElement.setAttribute('data-theme', state.theme);
+    var t = resolvedTheme();
+    document.documentElement.setAttribute('data-theme', t);
     var m = document.querySelector('meta[name="theme-color"]');
-    if (m) m.setAttribute('content', state.theme === 'dark' ? '#08080a' : '#f5f4f1');
+    if (m) m.setAttribute('content', t === 'dark' ? '#08080a' : '#f7f6f2');
+  }
+
+  function watchSystemTheme() {
+    try {
+      var mq = window.matchMedia('(prefers-color-scheme: light)');
+      var fn = function () {
+        if (state.theme !== 'auto') return;
+        applyTheme();
+        render('tab');
+      };
+      if (mq.addEventListener) mq.addEventListener('change', fn);
+      else if (mq.addListener) mq.addListener(fn);
+    } catch (e) { /* ignore */ }
+  }
+
+  /* 外观：跟随系统 / 深色 / 浅色 */
+  var THEME_LABEL = { auto: '跟随系统', dark: '深色', light: '浅色' };
+
+  function openThemeSheet() {
+    var opts = [
+      { v: 'auto', name: '跟随系统', desc: '白天浅色、夜里深色，按手机设置自动切' },
+      { v: 'dark', name: '深色', desc: '石墨黑底，长时间看不刺眼' },
+      { v: 'light', name: '浅色', desc: '纸白底，白天户外更清楚' }
+    ];
+    var html = '<div class="rows">' + opts.map(function (o) {
+      return '<button class="row" data-act="set-theme" data-v="' + o.v + '">' +
+        '<span class="ri">' + U.ic(o.v === 'light' ? 'sun' : 'moon', 15) + '</span>' +
+        '<span class="rt"><b>' + o.name + '</b><small>' + o.desc + '</small></span>' +
+        (state.theme === o.v ? '<span style="color:var(--acc)">' + U.ic('check', 15) + '</span>' : '') +
+        '</button>';
+    }).join('') + '</div>';
+    openSheet(html, { title: '外观' });
   }
 
   /* ---------------- 启动 ---------------- */
@@ -1422,6 +1536,7 @@
   function boot() {
     load();
     applyTheme();
+    watchSystemTheme();
 
     app.addEventListener('click', function (e) {
       var t = e.target.closest('[data-act]');

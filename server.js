@@ -125,7 +125,16 @@ function extract(html) {
     (h.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] ||
     '';
 
-  let block = (h.match(/<div[^>]*id=["']js_content["'][^>]*>([\s\S]*?)<\/div>\s*<\/div>/i) || [])[1];
+  /* 公众号：js_content 里套了多层 div，非贪婪匹配会在第一个 </div> 截断，
+     改成从开标签处向后取一段，再按微信自己的结尾标记切掉 */
+  let block = '';
+  const wxIdx = h.search(/<div[^>]*id=["']js_content["'][^>]*>/i);
+  if (wxIdx > -1) {
+    let seg = h.slice(wxIdx);
+    const cut = seg.search(/预览时标签不可点|微信扫一扫|js_article_bottom|rich_media_tool/i);
+    if (cut > 200) seg = seg.slice(0, cut);
+    block = seg.slice(0, 200000);
+  }
   if (!block) block = (h.match(/<article[^>]*>([\s\S]*?)<\/article>/i) || [])[1];
   if (!block) block = (h.match(/<div[^>]*class=["'][^"']*(article|content|post)[^"']*["'][^>]*>([\s\S]*?)<\/div>/i) || [])[2];
 
@@ -155,13 +164,15 @@ async function parseUrl(url) {
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 15000);
+      const isWx = /mp\.weixin\.qq\.com/.test(target.hostname);
       const res = await fetch(target.href, {
         signal: ctrl.signal,
         redirect: 'follow',
         headers: {
           'User-Agent': ua,
           Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'zh-CN,zh;q=0.9'
+          'Accept-Language': 'zh-CN,zh;q=0.9',
+          Referer: isWx ? 'https://mp.weixin.qq.com/' : target.origin + '/'
         }
       });
       clearTimeout(timer);
@@ -170,9 +181,14 @@ async function parseUrl(url) {
         continue;
       }
       const html = await res.text();
+      if (/环境异常|去验证|该内容已被发布者删除|此内容因违规无法查看/.test(html) && !/id=["']js_content["']/.test(html)) {
+        lastErr = '微信拦住了解析（文章要求微信内打开，或已被删除）';
+        continue;
+      }
       const out = extract(html);
-      if (out.text.length >= 150) return out;
-      lastErr = '正文太短（' + out.text.length + ' 字）';
+      const need = /mp\.weixin\.qq\.com/.test(target.hostname) ? 90 : 120;
+      if (out.text.length >= need) return out;
+      lastErr = '正文只有 ' + out.text.length + ' 字';
     } catch (e) {
       lastErr = e.name === 'AbortError' ? '抓取超时' : e.message;
     }

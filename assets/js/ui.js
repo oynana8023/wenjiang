@@ -250,6 +250,13 @@ window.WJUI = (function () {
 
     h += '<div class="note mt-l">' + ic('globe', 14) +
       '<div>数据来自微博、知乎、头条、百度、抖音、B 站等公开榜单接口，仅保留标题与热度值，不做任何加工。抓取失败会明确显示，不会用假数据填充。</div></div>';
+
+    /* 公众号：微信不提供公开热文榜，这里只做「贴链接取正文」 */
+    h += '<div class="card mt-s" style="padding:16px">' +
+      '<div style="font-size:14px;font-weight:600">公众号没有公开热榜</div>' +
+      '<div class="sec-sub" style="margin-top:6px;line-height:1.65">微信不对外提供公众号热文榜，市面上号称「公众号热榜」的多是二手抓取。要看某篇公众号文章，把链接贴进来，点解析就能取到正文。</div>' +
+      '<button class="btn btn-soft btn-block mt-m" data-act="wx-parse">' + ic('link', 15) + ' 粘贴公众号链接解析</button></div>';
+
     h += '</div>';
     return h;
   }
@@ -532,7 +539,7 @@ window.WJUI = (function () {
       '<div class="avatar">匠</div>' +
       '<div style="flex:1"><div style="font-size:15px;font-weight:600">本地创作者</div>' +
       '<div class="sec-sub" style="margin-top:3px">' + state.works.length + ' 篇 · ' + totalWords + ' 字 · ' + (s.model ? '已接入模型' : '本机引擎') + '</div></div>' +
-      '<button class="iconbtn solid" data-act="theme">' + ic(state.theme === 'dark' ? 'moon' : 'sun', 16) + '</button></div>';
+      '<button class="iconbtn solid" data-act="theme" aria-label="外观">' + ic(state.theme === 'light' ? 'sun' : 'moon', 16) + '</button></div>';
 
     /* 额度 */
     h += '<div class="card mt-s" style="padding:14px 16px">' +
@@ -563,9 +570,11 @@ window.WJUI = (function () {
       '<span class="rt"><b>默认风格</b></span><span class="rv">' + esc(styleName(s.defaultStyle)) + '</span>' +
       '<span class="chev">' + ic('right', 15) + '</span></button>';
     h += rowLike('shield', '复制时附带 AI 声明', s.declare ? '已开启' : '已关闭', 'toggle', 'declare', true, s.declare);
-    h += '<button class="row" data-act="theme"><span class="ri">' + ic('moon', 15) + '</span>' +
-      '<span class="rt"><b>深色模式</b><small>' + (state.theme === 'dark' ? '当前：深色' : '当前：浅色') + '</small></span>' +
-      '<span class="sw' + (state.theme === 'dark' ? ' on' : '') + '"></span></button>';
+    var themeName = state.theme === 'light' ? '浅色' : state.theme === 'dark' ? '深色' : '跟随系统';
+    h += '<button class="row" data-act="theme"><span class="ri">' + ic(state.theme === 'light' ? 'sun' : 'moon', 15) + '</span>' +
+      '<span class="rt"><b>外观</b><small>当前：' + themeName + '</small></span>' +
+      '<span class="rv">' + themeName + '</span>' +
+      '<span class="chev">' + ic('right', 15) + '</span></button>';
     h += '</div></div>';
 
     /* 说明 */

@@ -45,8 +45,13 @@ const BLOCK =
   /(习近平|李强|王毅|政治局|中央委员会|国务院|全国人大|政协|外交部|国防部|解放军|军队|军事|战争|停火|制裁|外交|峰会|会见|会晤|国事访问|特朗普|普京|拜登|泽连斯基|内塔尼亚胡|总统|首相|大选|选举|投票|台湾|台独|香港|新疆|西藏|疫情|核酸|封控|脱贫|党建|纪委|反腐|落马|双开|巡视|两会|党章|国旗|阅兵|主权|领土|总书记|共同体|一带一路|中国贡献|中国机遇|大国担当|APEC|G20|G7|上合|金砖|联合国|中方|我方|美方|外交部|发言人|大使|领馆|使馆|国事|会谈|磋商|白宫|克里姆林宫|欧盟委员会|会见|接见|访华|出访|致辞|贺信|批示|委员长|总理|外长|防长|军委|部队|导弹|演习|反制|政要|领导人|亚太合作|元首|国宴|使节|参赞|国际关系|地缘|制裁|军演|航母|战机|外交部|驻华)/;
 
 function num(v) {
-  const n = Number(String(v ?? 0).replace(/[^\d.]/g, ''));
-  return Number.isFinite(n) ? n : 0;
+  const s = String(v ?? '');
+  const n = Number(s.replace(/[^\d.]/g, ''));
+  if (!Number.isFinite(n)) return 0;
+  /* 知乎给的是「1234 万热度」，这里把单位还原成数字，避免 1234 万被当成 1234 */
+  if (/亿/.test(s)) return Math.round(n * 1e8);
+  if (/万/.test(s)) return Math.round(n * 1e4);
+  return n;
 }
 
 function tidy(list) {
@@ -93,6 +98,80 @@ async function viaBaidu() {
   return tidy(items);
 }
 
+async function viaWeibo() {
+  /* 微博要求带 Referer，否则 403 */
+  const r = await fetch('https://weibo.com/ajax/side/hotSearch', {
+    signal: timeout(15000),
+    headers: {
+      'User-Agent': UA,
+      Accept: 'application/json, text/plain, */*',
+      'Accept-Language': 'zh-CN,zh;q=0.9',
+      Referer: 'https://weibo.com/'
+    }
+  });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const d = await r.json();
+  const list = d?.data?.realtime || [];
+  return tidy(
+    list.map((x) => ({
+      title: x.word,
+      hot: x.num,
+      url: 'https://s.weibo.com/weibo?q=' + encodeURIComponent('#' + x.word + '#')
+    }))
+  );
+}
+
+async function viaZhihu() {
+  const d = await get('https://api.zhihu.com/topstory/hot-lists/total?limit=50', 'json');
+  const list = d?.data || [];
+  return tidy(
+    list.map((x) => {
+      const u = String(x?.target?.url || '');
+      return {
+        title: x?.target?.title,
+        hot: x?.detail_text,
+        url: u ? u.replace('api.zhihu.com/questions', 'www.zhihu.com/question') : ''
+      };
+    })
+  );
+}
+
+async function viaDouyin() {
+  const d = await get('https://www.iesdouyin.com/web/api/v2/hotsearch/billboard/word/', 'json');
+  const list = d?.word_list || [];
+  return tidy(
+    list.map((x) => ({
+      title: x.word,
+      hot: x.hot_value,
+      url: 'https://www.douyin.com/search/' + encodeURIComponent(x.word)
+    }))
+  );
+}
+
+async function via36kr() {
+  const r = await fetch('https://gateway.36kr.com/api/mis/nav/home/nav/rank/hot', {
+    method: 'POST',
+    signal: timeout(15000),
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': UA,
+      Origin: 'https://36kr.com',
+      Referer: 'https://36kr.com/'
+    },
+    body: JSON.stringify({ partner_id: 'wap', param: { siteId: 1, platformId: 2 }, timestamp: Date.now() })
+  });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const d = await r.json();
+  const list = d?.data?.hotRankList || [];
+  return tidy(
+    list.map((x) => ({
+      title: x?.templateMaterial?.widgetTitle,
+      hot: x?.templateMaterial?.statRead ?? 0,
+      url: x?.itemId ? 'https://36kr.com/p/' + x.itemId : ''
+    }))
+  );
+}
+
 /* ---------- 通道 3：RSS（标题+链接，真实、稳定、全球可达） ---------- */
 function rssTitles(xml) {
   const items = [];
@@ -126,7 +205,11 @@ async function viaRss(url) {
 const DIRECT = {
   toutiao: viaToutiao,
   bilibili: viaBilibili,
-  baidu: viaBaidu
+  baidu: viaBaidu,
+  weibo: viaWeibo,
+  zhihu: viaZhihu,
+  douyin: viaDouyin,
+  '36kr': via36kr
 };
 
 async function one(id) {

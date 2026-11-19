@@ -26,10 +26,25 @@ window.WJLive = (function () {
 
   var serverFlags = null;
 
-  /* 部分托管平台要求所有请求带访问凭据，同源请求时自动补上 */
-  function withShare(url) {
+  /* 部分托管平台要求所有请求带访问凭据，同源请求时自动补上。
+     首次带 sharecode 打开后就记下来，之后即使从桌面图标、无参数链接进来也能用 */
+  var SC_KEY = 'wj.sharecode';
+  function shareCode() {
     try {
       var sc = new URLSearchParams(location.search).get('sharecode');
+      if (sc) {
+        localStorage.setItem(SC_KEY, sc);
+        return sc;
+      }
+      return localStorage.getItem(SC_KEY) || '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function withShare(url) {
+    try {
+      var sc = shareCode();
       if (!sc) return url;
       return url + (url.indexOf('?') > -1 ? '&' : '?') + 'sharecode=' + encodeURIComponent(sc);
     } catch (e) {
@@ -178,12 +193,16 @@ window.WJLive = (function () {
 
   /* ---------------- 链接解析 ---------------- */
 
+  /* 解析通道：先自己人，再公共代理。
+     每条通道单独限时，失败不影响下一条；全部失败时把每条的原因摊开给用户看 */
   var PROXIES = [
-    { id: 'server', wrap: null },
-    { id: 'jina', wrap: function (u) { return 'https://r.jina.ai/' + u; }, text: true },
-    { id: 'allorigins', wrap: function (u) { return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u); } },
-    { id: 'codetabs', wrap: function (u) { return 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u); } },
-    { id: 'corsproxy', wrap: function (u) { return 'https://corsproxy.io/?' + encodeURIComponent(u); } }
+    { id: 'server', label: '站内解析', wrap: null },
+    { id: 'jina', label: '阅读器 A', wrap: function (u) { return 'https://r.jina.ai/' + u; }, text: true },
+    { id: 'allorigins', label: '代理 A', wrap: function (u) { return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u); } },
+    { id: 'codetabs', label: '代理 B', wrap: function (u) { return 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u); } },
+    { id: 'corslol', label: '代理 C', wrap: function (u) { return 'https://api.cors.lol/?url=' + encodeURIComponent(u); } },
+    { id: 'alloriginsJson', label: '代理 D', wrap: function (u) { return 'https://api.allorigins.win/get?url=' + encodeURIComponent(u); }, json: true },
+    { id: 'corsproxy', label: '代理 E', wrap: function (u) { return 'https://corsproxy.io/?' + encodeURIComponent(u); } }
   ];
 
   /* 时政/军事/外交类条目不适合做二创，统一过滤，并如实告知过滤了多少条 */
@@ -247,7 +266,23 @@ window.WJLive = (function () {
     return m ? m[0] : '';
   }
 
-  async function parseLink(raw) {
+  /* 链接分两类：能取正文的内容页 / 只有搜索结果的榜单页 */
+  function urlKind(u) {
+    var s = String(u || '');
+    if (!s) return 'none';
+    if (/s\.weibo\.com|weibo\.com\/weibo\?q=/.test(s)) return 'search';
+    if (/baidu\.com\/s\?/.test(s)) return 'search';
+    if (/douyin\.com\/search\//.test(s)) return 'search';
+    if (/weixin\.sogou\.com/.test(s)) return 'search';
+    if (/mp\.weixin\.qq\.com/.test(s)) return 'wechat';
+    return 'article';
+  }
+
+  function hostOf(u) {
+    try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
+  }
+
+  async function parseLink(raw, onStep) {
     var url = pickUrl(raw);
     if (!url) throw new Error('没有识别到以 http 开头的链接');
 
@@ -259,43 +294,59 @@ window.WJLive = (function () {
 
     var errors = [];
     var useServer = await hasServer();
+    var isWx = urlKind(url) === 'wechat';
+    var minLen = isWx ? 90 : 120;
 
     for (var i = 0; i < PROXIES.length; i++) {
       var p = PROXIES[i];
       if (p.id === 'server' && !useServer) continue;
+      if (onStep) onStep(p.label, i + 1, PROXIES.length);
       try {
         if (p.id === 'server') {
-          var sd = await getJSON(withShare('/api/parse?url=' + encodeURIComponent(url)), 20000);
+          var sd = await getJSON(withShare('/api/parse?url=' + encodeURIComponent(url)), 25000);
           if (!sd || !sd.ok) throw new Error((sd && sd.error) || '服务端解析失败');
-          if (!sd.text || sd.text.length < 150) throw new Error('正文太短');
-          var sout = { title: sd.title || '', text: sd.text, via: 'server', at: Date.now() };
+          if (!sd.text || sd.text.length < minLen) throw new Error('正文只有 ' + ((sd.text || '').length) + ' 字');
+          var sout = { title: sd.title || '', text: sd.text.slice(0, 12000), via: 'server', at: Date.now() };
           localStorage.setItem(cacheKey, JSON.stringify(sout));
           return sout;
         }
+
         var target = p.wrap(url);
-        var body;
+        var body, text;
         if (p.text) {
-          body = await getText(target, 12000, { headers: { Accept: 'text/plain' } });
-          body = body.replace(/^Title:.*$/gm, '').trim();
-          var outT = { title: '', text: clean(body), via: p.id, at: Date.now() };
-          if (outT.text.length < 150) throw new Error('正文太短');
+          body = await getText(target, 20000, { headers: { Accept: 'text/plain' } });
+          body = body.replace(/^Title:.*$/gm, '').replace(/^URL Source:.*$/gm, '').trim();
+          text = clean(body);
+          if (text.length < minLen) throw new Error('正文只有 ' + text.length + ' 字');
+          var outT = { title: '', text: text.slice(0, 12000), via: p.id, at: Date.now() };
           localStorage.setItem(cacheKey, JSON.stringify(outT));
           return outT;
         }
-        var text = await getText(target, 12000);
-        var parsed = extractHtml(text);
-        if (!parsed || parsed.text.length < 150) throw new Error('正文太短');
-        var out = { title: parsed.title, text: parsed.text.slice(0, 8000), via: p.id, at: Date.now() };
+
+        if (p.json) {
+          var wrap = await getJSON(target, 20000);
+          body = (wrap && (wrap.contents || wrap.body)) || '';
+          if (!body) throw new Error('代理返回空');
+        } else {
+          body = await getText(target, 20000);
+        }
+        var parsed = extractHtml(body);
+        if (!parsed || parsed.text.length < minLen) {
+          throw new Error('没取到正文（' + hostOf(url) + ' 可能要求登录或限制了抓取）');
+        }
+        var out = { title: parsed.title, text: parsed.text.slice(0, 12000), via: p.id, at: Date.now() };
         localStorage.setItem(cacheKey, JSON.stringify(out));
         return out;
       } catch (e) {
-        if (p.id === 'server' && e && /HTTP 404/.test(e.message)) useServer = false;
-        errors.push(p.id + ': ' + (e.message || '失败'));
+        if (p.id === 'server' && e && /HTTP 40[34]/.test(e.message)) useServer = false;
+        errors.push(p.label + '：' + (e.message || '失败'));
       }
     }
-    var err = new Error('所有解析通道都没成功');
-    err.detail = errors.join(' / ');
+
+    var err = new Error(useServer ? '所有解析通道都没成功' : '当前没有后端，公共通道也没成功');
+    err.detail = errors.join('\n');
     err.url = url;
+    err.kind = urlKind(url);
     throw err;
   }
 
@@ -449,6 +500,8 @@ window.WJLive = (function () {
     SOURCES: SOURCES,
     hot: hot,
     parseLink: parseLink,
+    urlKind: urlKind,
+    hostOf: hostOf,
     hasServer: hasServer,
     listModels: listModels,
     testModel: testModel,
