@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI;
 
-  var VERSION = 'v2.7.0';
+  var VERSION = 'v2.8.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -2951,7 +2951,7 @@
       r.images = [got.url].concat(r.images || []).slice(0, 3);
       r.imageBy = got.provider.name || got.model;
       r.imageMeta = {
-        frame: f.name, ratio: f.ratio,
+        frame: f.name, ratio: f.ratio, basis: f.basis || [],
         prompt: prompt, promptCn: promptCn,
         check: verdict === true ? 'pass' : verdict === false ? 'fail' : 'skip',
         redrew: redrew, at: Date.now()

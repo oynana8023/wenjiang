@@ -623,7 +623,8 @@ window.WJUI = (function () {
         '<span class="sec-sub">' + esc(r.imageBy || '出图模型') + '</span></div>';
       if (m.frame) {
         h += '<div class="immeta">依据「' + esc(m.frame) + '」· ' + esc(m.ratio || '') +
-          (m.redrew ? ' · 已自动重画' : '') + '</div>';
+          (m.redrew ? ' · 已自动重画' : '') +
+          (m.basis && m.basis.length ? ' · 取自原文「' + esc(m.basis.slice(0, 3).join('/')) + '」' : '') + '</div>';
       }
       h += '<div class="imgrid gen">' + r.images.map(function (src, i) {
         return '<div class="im"><img src="' + esc(src) + '" alt="">' +
@@ -657,6 +658,8 @@ window.WJUI = (function () {
         '<div class="ph"><b>' + esc(v.name) + '</b>' +
         '<span class="tg">' + esc(v.ratio) + '</span></div>' +
         '<div class="psub">' + esc(v.subject) + '</div>' +
+        (v.basis && v.basis.length ? '<div class="pbasis">原文关键词：' +
+          esc(v.basis.slice(0, 4).join(' · ')) + '</div>' : '') +
         '<details class="pdet"><summary>完整提示词</summary><div class="pt">' + esc(v.promptCn) + '</div></details>' +
         '<div class="pact">' +
         '<button class="mini-btn" data-act="copy-prompt" data-i="' + i + '">' + ic('copy', 12) + ' 中文</button>' +

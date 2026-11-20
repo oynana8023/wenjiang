@@ -2771,3 +2771,12 @@ a {
   max-height: 76vh;
   object-fit: contain;
 }
+
+/* 关键词依据：让「为什么画这个」有据可查 */
+.pbasis {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-3);
+  margin: -3px 0 9px;
+  word-break: break-all;
+}

@@ -1054,6 +1054,9 @@ window.WJEngine = (function () {
     home: ['客厅一角，沙发、毯子与一盏落地灯',
       'a corner of a living room with a sofa, a throw blanket and a floor lamp',
       '傍晚的室内暖光', 'indoors in warm evening light', '客厅'],
+    law: ['一把木质法槌放在深色台面上，锤头有使用痕迹，旁边压着一叠文件',
+      'a wooden gavel on a dark bench, wear visible on the head, a stack of papers beneath it',
+      '法庭内部，木质栏杆与冷白顶光，背景虚化', 'inside a courtroom with a wooden railing and cool overhead light, background out of focus', '法槌'],
     place: ['一张木桌，摊开的笔记本、一支笔与一杯水',
       'a wooden desk with an open notebook, a pen and a glass of water',
       '室内侧窗自然光', 'indoors with side window light', '桌面']
@@ -1061,7 +1064,11 @@ window.WJEngine = (function () {
 
   /* 只用来判定类目，品牌名不进画面描述（否则模型会去画 logo、拼错字） */
   var VIS_ROUTE = [
-    [/华为|荣耀|小米|红米|OPPO|vivo|一加|realme|魅族|努比亚|三星|iPhone|苹果|手机|折叠屏|新机|旗舰机|机型/i, 'phone'],
+    /* 顺序只是同分时的优先级；真正决定类目的是命中次数（标题算 4 分，正文 1 分）。
+       法律的词必须排在财经前面：一篇讲索赔的稿子，正文里「经济损失」只出现一次，
+       而「法院、判决、侵权、开庭」会出现十几次，按分数不会输。 */
+    [/法院|开庭|庭审|判决|裁定|起诉|诉讼|索赔|判令|原告|被告|律师|侵权|维权|法案|立法|反垄断|行政处罚|约谈|商标|专利|著作权|合规/i, 'law'],
+    [/华为|荣耀|小米|红米|OPPO|vivo|一加|realme|魅族|努比亚|三星|iPhone|手机|折叠屏|新机|旗舰机|机型/i, 'phone'],
     [/特斯拉|比亚迪|蔚来|小鹏|理想|问界|极氪|零跑|车型|电动车|新能源车|续航|充电桩|智驾|汽车/i, 'car'],
     [/芯片|晶圆|光刻|制程|算力|GPU|CPU|英伟达|台积电|半导体|存储颗粒/i, 'chip'],
     [/人形机器人|机械臂|具身智能|宇树|波士顿动力|机器人/i, 'robot'],
@@ -1073,7 +1080,7 @@ window.WJEngine = (function () {
     [/咖啡|奶茶|餐厅|火锅|烘焙|面包|外卖|小吃|菜单|拿铁/i, 'food'],
     [/医院|医生|体检|疫苗|药品|睡眠|健康|疾病|手术|门诊/i, 'health'],
     [/学校|高考|考研|学生|课堂|老师|作业|开学|教育|毕业/i, 'school'],
-    [/房价|楼市|股|基金|银行|利率|通胀|经济|消费|财报|营收|利润|融资|市值/i, 'finance'],
+    [/房价|楼市|A股|港股|美股|基金|银行|利率|通胀|财报|营收|净利润|融资|市值|IPO/i, 'finance'],
     [/电影|电视剧|综艺|演唱会|明星|演员|歌手|票房|舞台|巡演/i, 'stage'],
     [/办公|工位|职场|加班|会议|写字楼|远程|裁员|招聘|面试/i, 'office'],
     [/旅游|景区|酒店|机票|高铁|机场|出行|露营|citywalk|自驾/i, 'travel'],
@@ -1089,7 +1096,10 @@ window.WJEngine = (function () {
 
   /* 事件只换场景，不当主体 */
   var VIS_EVENT = [
-    { re: /发布|公布|官宣|亮相|上线|开售|首销|预售/, cn: '新品发布舞台，背后是一块虚化的大屏', en: 'a launch stage with a large blurred LED wall behind' },
+    /* 「发布公告」「发布财报」不是发布会，别把法槌稿挂到舞台上 */
+    { re: /发布(?!公告|声明|消息|通知|通报|财报|报告|规定|细则|指引)|官宣|亮相|上线|开售|首销|预售/,
+      only: ['phone', 'car', 'chip', 'robot', 'ai', 'laptop', 'gadget', 'glass', 'beauty', 'food', 'drink', 'stage', 'home'],
+      cn: '新品发布舞台，背后是一块虚化的大屏', en: 'a launch stage with a large blurred LED wall behind' },
     { re: /涨价|降价|价格|多少钱|定价|收费|元一杯|客单价/, only: ['food', 'beauty', 'home', 'gadget', 'glass'], cn: '浅灰台面上，旁边立着一块空白的小价签', en: 'on a light grey surface with a small blank price card nearby' },
     { re: /裁员|离职|招聘|入职|面试|跳槽|毕业季/, only: ['office', 'place', 'finance', 'laptop'], cn: '空荡的办公区，几张空工位', en: 'a quiet office with several empty desks' },
     { re: /融资|上市|股价|财报|营收|利润|市值|IPO/i, only: ['finance', 'office', 'place'], cn: '傍晚的城市天际线，楼体亮着灯', en: 'a city skyline at dusk with lit towers' },
@@ -1107,7 +1117,7 @@ window.WJEngine = (function () {
   var VIS_GROUP = {
     phone: 'tech', chip: 'tech', robot: 'tech', ai: 'tech', laptop: 'tech', gadget: 'tech', glass: 'tech', factory: 'tech',
     food: 'life', drink: 'drink', pet: 'life', beauty: 'life', kid: 'life', home: 'life',
-    finance: 'biz', office: 'biz', stage: 'biz',
+    finance: 'biz', office: 'biz', stage: 'biz', law: 'biz',
     farm: 'nature', weather: 'nature', travel: 'nature', fitness: 'nature',
     health: 'clean', school: 'clean'
   };
@@ -1145,6 +1155,9 @@ window.WJEngine = (function () {
      实物抠出来：酒瓶、荔枝、灌装线、纸箱。每条 [正则, 中文, 英文, 组, 权重, 自检词, 简称]。
      权重高的当主体，同组的第二个当陪衬；地名、机构、抽象词一律不进画面。 */
   var VIS_OBJ = [
+    [/法院|开庭|庭审|判决|裁定|起诉|诉讼|索赔|判令|原告|被告|律师|侵权|维权|法槌|传票|立案/, '一把木质法槌，锤头有使用痕迹，压在深色台面的文件上', 'a wooden gavel with wear on the head, resting on papers on a dark bench', 'law', 12, '法槌', '一把法槌'],
+    [/判决书|裁定书|诉状|文书|证据|庭审记录/, '一叠摊开的纸质文件，纸页有折痕，旁边压着一枚印章', 'a stack of open paper documents with creased pages beside a seal', 'law', 8, '文件', '一叠文件'],
+    [/搜索|链接|屏蔽|引流|榜单|盗版|盗链|缓存|播放器|关键词/, '一部手机，屏幕上是一个搜索框和几条结果链接', 'a smartphone showing a search box and a list of result links', 'tech', 7, '手机', '一部手机'],
     [/冰酒|白酒|黄酒|米酒|果酒|酒厂|酒业|酒液/, '一瓶琥珀色酒液的玻璃酒瓶，瓶身贴着简洁标签', 'a glass bottle of amber liquor with a minimal label', 'drink', 10, '酒瓶', '一瓶冰酒'],
     [/红酒|葡萄酒/, '一瓶红酒，深色玻璃瓶，软木塞', 'a bottle of red wine, dark glass, cork stopper', 'drink', 10, '酒瓶', '一瓶红酒'],
     [/啤酒/, '一杯冰镇啤酒，杯壁挂着水珠', 'a glass of cold beer with condensation', 'drink', 10, '啤酒', '一杯啤酒'],
@@ -1183,49 +1196,69 @@ window.WJEngine = (function () {
 
   /* 场景优先于事件：文里写了「车间/流水线」，就别再给夜景写字楼。
      没有具体物件可画时，用场景自带的兜底主体，避免主体和背景两张皮。 */
+  /* 场景表。only 是这个场景「讲得通」的物件组：法槌不会出现在车间，
+     雨伞不会出现在会议室。命中但不兼容就当没命中，否则就会出现
+     「主体是法槌、背景是传送带」这种拼贴。 */
   var VIS_SET = [
     { re: /车间|生产线|流水线|灌装|工厂|出厂|量产|制造|缺瓶|赶工|产能|加班加点/,
+      only: ['drink', 'food', 'pack', 'tech', 'vehicle', 'factory', 'people', 'farm'],
       cn: '车间里，传送带与机械臂，顶部条形灯', en: 'a workshop with a conveyor and a robotic arm under linear ceiling lights',
-      subCn: '一条运转中的传送带', subEn: 'a running conveyor belt', expect: '传送带', short: '一条传送带' },
+      subCn: '一条运转中的传送带', subEn: 'a running conveyor belt', expect: '传送带', short: '一条传送带', tag: '车间' },
+    { re: /法庭|法院|开庭|庭审|判决|合议/,
+      only: ['law'],
+      cn: '法庭内部，木质栏杆与冷白顶光，背景虚化', en: 'inside a courtroom with a wooden railing and cool overhead light',
+      subCn: '一把木质法槌与一叠文件', subEn: 'a wooden gavel beside a stack of papers', expect: '法槌', short: '一把法槌', tag: '法庭' },
     { re: /工位|办公区|开放式办公|裁员|离职|入职|会议|写字楼/,
+      only: ['office', 'finance', 'tech', 'place', 'laptop', 'people'],
       cn: '空荡的办公区，几张空工位，显示器还亮着', en: 'a quiet open-plan office with empty desks and monitors still on',
-      subCn: '一张空工位上亮着的显示器', subEn: 'a monitor still glowing on an empty desk', expect: '工位', short: '一张空工位' },
+      subCn: '一张空工位上亮着的显示器', subEn: 'a monitor still glowing on an empty desk', expect: '工位', short: '一张空工位', tag: '空工位' },
     { re: /仓库|库存|堆放|仓储/,
+      only: ['pack', 'drink', 'food', 'vehicle', 'factory'],
       cn: '仓库货架与打包台，纸箱整齐堆叠', en: 'a warehouse aisle with neatly stacked cartons',
-      subCn: '堆叠的牛皮纸箱', subEn: 'stacked kraft cartons', expect: '纸箱', short: '几个纸箱' },
+      subCn: '堆叠的牛皮纸箱', subEn: 'stacked kraft cartons', expect: '纸箱', short: '几个纸箱', tag: '仓库' },
     { re: /晚宴|宴会|国宴|招待|餐桌|酒会/,
+      only: ['drink', 'food', 'stage', 'finance'],
       cn: '宴会厅的长桌，暖光，成排的高脚杯', en: 'a banquet table with rows of wine glasses in warm light',
-      subCn: '成排的高脚杯与白瓷盘', subEn: 'rows of wine glasses and white plates', expect: '酒杯', short: '一桌宴席' },
+      subCn: '成排的高脚杯与白瓷盘', subEn: 'rows of wine glasses and white plates', expect: '酒杯', short: '一桌宴席', tag: '宴会桌' },
     { re: /老人|独居|社区|家庭|孩子|母亲|父亲|夫妻|居家|送餐|食堂/,
+      only: ['food', 'people', 'home', 'kid', 'health'],
       cn: '居家客厅，暖光，桌角摆着碗筷', en: 'a warm living room with bowls and chopsticks on the table corner',
-      subCn: '一碗冒着热气的饭和一双筷子', subEn: 'a steaming bowl of rice with chopsticks', expect: '饭', short: '一碗热饭' },
+      subCn: '一碗冒着热气的饭和一双筷子', subEn: 'a steaming bowl of rice with chopsticks', expect: '饭', short: '一碗热饭', tag: '居家餐桌' },
     { re: /超市|货架|便利店|门店|柜台|商超/,
+      only: ['food', 'drink', 'beauty', 'home', 'pack'],
       cn: '超市货架与价格牌，侧光扫过', en: 'supermarket shelves with price tags under side light',
-      subCn: '货架上排列整齐的商品', subEn: 'neatly arranged goods on a shelf', expect: '货架', short: '一排货架' },
+      subCn: '货架上排列整齐的商品', subEn: 'neatly arranged goods on a shelf', expect: '货架', short: '一排货架', tag: '超市货架' },
     { re: /直播间|带货|镜头前/,
+      only: ['tech', 'beauty', 'food', 'gadget', 'glass', 'drink'],
       cn: '直播间补光灯前的桌面，背景虚化', en: 'a desk under studio fill light in a livestream room',
-      subCn: '桌面上的产品与一支麦克风', subEn: 'a product and a microphone on the desk', expect: '产品', short: '直播桌面' },
+      subCn: '桌面上的产品与一支麦克风', subEn: 'a product and a microphone on the desk', expect: '产品', short: '直播桌面', tag: '直播间' },
     { re: /果园|农田|田间|采摘|种植|稻田/,
+      only: ['farm', 'food'],
       cn: '果园里挂果的枝条，清晨的光', en: 'fruit-laden branches in an orchard at dawn',
-      subCn: '挂满果实的枝条', subEn: 'branches heavy with fruit', expect: '果树', short: '挂果的枝条' },
+      subCn: '挂满果实的枝条', subEn: 'branches heavy with fruit', expect: '果树', short: '挂果的枝条', tag: '果园' },
     { re: /医院|诊室|病房|手术/,
+      only: ['health'],
       cn: '干净的诊室，器械盘与白光', en: 'a clean clinic room with an instrument tray',
-      subCn: '不锈钢器械盘与白色台面', subEn: 'a stainless instrument tray on a white counter', expect: '器械', short: '一只器械盘' },
+      subCn: '不锈钢器械盘与白色台面', subEn: 'a stainless instrument tray on a white counter', expect: '器械', short: '一只器械盘', tag: '诊室' },
     { re: /教室|学校|课堂|考场/,
+      only: ['school', 'kid'],
       cn: '教室课桌，摊开的书与窗边的光', en: 'a classroom desk with an open book and window light',
-      subCn: '摊开的课本与几支铅笔', subEn: 'an open textbook and a few pencils', expect: '书本', short: '一本摊开的书' },
+      subCn: '摊开的课本与几支铅笔', subEn: 'an open textbook and a few pencils', expect: '书本', short: '一本摊开的书', tag: '教室' },
     { re: /车站|候车|月台|机场/,
+      only: ['travel', 'vehicle'],
       cn: '清晨的车站月台，铁轨向远处延伸', en: 'a station platform at dawn with tracks running away',
-      subCn: '月台与延伸的铁轨', subEn: 'a platform and receding tracks', expect: '站台', short: '一段月台' },
+      subCn: '月台与延伸的铁轨', subEn: 'a platform and receding tracks', expect: '站台', short: '一段月台', tag: '车站月台' },
     { re: /街道|马路|路口|城市|霓虹|暴雨|台风/,
+      only: ['weather', 'place', 'travel', 'vehicle', 'finance'],
       cn: '雨后的街道，积水映出招牌的光', en: 'a city street after rain with puddles reflecting signs',
-      subCn: '湿沥青路面上的一把深色雨伞', subEn: 'a dark umbrella on wet asphalt', expect: '雨伞', short: '一把雨伞' }
+      subCn: '湿沥青路面上的一把深色雨伞', subEn: 'a dark umbrella on wet asphalt', expect: '雨伞', short: '一把雨伞', tag: '雨后街道' }
   ];
 
   var VIS_COMPAT = {
     drink: ['drink', 'food', 'pack', 'people'],
     food: ['food', 'drink', 'pack', 'people'],
     pack: ['pack', 'drink', 'food'],
+    law: ['law'],
     tech: ['tech'],
     vehicle: ['vehicle'],
     people: ['people']
@@ -1236,18 +1269,31 @@ window.WJEngine = (function () {
     for (var i = 0; i < VIS_OBJ.length; i++) {
       var o = VIS_OBJ[i];
       if (!o[0].test(scan)) continue;
-      var w = o[4] + (o[0].test(title) ? 5 : 0);
-      out.push({ cn: o[1], en: o[2], g: o[3], w: w, expect: o[5], short: o[6], at: scan.search(o[0]) });
+      var uniq = [];
+      (scan.match(new RegExp(o[0].source, 'g')) || []).forEach(function (k) {
+        if (uniq.indexOf(k) < 0) uniq.push(k);
+      });
+      var n = uniq.length;
+      /* 出现次数也算分：一篇稿子反复讲瓶子，就别让一次「晚宴」抢走主体 */
+      var w = o[4] + (o[0].test(title) ? 6 : 0) + Math.min(n - 1, 4);
+      out.push({ cn: o[1], en: o[2], g: o[3], w: w, expect: o[5], short: o[6], at: scan.search(o[0]), hits: uniq.slice(0, 3) });
     }
     out.sort(function (a, b) { return b.w - a.w || a.at - b.at; });
     return out;
   }
 
-  function visCatOf(t) {
+  /* 类目按分数定：标题命中算 4 分，正文每命中一次算 1 分。
+     以前是「谁排在前面谁赢」，于是正文里一个「经济损失」就能把整篇拉进财经。 */
+  function visCatOf(title, body) {
+    var best = 'place', bestScore = 0;
     for (var i = 0; i < VIS_ROUTE.length; i++) {
-      if (VIS_ROUTE[i][0].test(t)) return VIS_ROUTE[i][1];
+      var re = VIS_ROUTE[i][0];
+      var t = (title.match(new RegExp(re.source, 'gi')) || []).length;
+      var b = (body.match(new RegExp(re.source, 'gi')) || []).length;
+      var sc = t * 4 + b;
+      if (sc > bestScore) { bestScore = sc; best = VIS_ROUTE[i][1]; }
     }
-    return 'place';
+    return best;
   }
 
   function visuals(text, opts) {
@@ -1265,11 +1311,13 @@ window.WJEngine = (function () {
       var ok = (VIS_COMPAT[main.g] || [main.g]).indexOf(objs[oi].g) > -1;
       if (ok) { second = objs[oi]; break; }
     }
-    if (!main) main = null;
+    /* 陪衬别和主体说同一件事：主体已经「压在文件上」，就不再「旁边一叠文件」 */
+    if (second && main && main.cn.indexOf(second.expect) > -1) second = null;
 
     /* 有实物时以实物的组定类目，别再让「续航」「消费」这类词把类目带偏 */
     var GROUP_CAT = { tech: 'gadget', vehicle: 'car', drink: 'drink', pack: 'food', people: 'office' };
-    var cat = main ? (VIS_CAT[main.g] ? main.g : (GROUP_CAT[main.g] || visCatOf(scan))) : visCatOf(scan);
+    var cat = main ? (VIS_CAT[main.g] ? main.g : (GROUP_CAT[main.g] || visCatOf(title, plain)))
+      : visCatOf(title, plain);
     var cc = VIS_CAT[cat] || VIS_CAT.place;
 
     /* 颜色只在标题里找，正文颜色词多是比喻，容易带偏 */
@@ -1279,12 +1327,21 @@ window.WJEngine = (function () {
     }
 
     /* 场景：文中场景 > 事件 > 类目默认 */
-    var setCn = cc[2], setEn = cc[3], setHit = null, bestN = 0;
-    /* 多个场景同时出现时按命中次数定，别让一句「欢迎晚宴」压过通篇的「生产线」 */
+    var setCn = cc[2], setEn = cc[3], setHit = null, bestN = 0, setHits = null;
+    var gate = [cat];
+    if (main) gate.push(main.g);
+    /* 多个场景同时出现时按命中次数定，别让一句「欢迎晚宴」压过通篇的「生产线」；
+       同时要求场景和主体讲得通——法槌不能摆在车间里。 */
     for (var si = 0; si < VIS_SET.length; si++) {
-      var hitm = scan.match(new RegExp(VIS_SET[si].re.source, 'g'));
+      var sc = VIS_SET[si];
+      if (sc.only) {
+        var okSet = false;
+        for (var gi = 0; gi < gate.length; gi++) { if (sc.only.indexOf(gate[gi]) > -1) { okSet = true; break; } }
+        if (!okSet) continue;
+      }
+      var hitm = scan.match(new RegExp(sc.re.source, 'g'));
       var n = hitm ? hitm.length : 0;
-      if (n > bestN) { bestN = n; setHit = VIS_SET[si]; setCn = setHit.cn; setEn = setHit.en; }
+      if (n > bestN) { bestN = n; setHit = sc; setCn = sc.cn; setEn = sc.en; setHits = hitm; }
     }
     if (!setHit) {
       for (var ei = 0; ei < VIS_EVENT.length; ei++) {
@@ -1323,7 +1380,15 @@ window.WJEngine = (function () {
     }
 
     /* 一句人话摘要，放在提示词上方，用户一眼能判断「画的是不是这个」 */
-    var brief = '画的是：' + shortCn + ' · ' + setCn;
+    var setTag = setHit ? (setHit.tag || setCn.split('，')[0]) : (setCn.split('，')[0]);
+    var brief = '画的是：' + shortCn + ' · ' + setTag;
+
+    /* 这张图是从原文哪几个词来的，摆给用户看：不对就是他一眼能指出来 */
+    var basis = [];
+    (main ? main.hits : []).forEach(function (k) { if (basis.indexOf(k) < 0) basis.push(k); });
+    if (setHits) {
+      setHits.forEach(function (k) { if (basis.indexOf(k) < 0 && basis.length < 4) basis.push(k); });
+    }
 
     function build(frame, simple) {
       var light = simple ? '均匀柔光，背景是干净的纯色' : look[2];
@@ -1347,6 +1412,7 @@ window.WJEngine = (function () {
         size: frame.size,
         subject: brief,
         expect: expect,
+        basis: basis,
         prompt: prompt,
         promptCn: promptCn,
         alt: simple ? null : {
