@@ -2389,3 +2389,270 @@ a {
   color: var(--ink);
   font-weight: 600;
 }
+
+/* ---------- 话题二级页：帖子清单 ---------- */
+.topic-box {
+  margin-top: 16px;
+}
+.topic-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.tp {
+  padding: 10px 11px;
+  margin-bottom: 8px;
+  border-radius: var(--r-m);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  transition: border-color 0.16s var(--ease-out), transform 0.16s var(--ease-out);
+}
+.tp:active {
+  transform: scale(0.985);
+  border-color: var(--acc);
+}
+.tp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+.tp-a {
+  font-size: 11.5px;
+  font-weight: 650;
+  color: var(--acc);
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tp-m {
+  font-family: var(--f-mono);
+  font-size: 9.5px;
+  color: var(--ink-4);
+  letter-spacing: 0.02em;
+}
+.tp-t {
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--ink-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.tp-imgs {
+  display: flex;
+  gap: 5px;
+  margin-top: 7px;
+}
+.tp-imgs img {
+  width: 62px;
+  height: 62px;
+  object-fit: cover;
+  border-radius: 7px;
+  background: var(--surface-2);
+}
+.tp-go {
+  margin-top: 7px;
+  font-size: 11px;
+  color: var(--ink-4);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.tp:active .tp-go {
+  color: var(--acc);
+}
+
+/* ---------- 模型列表：状态点 + 紧凑两行 ---------- */
+.model {
+  padding: 11px 12px;
+  align-items: flex-start;
+}
+.mdot {
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: var(--line-2);
+}
+.mdot.ok {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px rgba(61, 220, 132, 0.12);
+}
+.mdot.bad {
+  background: var(--danger);
+}
+.mdot.warn {
+  background: var(--warn);
+}
+.model .md {
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: var(--ink-4);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.model.on .md {
+  color: var(--ink-3);
+}
+.model .md .tg {
+  margin: 0 3px 0 0;
+  vertical-align: 1px;
+}
+.mhint {
+  margin: -2px 0 10px;
+  font-size: 10.5px;
+  line-height: 1.75;
+  color: var(--ink-4);
+}
+.mhint .mlink {
+  margin-left: 4px;
+}
+
+/* ---------- 评论 ---------- */
+.cm {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 12px 13px;
+  margin-bottom: 8px;
+  border-radius: var(--r-m);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  transition: all 0.16s var(--ease-out);
+}
+.cm:active {
+  transform: scale(0.985);
+  border-color: var(--acc);
+}
+.cm-n {
+  flex: 0 0 18px;
+  font-family: var(--f-mono);
+  font-size: 10px;
+  color: var(--ink-4);
+  padding-top: 2px;
+}
+.cm-t {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--ink);
+}
+.cm-cp {
+  flex: 0 0 22px;
+  color: var(--ink-4);
+  padding-top: 1px;
+}
+.cm:active .cm-cp {
+  color: var(--acc);
+}
+
+/* ---------- 解析预览 ---------- */
+.pv {
+  margin-top: 10px;
+  padding: 11px 12px;
+  border-radius: var(--r-m);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.pv-h {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.pv-h b {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pv-m {
+  flex: 0 0 auto;
+  font-family: var(--f-mono);
+  font-size: 9.5px;
+  color: var(--ink-4);
+}
+.pv-n {
+  margin-top: 4px;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--ink-3);
+}
+.pv-imgs {
+  display: flex;
+  gap: 5px;
+  margin-top: 8px;
+  overflow-x: auto;
+}
+.pv-imgs img {
+  width: 64px;
+  height: 64px;
+  flex: 0 0 64px;
+  object-fit: cover;
+  border-radius: 7px;
+  background: var(--surface);
+}
+.hot-cover.slim {
+  aspect-ratio: auto;
+  height: 132px;
+}
+
+/* 工具条按钮多，横滑而不是挤成两行 */
+.macts {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+.macts::-webkit-scrollbar {
+  display: none;
+}
+.mbtn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.mhint {
+  margin-top: -2px;
+}
+.mhint .mlink {
+  display: inline;
+  white-space: nowrap;
+}
+
+/* 输入区工具栏：按钮多了就换行，别把中文压成竖排 */
+.field .foot {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+.mini-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.field .foot .sec-sub {
+  flex: 0 0 100%;
+  margin-left: 0;
+}
+
+/* 统计行与标签页之间留够呼吸，别贴在一起 */
+.mstat {
+  margin: 14px 0 10px;
+  min-height: 18px;
+}
+
+/* 写评论做成整行，避免 2 列网格里单独剩一个半格 */
+.entries > .entry[data-act='comment-start'] {
+  grid-column: span 2;
+}

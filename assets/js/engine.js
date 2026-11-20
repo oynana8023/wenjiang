@@ -725,6 +725,95 @@ window.WJEngine = (function () {
     return set;
   }
 
+  /* ---------- 评论：像真人，不像总结 ----------
+     原则：一条评论只说一件事；必须带原文里的具体细节；不总结全文、不夸作者、
+     不用「首先/其次/总之/不得不说」。不同条之间角度要岔开。 */
+  var CM_TPL = {
+    warm: [
+      '看到「{d}」，突然想起我身边也差不多是这样。',
+      '{n}这个数字比我想的大，之前完全没概念。',
+      '别的都好说，「{d}」真能做到吗？',
+      '看完就一个感觉：{d}。别的不好评价。',
+      '有点好奇后面会怎么走，蹲个后续。',
+      '这事我信一半，「{d}」说得太满。',
+      '「{d}」这个细节挺打动我，比大道理有用。',
+      '我倒觉得没必要上价值，就是件挺平常的事。',
+      '先别急着感动，{d}之后谁来收尾？',
+      '身边正好有做这行的，实际情况比写的还麻烦。'
+    ],
+    sharp: [
+      '「{d}」这句我保留意见，现实里基本行不通。',
+      '{n}也好意思拿出来说？这数据站不住。',
+      '通篇都在说好听的，可最该回答的问题一个字没提。',
+      '别光说好听的，{d}的代价谁承担？',
+      '看着挺热闹，落到具体人身上还是老样子。',
+      '这种话听太多了。然后呢？',
+      '真要较真，{n}这个数先解释清楚。',
+      '我不同意，「{d}」不是这么回事。',
+      '一句话：别把个例当成万能答案。'
+    ],
+    info: [
+      '补一个信息：这块各地口径不一样，别一概而论。',
+      '{n}这个数我查过，统计范围只覆盖了一部分。',
+      '做过这行的来说一句，「{d}」只是理想情况。',
+      '提醒一下，这里还牵涉到资质问题，不是想做就能做。',
+      '原文没提的是，类似的事去年已经试过一轮。',
+      '「{d}」背后其实有个前提，缺了这条就不成立。',
+      '我手上刚好有相反的例子，实际情况没那么顺。',
+      '时间线捋一下，{d}是后发生的，因果反了。'
+    ]
+  };
+
+  function comments(input, opts) {
+    opts = opts || {};
+    var text = String(input || '').trim();
+    var n = Math.max(1, Math.min(8, Number(opts.n || 4)));
+    var tone = CM_TPL[opts.tone] ? opts.tone : 'warm';
+    var sents = splitSentences(text).filter(function (x) { return x.length >= 8; });
+    var core = sents.slice().sort(function (a, b) { return b.length - a.length; })[0] || text.slice(0, 60);
+    var nums = (text.match(/\d+(?:\.\d+)?%?/g) || []).filter(function (x) { return x.length <= 6; });
+
+    /* 关键词只认词典里的真词，n-gram 会切出「市里的文」这种半截话 */
+    var kws = [];
+    D.TERMS.forEach(function (t) {
+      if (t.length >= 2 && t.length <= 6 && text.indexOf(t) > -1) kws.push(t);
+    });
+    kws = kws.filter(function (t, i) { return kws.indexOf(t) === i; }).slice(0, 8);
+
+    /* 细节取完整小句，不硬截：截一半比空泛更假 */
+    var clauses = text.split(/[，。！？；、\n]/)
+      .map(function (x) { return x.replace(/^[^，。]{0,4}[：:]/, '').trim(); })
+      .filter(function (x) { return x.length >= 6 && x.length <= 18; });
+
+    var rnd = mulberry32(hashStr(text.slice(0, 240) + tone + n + (opts.variant || 0)));
+    var out = [], used = {};
+
+    function pick(arr) {
+      if (!arr.length) return '';
+      return arr.splice(Math.floor(rnd() * arr.length), 1)[0];
+    }
+    function fill(tpl) {
+      var d = pick(clauses.slice()) || core.slice(0, 14);
+      var num = pick(nums.slice());
+      return tpl.replace(/\{d\}/g, d).replace(/\{n\}/g, num || '')
+        .replace(/\s+/g, ' ').trim();
+    }
+
+    var pool = CM_TPL[tone].filter(function (t) {
+      return nums.length || t.indexOf('{n}') < 0;
+    });
+    for (var i = 0; i < n * 4 && out.length < n; i += 1) {
+      if (!pool.length) break;
+      var c = fill(pick(pool));
+      if (!c || c.length < 8) continue;
+      var key = c.slice(0, 8);
+      if (used[key]) continue;
+      used[key] = 1;
+      out.push(c);
+    }
+    return out;
+  }
+
   /* ---------- 主流程 ---------- */
 
   var OPENERS = [
@@ -953,6 +1042,7 @@ window.WJEngine = (function () {
 
   return {
     rewrite: rewrite,
+    comments: comments,
     merge: merge,
     mdToHtml: mdToHtml,
     visuals: visuals,

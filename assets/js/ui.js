@@ -190,6 +190,9 @@ window.WJUI = (function () {
     h += '<button class="entry" data-act="start" data-mode="merge">' +
       '<div class="ico">' + ic('layers', 16) + '</div>' +
       '<div class="etxt"><b>双素材融合</b><span>两篇合一，做出信息增量</span></div></button>';
+    h += '<button class="entry" data-act="comment-start">' +
+      '<div class="ico">' + ic('message', 16) + '</div>' +
+      '<div class="etxt"><b>写条评论</b><span>贴链接或正文，只出评论，挑一条就发</span></div></button>';
     h += '</div></div>';
 
     /* 热榜 */
@@ -310,11 +313,22 @@ window.WJUI = (function () {
     if (c.mode === 'link') {
       h += '<div class="field mt-m"><div class="field-head"><span class="lbl">Source URL</span>' +
         '<span class="cnt">' + (c.link1 ? '已粘贴' : '公众号 / 头条 / 新闻站') + '</span></div>' +
-        '<textarea class="tall" data-field="link1" placeholder="https://mp.weixin.qq.com/s/...">' + esc(c.link1) + '</textarea>' +
+        '<textarea class="tall" style="min-height:92px;height:92px" data-field="link1" placeholder="https://mp.weixin.qq.com/s/...">' + esc(c.link1) + '</textarea>' +
         '<div class="foot"><button class="mini-btn" data-act="paste">' + ic('copy', 12) + ' 从剪贴板</button>' +
         (c.link1 ? '<button class="mini-btn" data-act="clear-compose">' + ic('close', 12) + ' 清空</button>' : '') +
+        '<button class="mini-btn" data-act="preview-link">' + ic('search', 12) + ' 先解析看看</button>' +
         '<button class="mini-btn" data-act="start" data-mode="text">' + ic('text', 12) + ' 直接粘全文</button>' +
         '<div class="spacer"></div><span class="sec-sub">支持多数服务端渲染页面</span></div></div>';
+    if (c.preview) {
+      h += '<div class="pv">' +
+        '<div class="pv-h"><b>' + esc(c.preview.title || '已取到正文') + '</b>' +
+        '<span class="pv-m">' + c.preview.chars + ' 字 · ' + (c.preview.images.length ? c.preview.images.length + ' 张图' : '无配图') + '</span></div>' +
+        (c.preview.note ? '<div class="pv-n">' + esc(c.preview.note) + '</div>' : '') +
+        (c.preview.images.length ? '<div class="pv-imgs">' + c.preview.images.slice(0, 4).map(function (u) {
+          return '<img src="' + esc(window.WJLive.imgUrl(u)) + '" alt="" loading="lazy">';
+        }).join('') + '</div>' : '') +
+        '</div>';
+    }
     } else if (c.mode === 'text') {
       h += '<div class="field mt-m"><div class="field-head"><span class="lbl">Raw text</span>' +
         '<span class="cnt"><span data-cnt="text1">0</span> 字</span></div>' +
@@ -322,6 +336,16 @@ window.WJUI = (function () {
         '<div class="foot"><button class="mini-btn" data-act="example">' + ic('sparkle', 12) + ' 用示例素材</button>' +
         (c.text1 ? '<button class="mini-btn" data-act="clear-compose">' + ic('close', 12) + ' 清空</button>' : '') +
         '<div class="spacer"></div><span class="sec-sub">不会上传到任何服务器</span></div></div>';
+    if (c.sourceImages && c.sourceImages.length) {
+      h += '<div class="pv"><div class="pv-h"><b>原文配图</b>' +
+        '<span class="pv-m">' + c.sourceImages.length + ' 张，已带进成稿</span></div>' +
+        '<div class="pv-imgs">' + c.sourceImages.slice(0, 4).map(function (u) {
+          return '<img src="' + esc(window.WJLive.imgUrl(u)) + '" alt="" loading="lazy">';
+        }).join('') + '</div></div>';
+    }
+    if (c.sourceNote) {
+      h += '<div class="note mt-s">' + ic('info', 13) + '<div>' + esc(c.sourceNote) + '</div></div>';
+    }
     } else {
       h += '<div class="field mt-m"><div class="field-head"><span class="lbl">Material A</span>' +
         '<span class="cnt"><span data-cnt="text1">0</span> 字</span></div>' +
@@ -373,7 +397,7 @@ window.WJUI = (function () {
     }
     h += '</div>';
 
-    h += '<div style="height:24px"></div></div>';
+    h += '<div style="height:104px"></div></div>';
 
     /* 底部 CTA */
     var left = Math.max(0, state.quota.total - state.quota.used);
@@ -408,6 +432,72 @@ window.WJUI = (function () {
   function strengthDesc(k) {
     for (var i = 0; i < D.STRENGTHS.length; i++) if (D.STRENGTHS[i].key === Number(k)) return D.STRENGTHS[i].desc;
     return '';
+  }
+
+  /* ---------------- 评论页 ---------------- */
+
+  function commentView(state) {
+    var c = state.comment;
+    var h = '<div class="screen tight">';
+    h += '<div style="padding-top:6px"><div class="eyebrow">Reply like a human</div>' +
+      '<h1 class="h1" style="font-size:27px">写评论</h1></div>';
+    h += '<div class="sec-sub" style="margin-top:8px;line-height:1.7">只出评论，不改写。粘一条链接或一段正文，' +
+      '按普通读者的口气写几条，挑一条复制就能发。</div>';
+
+    h += '<div class="seg mt-m" data-seg="cmode"><span class="thumb"></span>' +
+      ['link|链接', 'text|正文'].map(function (x) {
+        var p2 = x.split('|');
+        return '<button data-act="cmode" data-mode="' + p2[0] + '" class="' + (c.mode === p2[0] ? 'on' : '') + '">' + p2[1] + '</button>';
+      }).join('') + '</div>';
+
+    if (c.mode === 'link') {
+      h += '<div class="field mt-m"><div class="field-head"><span class="lbl">Source URL</span>' +
+        '<span class="cnt">' + (c.link ? '已粘贴' : '微博 / 小红书 / 公众号 / 抖音') + '</span></div>' +
+        '<textarea class="tall" style="min-height:84px;height:84px" data-field="clink" placeholder="https://...">' + esc(c.link) + '</textarea>' +
+        '<div class="foot"><button class="mini-btn" data-act="cpaste">' + ic('copy', 12) + ' 从剪贴板</button>' +
+        (c.link ? '<button class="mini-btn" data-act="cclear">' + ic('close', 12) + ' 清空</button>' : '') +
+        '<div class="spacer"></div><span class="sec-sub">解析后只用来写评论</span></div></div>';
+    } else {
+      h += '<div class="field mt-m"><div class="field-head"><span class="lbl">Raw text</span>' +
+        '<span class="cnt">' + ((c.text || '').trim().length || '') + (c.text ? ' 字' : '') + '</span></div>' +
+        '<textarea class="tall" style="min-height:140px" data-field="ctext" placeholder="把要评论的帖子正文粘进来，至少 30 字。">' + esc(c.text) + '</textarea></div>';
+    }
+
+    h += '<div class="sec"><div class="sec-head"><div class="h2" style="font-size:15px">要几条</div>' +
+      '<span class="sec-sub">够挑就行，不用刷屏</span></div>' +
+      '<div class="seg" data-seg="cnum"><span class="thumb"></span>' +
+      [2, 4, 6].map(function (n) {
+        return '<button data-act="cnum" data-n="' + n + '" class="' + (c.n === n ? 'on' : '') + '">' + n + ' 条</button>';
+      }).join('') + '</div></div>';
+
+    h += '<div class="sec"><div class="sec-head"><div class="h2" style="font-size:15px">口气</div>' +
+      '<span class="sec-sub">' + esc(c.tone === 'sharp' ? '不客气，但讲道理' : c.tone === 'info' ? '补充信息，像内行' : '有共鸣，不肉麻') + '</span></div>' +
+      '<div class="hscroll">' +
+      [['warm', '真诚共鸣'], ['sharp', '犀利一点'], ['info', '补充内情']].map(function (x) {
+        return '<button class="chip' + (c.tone === x[0] ? ' on' : '') + '" data-act="ctone" data-tone="' + x[0] + '">' + x[1] + '</button>';
+      }).join('') + '</div></div>';
+
+    if (c.err) h += '<div class="note warn mt-m">' + ic('alert', 14) + '<div>' + esc(c.err) + '</div></div>';
+
+    if (c.list && c.list.length) {
+      h += '<div class="sec-head mt-m"><div class="h2" style="font-size:15px">可以这么评</div>' +
+        '<span class="sec-sub">' + c.list.length + ' 条 · 点整条复制</span></div>';
+      h += c.list.map(function (x) {
+        return '<button class="cm" data-act="copy" data-text="' + esc(x) + '">' +
+          '<span class="cm-t">' + esc(x) + '</span>' +
+          '<span class="cm-cp">' + ic('copy', 13) + '</span></button>';
+      }).join('');
+      h += '<div class="row2 mt-s"><button class="btn btn-soft" data-act="cm-again">' + ic('refresh', 15) + ' 换一批</button>' +
+        '<button class="btn btn-soft" data-act="cm-copy-all">' + ic('copy', 15) + ' 全部复制</button></div>';
+    }
+
+    h += '<div style="height:104px"></div></div>';
+
+    h += '<div class="dock"><div class="dock-row" style="margin-bottom:8px;align-items:center">' +
+      quotaPill(state) + '<div class="spacer"></div><span class="sec-sub">' + c.n + ' 条 · 真人语气</span></div>' +
+      '<button class="btn btn-primary btn-lg btn-block" data-act="cmake"' + (c.busy ? ' disabled' : '') + '>' +
+      ic('sparkle', 17) + (c.busy ? '正在写…' : '生成评论') + '</button></div>';
+    return h;
   }
 
   /* ---------------- 结果页 ---------------- */
@@ -447,6 +537,9 @@ window.WJUI = (function () {
 
     h += '<div style="display:flex;align-items:center;gap:8px;margin-top:18px">' +
       '<span class="badge ai">AI 生成</span><span class="sec-sub">' + esc(r.styleName) + ' · ' + esc(r.platformName) + ' · ' + esc(r.modelName || '本机引擎') + '</span></div>';
+
+    h += '<button class="btn btn-soft btn-block mt-s" data-act="result-comments">' +
+      ic('message', 15) + ' 读者会怎么评 · 生成 3 条</button>';
 
     if (tab === 'body') {
       h += '<h1 class="result-title">' + esc(r.title) + '</h1>';
@@ -497,7 +590,7 @@ window.WJUI = (function () {
 
     /* 真实配图：能用原文的就别生成，至少保真 */
     if (r.cover) {
-      h += '<div class="coverbox"><img src="' + esc(r.cover) + '" alt="">' +
+      h += '<div class="coverbox"><img src="' + esc(window.WJLive.imgUrl(r.cover)) + '" alt="">' +
         '<span class="cbtag">封面 · 原文配图</span></div>';
     }
 
@@ -505,7 +598,7 @@ window.WJUI = (function () {
       h += '<div class="sec-head mt-m" style="margin-bottom:8px"><div class="h2" style="font-size:13px">原文配图</div>' +
         '<span class="sec-sub">取自原文页面，真实可考</span></div>';
       h += '<div class="imgrid real">' + r.realImages.map(function (src) {
-        return '<div class="im"><img src="' + esc(src) + '" alt="" loading="lazy">' +
+        return '<div class="im"><img src="' + esc(window.WJLive.imgUrl(src)) + '" alt="" loading="lazy">' +
           '<div class="imtools">' +
           '<button data-act="use-real-image" data-url="' + esc(src) + '">设为封面</button>' +
           '<button data-act="copy" data-text="' + esc(src) + '">复制地址</button>' +
@@ -694,6 +787,7 @@ window.WJUI = (function () {
     brand: brand, quotaPill: quotaPill, sourceName: sourceName, catOf: catOf,
     styleName: styleName, strengthName: strengthName,
     home: home, rank: rank, compose: compose, result: result, works: works, me: me,
+    comment: commentView,
     emptyState: emptyState, liveBadge: liveBadge
   };
 })();

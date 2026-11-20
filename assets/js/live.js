@@ -162,6 +162,8 @@ window.WJLive = (function () {
       chars: text.length,
       via: d.via || '',
       note: d.note || '',
+      images: d.images || [],
+      video: !!d.video,
       related: d.related || null
     };
   }
@@ -588,12 +590,49 @@ window.WJLive = (function () {
     try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
   }
 
+  /* 话题下的帖子清单（二级页面）。微博走 m.weibo.cn 的搜索接口，其余源没有公开列表。 */
+  async function posts(src, title, n) {
+    var bases = parseBases();
+    if (!bases.length) throw new Error('没有配置解析服务');
+    var lastErr = null;
+    for (var i = 0; i < bases.length; i += 1) {
+      try {
+        var d = await getJSON(apiUrl(bases[i], '/api/posts', { src: src || 'weibo', title: title, n: n || 12 }), 20000);
+        if (!d) throw new Error('返回为空');
+        if (!d.ok) {
+          var e = new Error(d.error || '取不到帖子列表');
+          e.code = d.code || '';
+          throw e;
+        }
+        return d.items || [];
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr || new Error('取不到帖子列表');
+  }
+
+  /* 新浪图床不认没有 referer 的请求，浏览器直接 <img> 会 403，走解析服务转一次 */
+  function imgUrl(u) {
+    var s = String(u || '');
+    if (!s) return '';
+    if (!/sinaimg\.cn|weibocdn\.com|sina\.com\.cn/i.test(s)) return s;
+    var h = (typeof location !== 'undefined' && location.hostname) || '';
+    /* 页面本身就跑在解析服务上（localhost / 自建域名）：同源转发，别绕公网 */
+    if (/^(localhost|127\.|0\.0\.0\.0|\[::1\])$/.test(h)) {
+      return (location.origin || '') + '/api/img?u=' + encodeURIComponent(s);
+    }
+    var bases = parseBases();
+    if (!bases.length) return s;
+    return bases[0].replace(/\/+$/, '') + '/api/img?u=' + encodeURIComponent(s);
+  }
+
   async function parseLink(raw, onStep, hintTitle) {
     var url = pickUrl(raw);
     if (!url) throw new Error('没有识别到以 http 开头的链接');
     var titleHint = String(hintTitle || '').trim();
 
-    var cacheKey = 'wj.parse.' + url;
+    var cacheKey = 'wj.parse.v2.' + url;
     try {
       var cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
       if (cached && cached.text && Date.now() - cached.at < 36e5) return cached;
@@ -610,6 +649,8 @@ window.WJLive = (function () {
         via: via,
         net: r.via || '',
         note: r.note || '',
+        images: r.images || [],
+        video: !!r.video,
         related: r.related || null,
         at: Date.now()
       };
@@ -1126,6 +1167,9 @@ window.WJLive = (function () {
 
   /* 真发一条极短的对话，通了才算可用。
      只测文字模型；出图的另走 probeImage（不会真出图）。 */
+  /* 探测用的真实写作题：比「在吗」贵一点，但能筛掉「列表里有、实际写不出东西」的模型 */
+  var PROBE_ASK = '用一句通顺的中文写「周末的早晨」，18 到 30 个字，只输出这一句，不要解释。';
+
   async function probeModels(cfg, models, opts) {
     opts = opts || {};
     var base = normBase(cfg.base);
@@ -1146,9 +1190,9 @@ window.WJLive = (function () {
             ms: opts.ms || 20000,
             body: {
               model: m.id,
-              messages: [{ role: 'user', content: '在吗' }],
-              max_tokens: 4,
-              temperature: 0.1,
+              messages: [{ role: 'user', content: PROBE_ASK }],
+              max_tokens: 160,
+              temperature: 0.2,
               stream: false
             }
           });
@@ -1157,14 +1201,28 @@ window.WJLive = (function () {
           if (!(e1.status === 400 && /max_tokens|max_completion|temperature|unsupported|parameter/i.test(e1.message || ''))) throw e1;
           d = await llmJSON(base, '/chat/completions', {
             key: cfg.key,
-            ms: opts.ms || 20000,
-            body: { model: m.id, messages: [{ role: 'user', content: '在吗' }] }
+            ms: opts.ms || 30000,
+            body: {
+              model: m.id,
+              messages: [{ role: 'user', content: PROBE_ASK }],
+              max_completion_tokens: 400
+            }
           });
         }
-        var txt = d && d.choices && d.choices[0] && (d.choices[0].message || {}).content;
+        var msg = (d && d.choices && d.choices[0] && d.choices[0].message) || {};
+        var txt = String(msg.content || '').trim();
+        /* 只回一个「在」不算可用：必须真的按题目写出成句的中文。
+           这一步是「可用」这个标签的唯一依据——标了可用，就一定能出内容。 */
+        var cn = (txt.match(/[\u4e00-\u9fa5]/g) || []).length;
+        if (!txt || txt.length < 8 || cn < 5) {
+          m.status = 'error';
+          m.why = txt ? ('只回了「' + txt.slice(0, 12) + '」，写不出成句内容') : '返回了空内容';
+          stat.error = (stat.error || 0) + 1;
+          return;
+        }
         m.status = 'ok';
         m.why = '';
-        m.said = String(txt || '').trim().slice(0, 24);
+        m.said = txt.slice(0, 30);
         stat.ok++;
       } catch (e) {
         var w = whyFail(e.status, e.message);
@@ -1213,8 +1271,8 @@ window.WJLive = (function () {
       ms: 40000,
       body: {
         model: model || cfg.model,
-        messages: [{ role: 'user', content: '回复两个字：可用' }],
-        max_tokens: 16,
+        messages: [{ role: 'user', content: PROBE_ASK }],
+        max_tokens: 160,
         temperature: 0.1,
         stream: false
       }
@@ -1362,6 +1420,8 @@ window.WJLive = (function () {
     urlKind: urlKind,
     hostOf: hostOf,
     hasServer: hasServer,
+    posts: posts,
+    imgUrl: imgUrl,
     listModels: listModels,
     testModel: testModel,
     probeModels: probeModels,

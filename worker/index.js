@@ -14,7 +14,7 @@
  * 部署方式见 README「三分钟上线自己的解析服务」。
  */
 
-const VERSION = '3.3.0';
+const VERSION = '3.4.0';
 const MAX_BYTES = 12 * 1024 * 1024;
 const TEXT_LIMIT = 12000;
 const TIMEOUT = 13000;
@@ -167,7 +167,13 @@ async function grab(target, ua) {
         'Cache-Control': 'no-cache'
       }
     });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (!res.ok) {
+      /* 404/410 也读回页面：站点自己的「内容不存在」提示能用来判断死链 */
+      if (res.status === 404 || res.status === 410) {
+        return { html: await res.text(), type: res.headers.get('content-type') || '' };
+      }
+      throw new Error('HTTP ' + res.status);
+    }
     const len = Number(res.headers.get('content-length') || 0);
     if (len > MAX_BYTES) throw new Error('页面太大');
     const html = await res.text();
@@ -319,12 +325,30 @@ function weiboIdOf(u) {
   return '';
 }
 
+
+/* 长微博：正文只给一半，完整版在 statuses/extend */
+async function weiboLong(id, body) {
+  try {
+    const e = await wbJson('/statuses/extend?id=' + encodeURIComponent(id));
+    const d = e && e.data;
+    const full = d && (d.longTextContent || (d.longText && d.longText.longContent) || '');
+    const t = tidyText(stripTags(String(full || '')));
+    if (t && t.length > String(body || '').length + 20) return t;
+  } catch (e) { /* ignore */ }
+  return '';
+}
+
 async function weiboStatus(id) {
   const j = await wbJson('/statuses/show?id=' + encodeURIComponent(id));
   const d = j && j.data;
   if (!d || !d.text) return null;
-  const body = tidyText(stripTags(String(d.text)));
+  let body = tidyText(stripTags(String(d.text)));
   if (!body || body.length < 6) return null;
+  if (d.isLongText && /…全文|...全文/.test(body)) {
+    const full = await weiboLong(id, body);
+    if (full) body = full;
+  }
+  body = body.replace(/…全文$|...全文$/, '').trim();
   const who = (d.user && d.user.screen_name) || '';
   let text = (who ? who + '：' : '') + body;
   const rt = d.retweeted_status;
@@ -333,14 +357,69 @@ async function weiboStatus(id) {
     if (sub) text += '\n\n// 转发自 ' + ((rt.user && rt.user.screen_name) || '') + '：' + sub;
   }
   if (!usable(text, 20)) return null;
+  const pics = [];
+  for (const p of (d.pics || [])) {
+    const u = (p && (p.large && p.large.url || p.url)) || '';
+    if (u) pics.push(u.replace(/^http:/, 'https:'));
+  }
   return {
     title: body.slice(0, 40),
     text: text.slice(0, TEXT_LIMIT),
     chars: text.length,
     via: 'weibo',
     note: '这是这条微博的原文',
+    images: pics,
     related: { url: 'https://m.weibo.cn/detail/' + id, title: '原微博' }
   };
+}
+
+async function weiboPostList(title, limit) {
+  const t = String(title || '').replace(/^#+|#+$/g, '').replace(/\s+/g, ' ').trim();
+  if (!t) return [];
+  const cid = '100103type=1&t=10&q=#' + t + '#';
+  const j = await wbJson('/api/container/getIndex?containerid=' + encodeURIComponent(cid) + '&page_type=searchall');
+  const out = [];
+  const seen = new Set();
+  for (const c of (j.data && j.data.cards) || []) {
+    const mb = c && c.card_type === 9 && c.mblog;
+    if (!mb) continue;
+    const rawTxt = tidyText(stripTags(String(mb.text || '')));
+    let txt = rawTxt.replace(/…全文$|...全文$/, '').trim();
+    if (txt.length < 12 || seen.has(txt.slice(0, 24))) continue;
+    seen.add(txt.slice(0, 24));
+    const cut = mb.isLongText || /…全文|...全文/.test(rawTxt) || !/[。！？…”』】)）!?]$/.test(txt);
+    let long = false;
+    if (cut && out.length < 6) {
+      let full = await weiboLong(mb.id, txt);
+      if (!full) {
+        try {
+          const st = await weiboStatus(mb.id);
+          if (st && st.text.length > txt.length + 10) full = st.text.replace(/^[^：]{1,20}：/, '');
+        } catch (e) { /* ignore */ }
+      }
+      if (full && full.length > txt.length) { txt = full; long = true; }
+    }
+    const pics = [];
+    for (const p of (mb.pics || [])) {
+      const u = (p && (p.large && p.large.url || p.url)) || '';
+      if (u) pics.push(u.replace(/^http:/, 'https:'));
+    }
+    out.push({
+      id: String(mb.id || ''),
+      url: 'https://m.weibo.cn/detail/' + mb.id,
+      author: (mb.user && mb.user.screen_name) || '',
+      text: txt.slice(0, 4000),
+      chars: txt.length,
+      long: long,
+      images: pics.slice(0, 9),
+      at: mb.created_at || '',
+      reposts: (mb.reposts_count || 0),
+      comments: (mb.comments_count || 0),
+      likes: (mb.attitudes_count || 0)
+    });
+    if (out.length >= (limit || 12)) break;
+  }
+  return out;
 }
 
 function cleanShellTitle(t) {
@@ -430,9 +509,15 @@ async function parseUrl(raw, hintTitle) {
         lastErr = '微信拦住了解析（文章可能已被删除，或只在微信内可看）';
         continue;
       }
+      /* 站点自己的「内容不存在或已被删除」页：必须单独判断，否则会被当成正文太短 */
+      const deadTitle = (html.match(/<title[^>]*>([\s\S]{0,80}?)<\/title>/i) || [])[1] || '';
+      if (/(内容不存在|已被删除|内容已删除|笔记不存在|视频不存在|页面不存在|内容已下架)/.test(deadTitle)) {
+        lastErr = 'DEAD:' + deadTitle.trim();
+        continue;
+      }
       const out = extract(html);
       if (out.text.length >= need && usable(out.text, need)) {
-        const value = { title: out.title, text: out.text.slice(0, TEXT_LIMIT), chars: out.text.length, via: 'direct' };
+        const value = { title: out.title, text: out.text.slice(0, TEXT_LIMIT), chars: out.text.length, via: 'direct', images: imagesOfHtml(html, target) };
         cachedSet('p:' + target.href, value);
         return value;
       }
@@ -441,6 +526,12 @@ async function parseUrl(raw, hintTitle) {
     } catch (e) {
       lastErr = e && e.name === 'AbortError' ? '抓取超时' : (e && e.message) || '抓取失败';
     }
+  }
+
+  if (/^DEAD:/.test(lastErr)) {
+    const err = new Error('这条链接已经失效：内容被删除，或分享链接过期。换一条，或把正文复制出来走「直接粘全文」。');
+    err.code = 'DEAD';
+    throw err;
   }
 
   const wid = weiboIdOf(raw);
@@ -481,6 +572,68 @@ async function parseUrl(raw, hintTitle) {
   const err = new Error(lastErr || '解析失败');
   err.title = title;
   throw err;
+}
+
+function absUrl(u, base) {
+  if (!u) return '';
+  let s = String(u).trim().replace(/^["']|["']$/g, '');
+  if (!s || /^data:/i.test(s) || /^javascript:/i.test(s)) return '';
+  s = s.replace(/&amp;/g, '&').replace(/&#x2[fF];|&#47;/g, '/').replace(/&quot;/g, '');
+  if (s.startsWith('//')) s = 'https:' + s;
+  if (/^https?:\/\//i.test(s)) return s;
+  if (!base) return '';
+  try { return new URL(s, base).href; } catch (e) { return ''; }
+}
+
+/* 页面里的图：og:image + <img> 的懒加载属性。
+   注意 src 常是 1px 占位图，必须优先取 data-original / data-src。 */
+function imagesOfHtml(html, target) {
+  const h = String(html || '');
+  const base = target.origin + '/';
+  const raw = [];
+  for (const m of h.matchAll(/<meta[^>]+(?:property|name)=["'](?:og:image|og:image:url|twitter:image)["'][^>]*content=["']([^"']+)["']/gi)) raw.push(m[1]);
+  for (const m of h.matchAll(/<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name)=["'](?:og:image|twitter:image)["']/gi)) raw.push(m[1]);
+  for (const x of h.matchAll(/<img\b[^>]*>/gi)) {
+    const tag = x[0];
+    const lazy = tag.match(/(?:data-original|data-src|data-lazy-src|data-actualsrc|data-echo|data-url)\s*=\s*["']([^"']+)["']/i);
+    const plain = tag.match(/\bsrc\s*=\s*["']([^"']+)["']/i);
+    raw.push(lazy ? lazy[1] : (plain ? plain[1] : ''));
+  }
+  const out = [];
+  for (const u of raw) {
+    const a = absUrl(u, base);
+    if (!a) continue;
+    if (/logo|avatar|icon|qrcode|erweima|blank|spacer|pixel|1x1|sprite|emoji|placeholder/i.test(a)) continue;
+    if (/\/t\.(png|jpg|gif)$|\/default\.(png|jpg)$|\/loading[^/]*\.(gif|png)$/i.test(a)) continue;
+    if (/\.(svg|ico)(\?|$)/i.test(a)) continue;
+    const small = a.match(/[?&]size=f(\d+)_(\d+)/);
+    if (small && Number(small[1]) < 320) continue;
+    const name = a.split('?')[0].split('/').pop().toLowerCase();
+    if (out.indexOf(a) < 0 && !out.some((x) => x.split('?')[0].split('/').pop().toLowerCase() === name)) out.push(a);
+    if (out.length >= 10) break;
+  }
+  return out;
+}
+
+function metaOf(html, target, srcId) {
+  const h = String(html || '');
+  const pick = (re) => (h.match(re) || [])[1] || '';
+  const title = pick(/<meta[^>]+property=["']og:title["'][^>]*content=["']([^"']+)/i) ||
+    pick(/<h1[^>]*>([\s\S]*?)<\/h1>/i) || pick(/<title[^>]*>([\s\S]*?)<\/title>/i) || '';
+  const desc = pick(/<meta[^>]+(?:name|property)=["'](?:description|og:description)["'][^>]*content=["']([^"']+)/i);
+  const images = imagesOfHtml(h, target);
+  return {
+    title: tidyText(stripTags(title)).slice(0, 120),
+    desc: tidyText(stripTags(desc)).slice(0, 260),
+    site: target.hostname.replace(/^www\./, ''),
+    author: '',
+    published: '',
+    section: '',
+    category: '',
+    keywords: [],
+    images,
+    head: images[0] || ''
+  };
 }
 
 async function metaFor(url, srcId) {
@@ -703,7 +856,7 @@ async function coverFor(src, title) {
    只放行模型接口的固定路径，并拒绝内网地址，避免变成任意代理。 */
 const LLM_PATHS = ['/models', '/chat/completions', '/images/generations', '/embeddings', '/responses', '/completions'];
 
-function isPrivateHost(h) {
+function isPrivateTarget(h) {
   const s = String(h || '').toLowerCase();
   if (!s) return true;
   if (/^(localhost|0\.0\.0\.0|\[?::1\]?)$/.test(s) || /\.local$|\.internal$/.test(s)) return true;
@@ -732,7 +885,7 @@ async function relayLLM(request) {
     return json({ ok: false, error: 'Base URL 不是合法地址' });
   }
   if (!/^https?:$/.test(base.protocol)) return json({ ok: false, error: '只支持 http/https' });
-  if (isPrivateHost(base.hostname)) return json({ ok: false, error: '不允许访问内网地址' });
+  if (isPrivateTarget(base.hostname)) return json({ ok: false, error: '不允许访问内网地址' });
   const pth = String(p.path || '');
   if (LLM_PATHS.indexOf(pth) < 0) return json({ ok: false, error: '这个接口不支持中转' });
 
@@ -760,6 +913,19 @@ const CORS = {
   'Access-Control-Allow-Headers': '*',
   'Access-Control-Max-Age': '86400'
 };
+
+/* 目标地址：?url=明文，或 ?u=base64url（长链接更稳） */
+function readTarget(url) {
+  const u = url.searchParams.get('url');
+  if (u) return u;
+  const b = url.searchParams.get('u');
+  if (!b) return '';
+  try {
+    return atob(b.replace(/-/g, '+').replace(/_/g, '/'));
+  } catch (e) {
+    return '';
+  }
+}
 
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
@@ -828,10 +994,25 @@ export default {
           chars: out.chars,
           via: out.via || 'direct',
           note: out.note || '',
+          images: out.images || [],
+          video: !!out.video,
           related: out.related || null
         });
       } catch (e) {
-        return json({ ok: false, error: (e && e.message) || '解析失败', code: 'PARSE_FAIL' }, 200);
+        return json({ ok: false, error: (e && e.message) || '解析失败', code: (e && e.code) || 'NO_TEXT' }, 200);
+      }
+    }
+
+    if (url.pathname === '/api/posts') {
+      const src = url.searchParams.get('src') || 'weibo';
+      const title = url.searchParams.get('title') || '';
+      if (!title) return json({ ok: false, error: '缺少 title' }, 400);
+      if (src !== 'weibo') return json({ ok: false, code: 'NO_LIST', error: '这个源没有公开的帖子列表' });
+      try {
+        const items = await weiboPostList(title, Number(url.searchParams.get('n') || 12));
+        return json({ ok: true, src, title, items, total: items.length });
+      } catch (e) {
+        return json({ ok: false, code: 'POSTS_FAIL', error: (e && e.message) || '取不到话题下的帖子' });
       }
     }
 

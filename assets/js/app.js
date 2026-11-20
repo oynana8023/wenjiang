@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI;
 
-  var VERSION = 'v2.5.0';
+  var VERSION = 'v2.6.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -36,10 +36,12 @@
     compose: {
       mode: 'link', link1: '', text1: '', text2: '', titleOnly: false,
       style: 'news', strength: 2, platform: 'toutiao',
-      extra: '', deai: true, faithful: true, adv: false, sourceTitle: '', sourceUrl: ''
+      extra: '', deai: true, faithful: true, adv: false, sourceTitle: '', sourceUrl: '',
+      sourceImages: [], sourceVideo: false, sourceNote: '', preview: null
     },
     result: null,
     resultTab: 'body',
+    comment: { mode: 'link', link: '', text: '', n: 4, tone: 'warm', busy: false, list: [], err: '', source: '' },
     genLoading: false,
     genStep: 0,
     genNote: '',
@@ -208,7 +210,7 @@
 
   /* ---------------- 路由 ---------------- */
 
-  var TITLES = { home: '', rank: '热榜', compose: '新建', result: '成稿', works: '作品库', me: '我的' };
+  var TITLES = { home: '', rank: '热榜', compose: '新建', result: '成稿', works: '作品库', me: '我的', comment: '写评论' };
   var NAV_ROUTES = ['home', 'rank', 'works', 'me'];
   var TAB_OF = { home: 'home', rank: 'rank', works: 'works', me: 'me' };
 
@@ -264,6 +266,7 @@
     else if (route === 'compose') html = U.compose(state);
     else if (route === 'result') html = U.result(state);
     else if (route === 'works') html = U.works(state);
+    else if (route === 'comment') html = U.comment(state);
     else html = U.me(state);
 
     var dockHtml = '';
@@ -325,10 +328,10 @@
     if (route === 'home') {
       left = U.brand();
       right = '<button class="iconbtn" data-act="hot-reload">' + U.ic('refresh', 17) + '</button>';
-    } else if (route === 'compose' || route === 'result') {
+    } else if (route === 'compose' || route === 'result' || route === 'comment') {
       left = '<button class="iconbtn" data-act="back">' + U.ic('left', 18) + '</button>' +
-        '<h1 class="static">' + (route === 'compose' ? '新建' : '成稿') + '</h1>';
-      right = route === 'compose'
+        '<h1 class="static">' + (route === 'compose' ? '新建' : route === 'comment' ? '写评论' : '成稿') + '</h1>';
+      right = route === 'compose' || route === 'comment'
         ? U.quotaPill(state)
         : '<button class="iconbtn" data-act="more">' + U.ic('more', 17) + '</button>';
     } else {
@@ -564,8 +567,14 @@
       }, c.sourceTitle || '');
       if (r.title) state.compose.sourceTitle = r.title;
       state.compose.sourceUrl = c.link1.trim();
+      state.compose.sourceImages = r.images || [];
+      state.compose.sourceVideo = !!r.video;
+      state.compose.sourceNote = r.note || '';
       return r.text;
     }
+    state.compose.sourceImages = [];
+    state.compose.sourceVideo = false;
+    state.compose.sourceNote = '';
     if (c.mode === 'merge') {
       return c.text1.trim() + '\n\n' + c.text2.trim();
     }
@@ -755,6 +764,9 @@
       (state.compose.mode === 'link' ? state.compose.link1 : '') ||
       state.compose.sourceUrl || ''
     ).trim();
+    /* 解析时已经拿到的原文配图直接带上，不用成稿后再抓一遍（很多站点第二次就 403 了） */
+    out.sourceImages = (state.compose.sourceImages || []).slice(0, 8);
+    out.sourceVideo = !!state.compose.sourceVideo;
     state.result = out;
     state.genLoading = false;
     /* 额度只为本机引擎计费：接了自有模型后，用你自己的 token，不再扣这里的次数 */
@@ -976,6 +988,62 @@
     });
   }
 
+  /* ---------------- 话题二级页：话题 → 帖子清单 → 单条解析 ----------------
+     热搜给的是一个话题，话题下面是几十条不同人发的帖子。把几条帖子各截一半
+     拼成素材，二创必然跑偏。所以这里先列出帖子，让用户挑一条完整的再解析。 */
+
+  function topicPostHtml(p) {
+    var imgs = (p.images || []).slice(0, 3).map(function (u) {
+      return '<img src="' + esc(L.imgUrl(u)) + '" alt="" loading="lazy">';
+    }).join('');
+    var head = '<div class="tp-head"><span class="tp-a">@' + esc(p.author || '博主') + '</span>' +
+      '<span class="tp-m">' + p.chars + ' 字' +
+      (p.images && p.images.length ? ' · ' + p.images.length + ' 图' : '') +
+      (p.long ? ' · 已补全文' : '') + '</span></div>';
+    return '<div class="tp" data-act="post-open" data-url="' + esc(p.url) + '" data-title="' + esc(String(p.text || '').slice(0, 30)) + '">' +
+      head +
+      '<div class="tp-t">' + esc(String(p.text || '').slice(0, 150)) + (String(p.text || '').length > 150 ? '…' : '') + '</div>' +
+      (imgs ? '<div class="tp-imgs">' + imgs + '</div>' : '') +
+      '<div class="tp-go">解析这条 · 只用它写 ' + U.ic('right', 13) + '</div></div>';
+  }
+
+  function topicBoxHtml(items, all, title) {
+    var show = all ? items.length : 4;
+    var rows = items.slice(0, show).map(topicPostHtml).join('');
+    return '<div class="topic-head"><span class="h2" style="font-size:14px">话题下的原文</span>' +
+      '<span class="sec-sub">' + (items.length ? '共 ' + items.length + ' 条，挑一条完整的' : '暂无') + '</span></div>' +
+      rows +
+      (!all && items.length > show
+        ? '<button class="btn btn-soft btn-block mt-s" data-act="topic-all" data-title="' + esc(title) + '">查看全部 ' + items.length + ' 条</button>'
+        : '');
+  }
+
+  async function loadTopicPosts(title, all) {
+    var box = document.getElementById('topicBox');
+    if (!box || !title) return;
+    box.innerHTML = '<div class="topic-head"><span class="h2" style="font-size:14px">话题下的原文</span>' +
+      '<span class="sec-sub"><span class="spin"></span> 正在取…</span></div>' +
+      '<div class="sk" style="height:52px;border-radius:10px;margin-bottom:8px"></div>' +
+      '<div class="sk" style="height:52px;border-radius:10px"></div>';
+    try {
+      var items = await L.posts('weibo', title, all ? 20 : 8);
+      if (!items.length) throw new Error('empty');
+      box.innerHTML = topicBoxHtml(items, all, title);
+    } catch (e) {
+      box.innerHTML = '<div class="note mt-s">' + U.ic('info', 14) +
+        '<div>这个话题下暂时取不到帖子列表（接口限流，或这个话题没有公开博文）。可以直接点下面「仍然试一次」，或者复制标题去搜。</div></div>';
+    }
+  }
+
+  function openTopicSheet(title) {
+    openSheet(
+      '<div id="topicBox"><div class="topic-head"><span class="h2" style="font-size:14px">话题下的原文</span>' +
+      '<span class="sec-sub"><span class="spin"></span> 正在取…</span></div></div>',
+      { title: '#' + title + '#', foot: '' }
+    );
+    loadTopicPosts(title, true);
+  }
+
   function openHotItem(srcId, i) {
     var s = state.hot.bySrc[srcId];
     if (!s || !s.items || !s.items[i]) return;
@@ -989,58 +1057,78 @@
     var canMeta = !!url && (!isSearch || isBaidu);
     /* 搜索页 / 强风控站点：正文页拿不到图，还可以回头问榜单要官方封面 */
     var canCover = !!url && !isBaidu && (isSearch || isBlocked);
-    var willTry = canMeta || canCover;
+    /* 微博话题页：下面就是帖子清单，每条自带配图，不必再占一块大图 */
+    var isTopicEarly = !!url && srcId === 'weibo' && isSearch;
+    var willTry = !isTopicEarly && (canMeta || canCover);
 
     var cat = U.catOf(it.title, srcId);
     var stamp = s.at ? U.fmtTime(s.at) : '';
     var when = stamp ? '上榜 ' + stamp : '';
 
-    var html = '<div id="hotCover">' +
+    var html = (isTopicEarly ? '' : '<div id="hotCover">' +
       (willTry
-        ? '<div class="hot-cover sk"></div>'
+        ? '<div class="hot-cover sk' + (isSearch ? ' slim' : '') + '"></div>'
         : coverPlaceholder(srcId, isSearch ? '这个榜单没有配图' : '没有原文链接，无配图')) +
-      '</div>' +
+      '</div>') +
       '<h2 style="font-size:18px;line-height:1.45;font-weight:640;letter-spacing:-.02em;margin:12px 0 9px">' + esc(it.title) + '</h2>' +
       '<div id="hotMeta">' + metaChips(cat, when, it.hot, '') + '</div>';
 
-    if (url) {
+    /* 微博热搜点进来的是话题页：帖子清单放在最前面，挑一条完整的再解析 */
+    if (url && srcId === 'weibo' && isSearch) {
+      html += '<div id="topicBox" class="topic-box"><div class="topic-head">' +
+        '<span class="h2" style="font-size:14px">话题下的原文</span>' +
+        '<span class="sec-sub"><span class="spin"></span> 正在取…</span></div></div>';
+    }
+
+    var isTopic = !!url && srcId === 'weibo' && isSearch;
+
+    if (url && !isTopic) {
       html += '<div class="field mt-m"><div class="field-head"><span class="lbl">' +
         (isSearch ? '榜单页' : '原文链接') + '</span>' +
         '<span class="sec-sub">' + esc(L.hostOf(url)) + '</span></div>' +
         '<div class="urlbox" data-url="' + esc(url) + '">' + esc(url) + '</div></div>';
       html += isSearch
         ? '<div class="note mt-s">' + U.ic('info', 14) +
-          '<div>热搜榜给的是<b>搜索页</b>，不是文章正文，所以这条没法解析全文。上面的头图取自该话题下的<b>真实配图</b>（微博）或榜单官方封面（抖音/头条）；想看全文，点「打开链接」或把标题复制去搜。</div></div>'
+          '<div>这个榜单给的是<b>搜索页</b>，不是文章正文。想看全文，点「打开链接」或把标题复制去搜。</div></div>'
         : isBlocked
           ? '<div class="note mt-s">' + U.ic('info', 14) +
             '<div>这个站点对非浏览器访问有<b>强风控</b>（知乎、B站、36氪、头条热搜都这样），解析基本取不到正文。建议点「打开链接」在浏览器里读，复制正文后粘到创作页，效果一样。</div></div>'
           : '';
-    } else {
+    } else if (!url) {
       html += '<div class="note mt-m">' + U.ic('info', 14) +
         '<div>这个源只提供标题，没有原文链接。可以复制标题去搜，或者直接用它当选题自己写。</div></div>';
     }
 
     var foot = '';
-    if (url && !isSearch && !isBlocked) {
-      foot += '<button class="btn btn-primary btn-block" data-act="hot-parse" data-url="' + esc(url) + '" data-title="' + esc(it.title) + '">' +
-        U.ic('wand', 16) + ' 解析正文并开写</button>';
-    }
-    if (url && (isBlocked || isSearch)) {
-      foot += '<button class="btn btn-ghost btn-block" data-act="hot-parse" data-url="' + esc(url) + '" data-title="' + esc(it.title) + '">' +
-        U.ic('wand', 15) + (isSearch ? ' 仍然试一次这个链接' : ' 仍然尝试解析一次') + '</button>';
-    }
-    if (url) {
+    if (isTopic) {
       foot += '<div class="row2">' +
-        '<button class="btn btn-soft" data-act="open-url" data-url="' + esc(url) + '">' + U.ic('external', 15) + ' 打开链接</button>' +
-        '<button class="btn btn-soft" data-act="copy" data-text="' + esc(url) + '">' + U.ic('copy', 15) + ' 复制链接</button>' +
+        '<button class="btn btn-soft" data-act="open-url" data-url="' + esc(url) + '">' + U.ic('external', 15) + ' 打开话题页</button>' +
+        '<button class="btn btn-soft" data-act="copy" data-text="' + esc(it.title) + '">' + U.ic('copy', 15) + ' 复制标题</button>' +
         '</div>';
+    } else {
+      if (url && !isBlocked) {
+        foot += '<button class="btn btn-primary btn-block" data-act="hot-parse" data-url="' + esc(url) + '" data-title="' + esc(it.title) + '">' +
+          U.ic('wand', 16) + ' 解析正文并开写</button>';
+      }
+      if (url && isBlocked) {
+        foot += '<button class="btn btn-ghost btn-block" data-act="hot-parse" data-url="' + esc(url) + '" data-title="' + esc(it.title) + '">' +
+          U.ic('wand', 15) + ' 仍然尝试解析一次</button>';
+      }
+      if (url) {
+        foot += '<div class="row2">' +
+          '<button class="btn btn-soft" data-act="open-url" data-url="' + esc(url) + '">' + U.ic('external', 15) + ' 打开链接</button>' +
+          '<button class="btn btn-soft" data-act="copy" data-text="' + esc(url) + '">' + U.ic('copy', 15) + ' 复制链接</button>' +
+          '</div>';
+      }
+      foot += '<button class="btn btn-soft btn-block" data-act="hot-write" data-src="' + srcId + '" data-i="' + i + '">' +
+        U.ic('edit', 15) + ' 用这个选题自己写</button>';
+      foot += '<button class="btn btn-ghost btn-block" data-act="copy" data-text="' + esc(it.title) + '">复制标题</button>';
     }
-    foot += '<button class="btn btn-soft btn-block" data-act="hot-write" data-src="' + srcId + '" data-i="' + i + '">' +
-      U.ic('edit', 15) + ' 用这个选题自己写</button>';
-    foot += '<button class="btn btn-ghost btn-block" data-act="copy" data-text="' + esc(it.title) + '">复制标题</button>';
 
     openSheet(html, { title: '这条热榜', foot: foot });
-    if (canMeta) fillHotMeta(url, srcId, it, cat);
+    if (url && srcId === 'weibo' && isSearch) loadTopicPosts(it.title, false);
+    if (isTopicEarly) { /* 话题页不画封面 */ }
+    else if (canMeta) fillHotMeta(url, srcId, it, cat);
     else if (canCover) coverFallback(srcId, it.title, isSearch ? '这个榜单没有配图' : '这个站点没有可用的头图');
   }
 
@@ -1160,14 +1248,20 @@
 
   function draftStats() {
     var all = (draft && draft.models) || [];
-    var s = { all: all.length, chat: 0, image: 0, other: 0, ok: 0, tested: 0, bad: 0 };
+    var s = { all: all.length, chat: 0, image: 0, other: 0, ok: 0, imgOk: 0, chatOk: 0, chatBad: 0, tested: 0, bad: 0 };
     all.forEach(function (m) {
       if (m.kind === 'chat') s.chat++;
       else if (m.kind === 'image') s.image++;
       else s.other++;
       if (m.status) s.tested++;
-      if (m.status === 'ok') s.ok++;
-      if (m.status === 'paid' || m.status === 'missing' || m.status === 'auth') s.bad++;
+      var isBad = m.status === 'paid' || m.status === 'missing' || m.status === 'auth' || m.status === 'error';
+      if (isBad) s.bad++;
+      if (m.status === 'ok') {
+        s.ok++;
+        if (m.kind === 'image') s.imgOk++;
+        if (m.kind === 'chat') s.chatOk++;
+      }
+      if (isBad && m.kind === 'chat') s.chatBad++;
     });
     return s;
   }
@@ -1187,6 +1281,7 @@
     draft.q = '';
     draft.onlyOk = false;
     draft.onlyFree = false;
+    draft.hideBad = true;
     draft.probing = false;
     draft.stopFlag = false;
     draft.show = 40;
@@ -1215,13 +1310,12 @@
     html += '<div class="madd"><input data-madd placeholder="列表里没有？手动填模型名" autocapitalize="off" spellcheck="false">' +
       '<button data-act="add-model">添加并测试</button></div>';
     html += '<div class="note mt-s">' + U.ic('info', 14) +
-      '<div>「可用」是真发了一条 4 个 token 的对话试出来的：返回正常才算，缺权限、要充值、不存在都会标出来。' +
-      '出图模型只做存在性探测，不会真的生成图片扣钱。</div></div>';
+      '<div>「可用」不是看名字猜的：每次都会让模型真的写一句 20 字左右的中文，写不成句、要充值、没权限、无此模型的一律剔除。' +
+      '所以标了可用，拿去生成就一定出得来内容。出图模型只做存在性探测，不会真的生成图片扣钱。</div></div>';
 
     openSheet(html, {
       title: draft.isNew ? '添加服务商' : '编辑服务商',
       foot: '<button class="btn btn-primary btn-block" data-act="save-provider">保存</button>' +
-        (draft.model || draft.imageModel ? '<button class="btn btn-ghost btn-block" data-act="test-model">测试当前选中的文案模型</button>' : '') +
         '<button class="btn btn-ghost btn-block" data-act="back-providers">返回服务商列表</button>'
     });
   }
@@ -1235,9 +1329,11 @@
         '<button class="mlink" data-act="probe-stop">停</button>';
     }
     if (!s.all) return '还没拉取过模型列表';
-    return '共 <b>' + s.all + '</b> 个 · 文案 <b>' + s.chat + '</b> · 出图 <b>' + s.image + '</b> · 其他 <b>' + s.other + '</b>' +
-      ' · 已测 <b>' + s.tested + '</b> · 可用 <b style="color:var(--ok)">' + s.ok + '</b>' +
-      (s.bad ? ' · 剔除 <b style="color:var(--danger)">' + s.bad + '</b>' : '');
+    var chatOk = s.ok - (s.imgOk || 0);
+    return '文案 <b>' + s.chat + '</b> · 可用 <b style="color:var(--ok)">' + chatOk + '</b>' +
+      ' · 待测 <b>' + Math.max(0, s.chat - s.chatOk - s.chatBad) + '</b>' +
+      ' · 出图 <b>' + s.image + '</b>' +
+      (s.bad ? ' · 已剔除 <b style="color:var(--danger)">' + s.bad + '</b>' : '');
   }
 
   function modelToolbarHtml() {
@@ -1261,7 +1357,13 @@
       '<button class="mbtn" data-act="probe-all">全测一遍</button>' +
       '<button class="mbtn' + (draft.onlyOk ? ' on' : '') + '" data-act="filter-ok">只看可用</button>' +
       '<button class="mbtn' + (draft.onlyFree ? ' on' : '') + '" data-act="filter-free">只看免费</button>' +
+      (s.bad ? '<button class="mbtn' + (!draft.hideBad ? ' on' : '') + '" data-act="filter-bad">' +
+        (draft.hideBad ? '查看已剔除 ' + s.bad : '收起已剔除') + '</button>' : '') +
       '</div>';
+    if (s.bad) {
+      h += '<div class="mhint">已把 ' + s.bad + ' 个确认不能用的（要充值 / 无此模型 / Key 无效 / 写不出内容）从列表里收起。' +
+        '<button class="mlink" data-act="purge-bad">彻底删掉</button></div>';
+    }
     return h;
   }
 
@@ -1273,6 +1375,10 @@
     if (q) out = out.filter(function (m) { return String(m.id).toLowerCase().indexOf(q) > -1; });
     if (draft.onlyOk) out = out.filter(function (m) { return m.status === 'ok'; });
     if (draft.onlyFree) out = out.filter(function (m) { return !!m.free; });
+    /* 默认只留「可用」和「还没测」的。确认不能用的收起来，列表才干净。 */
+    if (draft.hideBad) out = out.filter(function (m) {
+      return m.status !== 'paid' && m.status !== 'missing' && m.status !== 'auth' && m.status !== 'error';
+    });
     out.sort(function (a, b) {
       var sa = (a.status === 'ok' ? 100 : a.status ? -10 : 0) + L.rankOf(a);
       var sb = (b.status === 'ok' ? 100 : b.status ? -10 : 0) + L.rankOf(b);
@@ -1288,9 +1394,11 @@
       var label = { vision: '看图', image: '出图', reason: '推理', fast: '快', heavy: '大', free: '免费' }[t] || t;
       return '<span class="tg ' + t + '">' + label + '</span>';
     }).join('');
-    var body = '<span class="mt"><span class="mn">' + statusTag(m) + esc(m.id) + '</span>' +
-      '<span class="md">' + esc(m.family) + ' · ' + esc(m.why && m.status !== 'ok' ? m.why : m.good) + '</span>' +
-      '<span class="tags">' + tags + '</span></span>';
+    var tone = m.status === 'ok' ? 'ok' : (m.status === 'limited' || m.status === 'slow' ? 'warn' : (m.status ? 'bad' : ''));
+    var note = m.status && m.status !== 'ok' ? (m.why || (MST[m.status] || MST.error).t) : m.family;
+    var body = '<span class="mdot ' + tone + '"></span>' +
+      '<span class="mt"><span class="mn">' + esc(m.id) + '</span>' +
+      '<span class="md">' + esc(note) + (tags ? ' ' + tags : '') + '</span></span>';
     if (draft.tab === 'other') {
       return '<div class="model off">' + body + '</div>';
     }
@@ -1324,7 +1432,8 @@
     if (!draft) return '';
     var c = draft.model ? esc(draft.model) : '未选';
     var i = draft.imageModel ? esc(draft.imageModel) : '未选（配图走提示词）';
-    return '当前文案：<b>' + c + '</b><br>当前出图：<b>' + i + '</b>';
+    return '当前文案：<b>' + c + '</b><br>当前出图：<b>' + i + '</b>' +
+      (draft.model ? '<button class="mlink" data-act="test-model" style="margin-top:6px">测一下当前文案模型</button>' : '');
   }
 
   function renderModelArea(keepSearch) {
@@ -1661,6 +1770,134 @@
 
   var lastFail = null;
 
+  /* ---------------- 评论生成 ----------------
+     两条路：① 二创完之后，模拟读者给这篇稿子写评论；
+             ② 只想评论别人的帖子，直接贴链接/正文，跳过二创。 */
+
+  function commentPrompt(text, n, tone) {
+    var how = tone === 'sharp'
+      ? '语气可以冲一点，但要有依据，不骂人、不阴阳怪气'
+      : tone === 'info'
+        ? '像了解这行的普通人，补充一个别人没注意到的信息'
+        : '像刷到的普通读者，有共鸣但不肉麻';
+    return '你是普通网友，刚刷到下面这条内容。写 ' + n + ' 条评论区留言。\n' +
+      '要求：\n' +
+      '1. 每条 12 到 50 字，口语，像真人随手打的；可以一句，也可以两句。\n' +
+      '2. 每条必须带一个原文里的具体细节（人、事、数字、场景），不要空泛表态。\n' +
+      '3. 不要总结全文，不要夸作者，不要用「首先/其次/总之/不得不说/作为网友/值得深思」。\n' +
+      '4. 不要每条都感叹号，不要排比，不要书面语。\n' +
+      '5. 几条之间角度岔开：有共鸣、有追问、有补充、有一点反驳、有纯吐槽。\n' +
+      '6. ' + how + '。\n' +
+      '只输出 JSON 数组，例如 ["第一条","第二条"]，不要解释、不要代码块。\n\n' +
+      '内容：\n' + String(text).slice(0, 6000);
+  }
+
+  function parseCommentArr(raw) {
+    var t = String(raw || '').replace(/```json|```/g, '').trim();
+    var a = t.indexOf('['), b = t.lastIndexOf(']');
+    if (a > -1 && b > a) {
+      try {
+        var arr = JSON.parse(t.slice(a, b + 1));
+        if (Array.isArray(arr)) {
+          return arr.map(function (x) { return String(x || '').trim(); }).filter(function (x) { return x.length >= 6; });
+        }
+      } catch (e) { /* 按行拆 */ }
+    }
+    return t.split('\n').map(function (x) {
+      return x.replace(/^\s*(?:[-*•]|\d+[.、)])\s*/, '').replace(/^["“]|["”]$/g, '').trim();
+    }).filter(function (x) { return x.length >= 6 && x.length <= 90; });
+  }
+
+  async function makeComments(text, n, tone) {
+    var chain = providerChain('chat');
+    if (chain.length) {
+      try {
+        var res = await L.chatChain(chain, [
+          { role: 'system', content: '你只写评论区留言，写得像真人，不写总结和评价。' },
+          { role: 'user', content: commentPrompt(text, n, tone) }
+        ], { maxTokens: 1200, temperature: 0.95 });
+        var arr = parseCommentArr(res.text);
+        if (arr.length) return arr.slice(0, n);
+      } catch (e) { /* 模型不通就用本机，不让用户卡住 */ }
+    }
+    return E.comments(text, { n: n, tone: tone, variant: Math.floor(Math.random() * 9) });
+  }
+
+  async function runComments(again) {
+    var c = state.comment;
+    if (c.busy) return;
+    var text = c.mode === 'link' ? '' : String(c.text || '').trim();
+    if (c.mode === 'link') {
+      if (!/https?:\/\//.test(String(c.link || ''))) { toast('先粘一条以 http 开头的链接'); return; }
+      c.busy = true;
+      c.err = '';
+      render('same');
+      try {
+        var pr = await L.parseLink(c.link, function (label) { toast('取原文 · ' + label); }, '');
+        text = pr.text;
+        c.source = pr.title || '';
+      } catch (e) {
+        c.busy = false;
+        c.err = (e && e.message) || '这条链接没取到正文';
+        render('same');
+        return;
+      }
+    }
+    if (text.length < 30) {
+      c.busy = false;
+      toast('素材太短，至少 30 字才评得出来');
+      render('same');
+      return;
+    }
+    c.busy = true;
+    c.err = '';
+    render('same');
+    try {
+      c.list = await makeComments(text, c.n, c.tone);
+      c.busy = false;
+      render('same');
+      if (!again) buzz(10);
+      toast('写了 ' + c.list.length + ' 条，点一条就复制');
+    } catch (e) {
+      c.busy = false;
+      c.err = (e && e.message) || '生成失败';
+      render('same');
+    }
+  }
+
+  var sheetComments = [];
+
+  function commentCards(list) {
+    return list.map(function (x, i) {
+      return '<button class="cm" data-act="copy" data-text="' + esc(x) + '">' +
+        '<span class="cm-n">' + (i + 1) + '</span>' +
+        '<span class="cm-t">' + esc(x) + '</span>' +
+        '<span class="cm-cp">' + U.ic('copy', 13) + '</span></button>';
+    }).join('');
+  }
+
+  async function openCommentSheet() {
+    var r = state.result;
+    if (!r) return;
+    sheetComments = [];
+    openSheet('<div id="cmList"><div class="sk" style="height:56px;border-radius:10px;margin-bottom:8px"></div>' +
+      '<div class="sk" style="height:56px;border-radius:10px;margin-bottom:8px"></div>' +
+      '<div class="sk" style="height:56px;border-radius:10px"></div></div>',
+      {
+        title: '读者会怎么评',
+        foot: '<button class="btn btn-primary btn-block" data-act="cm-copy-all">' + U.ic('copy', 16) + ' 全部复制</button>' +
+          '<button class="btn btn-ghost btn-block" data-act="cm-again-sheet">' + U.ic('refresh', 15) + ' 换一批</button>'
+      });
+    try {
+      sheetComments = await makeComments(r.title + '\n' + r.body, 3, 'warm');
+      var box = document.getElementById('cmList');
+      if (box) box.innerHTML = '<div class="sec-sub" style="margin-bottom:8px">模拟普通读者，不是平台水军。挑一条改两个字再发，更像你自己。</div>' + commentCards(sheetComments);
+    } catch (e) {
+      var b2 = document.getElementById('cmList');
+      if (b2) b2.innerHTML = '<div class="note warn">' + U.ic('alert', 14) + '<div>' + esc(e.message || '生成失败') + '</div></div>';
+    }
+  }
+
   function openParseFail(err) {
     var d = String((err && err.detail) || '');
     /* 只有真的 5xx / 连不上才算「服务不在线」；内容抓不到是业务失败，服务本身是好的 */
@@ -1708,6 +1945,8 @@
       state.compose.sourceTitle = pr.title || title || '';
       state.compose.sourceUrl = url;
       state.compose.sourceNote = pr.note || '';
+      state.compose.sourceImages = pr.images || [];
+      state.compose.sourceVideo = !!pr.video;
       state.result = null;
       go('compose', { nav: 'push' });
       toast((pr.note ? pr.note + ' · ' : '') + '已取到 ' + pr.text.length + ' 字');
@@ -1828,6 +2067,11 @@
 
       case 'start':
         state.compose.mode = t.dataset.mode || 'link';
+        /* 新开一篇：清掉上一篇的解析预览和配图，别串味 */
+        state.compose.preview = null;
+        state.compose.sourceImages = [];
+        state.compose.sourceNote = '';
+        state.compose.sourceVideo = false;
         go('compose', { nav: 'push' });
         break;
 
@@ -1904,6 +2148,84 @@
 
       case 'generate':
         runGenerate(false);
+        break;
+
+      case 'preview-link': {
+        var lk = String(state.compose.link1 || '').trim();
+        if (!/https?:\/\//.test(lk)) { toast('先粘一条以 http 开头的链接'); break; }
+        toast('正在取正文和配图…');
+        try {
+          var pv = await L.parseLink(lk, function (label) { toast('解析中 · ' + label); }, state.compose.sourceTitle || '');
+          state.compose.preview = {
+            title: pv.title || '',
+            chars: pv.text.length,
+            note: pv.note || '',
+            images: pv.images || []
+          };
+          state.compose.sourceImages = pv.images || [];
+          state.compose.sourceVideo = !!pv.video;
+          state.compose.sourceNote = pv.note || '';
+          if (pv.title) state.compose.sourceTitle = pv.title;
+          render('same');
+          toast('取到 ' + pv.text.length + ' 字 · ' + (pv.images || []).length + ' 张图');
+        } catch (e) {
+          openParseFail(e);
+        }
+        break;
+      }
+
+      case 'comment-start':
+        state.comment.list = [];
+        state.comment.err = '';
+        go('comment', { nav: 'push' });
+        break;
+
+      case 'cmode':
+        state.comment.mode = t.dataset.mode || 'link';
+        render('same');
+        break;
+
+      case 'cnum':
+        state.comment.n = Number(t.dataset.n) || 4;
+        render('same');
+        break;
+
+      case 'ctone':
+        state.comment.tone = t.dataset.tone || 'warm';
+        render('same');
+        break;
+
+      case 'cpaste':
+        try {
+          var ct = await navigator.clipboard.readText();
+          if (ct) { state.comment.link = ct.trim(); render('same'); toast('已粘贴'); }
+        } catch (e) { toast('浏览器不允许读剪贴板，长按输入框粘贴'); }
+        break;
+
+      case 'cclear':
+        state.comment.link = '';
+        state.comment.list = [];
+        render('same');
+        break;
+
+      case 'cmake':
+        runComments(false);
+        break;
+
+      case 'cm-again':
+        runComments(true);
+        break;
+
+      case 'cm-copy-all':
+        copy((sheetComments.length ? sheetComments : state.comment.list).join('\n'), '评论已复制');
+        break;
+
+      case 'cm-again-sheet':
+        openCommentSheet();
+        break;
+
+      case 'result-comments':
+        openCommentSheet();
         break;
 
       case 'redo':
@@ -2053,6 +2375,19 @@
           var inp = document.querySelector("[data-field='link1']");
           if (inp) inp.focus();
         }, 260);
+        break;
+      }
+
+      case 'topic-all':
+        openTopicSheet(t.dataset.title || '');
+        break;
+
+      case 'post-open': {
+        var pu2 = t.dataset.url || '';
+        var pt2 = t.dataset.title || '';
+        if (!pu2) break;
+        closeSheet();
+        await parseAndGo(pu2, pt2);
         break;
       }
 
@@ -2217,6 +2552,26 @@
         draft.onlyFree = !draft.onlyFree;
         draft.show = 40;
         renderModelArea();
+        break;
+
+      case 'filter-bad':
+        if (!draft) break;
+        draft.hideBad = !draft.hideBad;
+        draft.show = 40;
+        renderModelArea();
+        break;
+
+      case 'purge-bad':
+        if (!draft) break;
+        var badN = draft.models.filter(function (m) {
+          return m.status === 'paid' || m.status === 'missing' || m.status === 'auth' || m.status === 'error';
+        }).length;
+        draft.models = draft.models.filter(function (m) {
+          return !(m.status === 'paid' || m.status === 'missing' || m.status === 'auth' || m.status === 'error');
+        });
+        draft.show = 40;
+        renderModelArea();
+        toast('已删掉 ' + badN + ' 个不能用的', 2600);
         break;
 
       case 'model-more':
@@ -2487,28 +2842,51 @@
   }
 
   /* 原文里的真实配图：先取元信息，再逐张预加载，滤掉小图和坏链 */
+  function probeImages(list, cb) {
+    var uniq = [];
+    (list || []).forEach(function (u) {
+      if (u && uniq.indexOf(u) < 0) uniq.push(u);
+    });
+    uniq = uniq.slice(0, 6);
+    if (!uniq.length) { cb([]); return; }
+    var keep = [], left = uniq.length;
+    uniq.forEach(function (u, i) {
+      var img = new Image();
+      var done = function (ok) {
+        if (ok) keep[i] = u;
+        if (--left === 0) cb(keep.filter(Boolean));
+      };
+      img.onload = function () { done(img.naturalWidth >= 320 && img.naturalHeight >= 160); };
+      img.onerror = function () { done(false); };
+      /* 不要设 crossOrigin：只为量尺寸，不需要读像素；设了反而会被没 CORS 头的图床拒掉 */
+      img.src = L.imgUrl(u);
+    });
+  }
+
   function loadRealImages() {
     var r = state.result;
-    if (!r || r.realTried || !r.url) return;
+    if (!r || r.realTried) return;
+    if (!r.url && !(r.sourceImages && r.sourceImages.length)) return;
     r.realTried = true;
-    L.meta(r.url, '').then(function (m) {
-      var list = (m && m.images) || [];
-      if (!list.length) { r.realImages = []; return; }
-      var keep = [], left = Math.min(list.length, 5);
-      list.slice(0, 5).forEach(function (u, i) {
-        var img = new Image();
-        var done = function (ok) {
-          if (ok) keep[i] = u;
-          if (--left === 0) {
-            r.realImages = keep.filter(Boolean);
-            if (state.resultTab === 'images' && state.route === 'result') render('same');
-          }
-        };
-        img.onload = function () { done(img.naturalWidth >= 420 && img.naturalHeight >= 200); };
-        img.onerror = function () { done(false); };
-        img.src = u;
+    var pre = (r.sourceImages || []).slice();
+    /* 先信解析阶段抓到的图（那时候页面还愿意给），不够再去 meta 补 */
+    probeImages(pre, function (ok) {
+      if (ok.length >= 2 || !r.url) {
+        r.realImages = ok;
+        if (state.resultTab === 'images' && state.route === 'result') render('same');
+        return;
+      }
+      L.meta(r.url, '').then(function (m) {
+        var list = ok.concat((m && m.images) || []);
+        probeImages(list, function (all) {
+          r.realImages = all;
+          if (state.resultTab === 'images' && state.route === 'result') render('same');
+        });
+      }).catch(function () {
+        r.realImages = ok;
+        if (state.resultTab === 'images' && state.route === 'result') render('same');
       });
-    }).catch(function () { r.realImages = []; });
+    });
   }
 
   /* ---------------- 示例 ---------------- */
@@ -2594,7 +2972,13 @@
       var f = e.target.closest('[data-field]');
       if (f) {
         var k = f.dataset.field;
-        state.compose[k] = f.value;
+        if (k === 'clink') state.comment.link = f.value;
+        else if (k === 'ctext') state.comment.text = f.value;
+        else {
+          state.compose[k] = f.value;
+          /* 改了链接，上一次的解析预览就作废，别让人误以为新链接也取到了图 */
+          if (k === 'link1') state.compose.preview = null;
+        }
         var c = document.querySelector("[data-cnt='" + k + "']");
         if (c) c.textContent = f.value.trim().length;
         if (f.tagName === 'TEXTAREA') {
