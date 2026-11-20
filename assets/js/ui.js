@@ -375,7 +375,7 @@ window.WJUI = (function () {
 
     /* 平台 */
     h += '<div class="sec"><div class="sec-head"><div class="h2" style="font-size:15px">发布平台</div>' +
-      '<span class="sec-sub">影响段落长度与语气</span></div>';
+      '<span class="sec-sub">决定结构、句长与语气</span></div>';
     h += '<div class="hscroll">' + D.PLATFORMS.map(function (p) {
       return '<button class="chip' + (c.platform === p.key ? ' on' : '') + '" data-act="platform" data-platform="' + p.key + '">' + esc(p.name) + '</button>';
     }).join('') + '</div>';
