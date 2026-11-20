@@ -35,6 +35,11 @@ window.WJData = (function () {
       key: 'weibo', name: '微博短评', short: '微博', icon: 'message',
       desc: '一段话说清态度，带话题词，适合热点跟进',
       tone: '犀利、短平快'
+    },
+    {
+      key: 'comment', name: '评论区发言', short: '评论', icon: 'message',
+      desc: '先表态再给依据，80 字内说完，适合热评与跟帖',
+      tone: '有立场、不抬杠'
     }
   ];
 

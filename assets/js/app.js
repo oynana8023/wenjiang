@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI;
 
-  var VERSION = 'v2.2.4';
+  var VERSION = 'v2.3.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -634,6 +634,7 @@
           styleName: U.styleName(c.style),
           platformName: platformName(c.platform),
           modelName: (res.provider.name ? res.provider.name + ' · ' : '') + res.model,
+          engine: 'api',
           at: Date.now()
         };
       } catch (e) {
@@ -662,6 +663,8 @@
       sim: r.sim,
       dupes: r.dupes,
       score: r.score,
+      /* 模型调不通被动退回：不算用户主动用本机引擎，也不该扣次数 */
+      engine: chain.length ? 'fallback' : 'local',
       styleKey: c.style,
       styleName: U.styleName(c.style),
       platformName: platformName(c.platform),
@@ -738,7 +741,8 @@
     ).trim();
     state.result = out;
     state.genLoading = false;
-    state.quota.used += 1;
+    /* 额度只为本机引擎计费：接了自有模型后，用你自己的 token，不再扣这里的次数 */
+    if (out.engine === 'local') state.quota.used += 1;
     state.works.unshift({
       id: out.id, title: out.title, words: out.words, score: out.score,
       styleName: out.styleName, platformName: out.platformName, at: out.at, data: out
@@ -1030,8 +1034,9 @@
     var html = '<p>' + (left > 0
       ? '当前还剩 <b style="color:var(--acc)">' + left + '</b> 次。输入邀请码可以再加 30 次，每天 0 点重置。'
       : '今天的 ' + state.quota.total + ' 次已经用完了，明天 0 点重置。也可以直接在本机配置自己的模型，用你自己的额度。') + '</p>' +
-      '<div class="field mt-m"><div class="field-head"><span class="lbl">Invite code</span></div>' +
-      '<input id="redeemCode" placeholder="输入邀请码" autocapitalize="characters"></div>' +
+      '<div class="field mt-m"><div class="field-head"><span class="lbl">邀请码</span>' +
+      '<span class="sec-sub">内测码 WJ2026 · 兑换 +30 次</span></div>' +
+      '<input id="redeemCode" placeholder="输入邀请码，如 WJ2026" autocapitalize="characters"></div>' +
       '<div class="note mt-s">' + U.ic('cpu', 14) +
       '<div>额度只限制「本机引擎」的调用。接了自有模型后，生成不消耗这里的次数。</div></div>';
     openSheet(html, {

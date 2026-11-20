@@ -612,15 +612,24 @@ window.WJUI = (function () {
       '<span class="sec-sub">每日 0 点重置</span><div class="spacer"></div>' +
       '<button class="mini-btn" data-act="open-quota">' + ic('zap', 12) + ' 补充额度</button></div></div>';
 
-    /* 模型 */
+    /* 模型：读多服务商列表，别再读 migrate 后已经清空的老字段 */
+    var ps = (s.providers || []).filter(function (p) { return p.base && p.key; });
+    var act = null;
+    for (var pi = 0; pi < ps.length; pi++) { if (ps[pi].id === s.activeId) act = ps[pi]; }
+    if (!act) act = ps[0] || null;
+    var chatOn = null;
+    for (var ci = 0; ci < ps.length; ci++) { if (ps[ci].model) { chatOn = ps[ci]; break; } }
+    var imgN = 0;
+    for (var ii = 0; ii < ps.length; ii++) { if (ps[ii].imageModel) imgN++; }
+    var chatName = chatOn ? (chatOn.model + (chatOn.name ? ' · ' + chatOn.name : '')) : '';
     h += '<div class="sec"><div class="sec-head"><div class="h2" style="font-size:15px">生成引擎</div>' +
-      '<span class="sec-sub">' + (s.base ? 'OpenAI 兼容' : '未配置') + '</span></div>';
+      '<span class="sec-sub">' + (chatOn ? '已接入 ' + ps.length + ' 家 · 走你的额度' : '未配置') + '</span></div>';
     h += '<div class="rows">';
     h += '<button class="row" data-act="open-model"><span class="ri">' + ic('cpu', 15) + '</span>' +
-      '<span class="rt"><b>大模型配置</b><small>' + esc(s.model || '未选择模型，使用本机规则引擎') + '</small></span>' +
+      '<span class="rt"><b>大模型配置</b><small>' + esc(chatName || '未选择模型，使用本机规则引擎') + '</small></span>' +
       '<span class="chev">' + ic('right', 15) + '</span></button>';
     h += '<button class="row" data-act="open-image-model"><span class="ri">' + ic('image', 15) + '</span>' +
-      '<span class="rt"><b>出图模型</b><small>' + esc(s.imageModel || '未配置，只用提示词方案') + '</small></span>' +
+      '<span class="rt"><b>出图模型</b><small>' + esc(imgN ? imgN + ' 个模型可出图' : '未配置，只用提示词方案') + '</small></span>' +
       '<span class="chev">' + ic('right', 15) + '</span></button>';
     h += '</div></div>';
 
