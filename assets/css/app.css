@@ -1111,6 +1111,17 @@ a {
   border-radius: 50%;
   background: var(--ink-4);
 }
+/* 有序列表用真数字，别和圆点混在一起 */
+.prose ol {
+  margin: 0 0 18px;
+  padding-left: 20px;
+  list-style: decimal;
+}
+.prose ol li {
+  padding-left: 2px;
+  margin-bottom: 9px;
+}
+.prose ol li::before { content: none; }
 .prose blockquote {
   margin: 0 0 18px;
   padding: 2px 0 2px 14px;

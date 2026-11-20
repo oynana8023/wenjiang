@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI;
 
-  var VERSION = 'v2.9.0';
+  var VERSION = 'v2.10.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -569,7 +569,12 @@
   function validate() {
     var c = state.compose;
     if (c.mode === 'link') {
-      if (!/https?:\/\//.test(c.link1.trim())) { toast('先粘一条以 http 开头的链接'); return false; }
+      /* 链接框里偶尔会连着正文一起粘进来，或者分享页复制出来压根没有 http。
+         有链接就解析，没有链接但正文够长，就当「粘贴全文」用，别把人堵在这一步。 */
+      if (!/https?:\/\//.test(c.link1) && c.link1.trim().length < 120) {
+        toast('先粘一条以 http 开头的链接，或把正文复制进来');
+        return false;
+      }
       return true;
     }
     if (c.mode === 'text') {
@@ -587,7 +592,11 @@
 
   async function resolveSource() {
     var c = state.compose;
-    if (c.mode === 'link' && c.link1.trim().length < 240) {
+    /* 以前这里有个「链接短于 240 字才去解析」的判断，本意是躲开超长垃圾串，
+       结果公众号、小蜜蜂、头条的分享链接带一堆跟踪参数，基本都超过 240 字，
+       于是「先解析看看」能出正文，直接点生成却拿到空字符串，报「素材太短」。
+       现在只认有没有 http，长度不再参与判断。 */
+    if (c.mode === 'link' && /https?:\/\//i.test(c.link1)) {
       var r = await L.parseLink(c.link1, function (label, i, n) {
         state.genNote = '正在取正文 · ' + label + '（' + i + '/' + n + '）';
         var el = document.getElementById('genNote');
@@ -606,7 +615,16 @@
     if (c.mode === 'merge') {
       return c.text1.trim() + '\n\n' + c.text2.trim();
     }
+    /* 链接框里没有链接、只有一大段文字：按粘贴全文处理 */
     return c.text1.trim();
+  }
+
+  /* 正文统一收口：多级标题压成「##」，星号列表换成「·」；
+     公众号和 B 站专栏才保留小标题，其余平台直接把井号去掉，复制过去就能发。 */
+  function cleanBody(md, platform) {
+    var t = E.tidyBody(md);
+    if (['wechat', 'bili'].indexOf(platform) < 0) t = t.replace(/^##[ \t]*/gm, '');
+    return t;
   }
 
   function aiPrompt(src, c) {
@@ -634,7 +652,8 @@
       '- 篇幅落在指定区间；素材不足时写下限附近，不许为凑字数注水。\n' +
       '- 严格用该平台的结构和语气，不要混入其他平台的写法（例如给酷安写"姐妹们"、给小红书写"综上所述"）。\n' +
       '- 标题：1 个主标题 + 3 个备选，全部符合该平台标题习惯，不要同一句式换词。\n' +
-      '- 正文用 \\n\\n 分段；需要小标题时用「## 」开头；不要用「一、二、三」另起一行当小标题，除非平台结构明确要求。\n' +
+      '- 正文用 \\n\\n 分段；需要小标题时最多用两级，统一写成「## 」，不要用「###」或更多井号；\n' +
+      '- 不要用星号（*）、加号或短横线做项目符号，需要列点时用「· 」开头；正文里不要出现 markdown 的 # 号残留在句子里；\n' +
       '- 需要话题标签的平台，把标签放进 tags 数组（不带 #），不要写进正文。\n' +
       '- 写完自检一遍：字数、结构、禁忌词、有没有空泛评价、有没有和素材对不上的地方。不合格就在心里重写，只输出最终稿。\n' +
       (c.deai ? '- 去 AI 味：删掉"首先/其次/综上所述/赋能/闭环/值得注意的是"，句子长短交错，允许口语。\n' : '') +
@@ -684,7 +703,10 @@
           res = await L.chatChain(chain, msgs);
           if (res.switched && !tries) toast('默认服务商没响应，已自动切到 ' + (res.provider.name || '备用'), 3000);
           o = parseAI(res.text);
-          check = E.platformCheck(o.body, c.platform);
+          /* 自检要带上标签一起看：标签在单独字段里，不然小红书永远被判「缺话题标签」 */
+          var chkText = E.tidyBody(o.body) +
+            ((o.tags && o.tags.length) ? '\n\n' + o.tags.slice(0, E.platTags(c.platform)).map(function (x) { return '#' + x; }).join(' ') : '');
+          check = E.platformCheck(chkText, c.platform);
           if (check.ok || tries >= 1) break;
           /* 结构缺项/篇幅跑偏/AI 腔：把问题回给模型，按平台规矩重写一稿 */
           tries += 1;
@@ -694,16 +716,20 @@
             { role: 'user', content: '这稿不符合【' + platformName(c.platform) + '】的要求：' + check.issues.join('；') + '。请严格按上面的平台结构重写，事实和数字不变，只输出 JSON。' }
           ]);
         }
-        var body = o.body;
+        var body = cleanBody(o.body, c.platform);
+        /* 标签是单独字段，正文里没有。小红书/微博这类平台要标签跟着正文一起复制，
+           否则用户粘过去还得自己补一串 #。 */
+        var tg = (o.tags || []).slice(0, E.platTags(c.platform));
+        if (tg.length) body += '\n\n' + tg.map(function (x) { return '#' + x; }).join(' ');
         var titles = (o.titles || []).filter(Boolean).slice(0, 4);
-        var title = o.title || titles[0] || (state.compose.sourceTitle || '').trim() || '未命名';
+        var title = String(o.title || titles[0] || (state.compose.sourceTitle || '')).replace(/^[#＃\s]+/, '').replace(/\s*[#＃]+$/, '').trim() || '未命名';
         if (titles.indexOf(title) === -1) titles.unshift(title);
         var simA = Math.round(E.similarity(src, body) * 100);
         return {
           title: title,
           titles: titles.slice(0, 4),
           body: body,
-          tags: o.tags || [],
+          tags: tg,
           source: src,
           sourceTitle: state.compose.sourceTitle,
           words: E.countWords(body),
@@ -737,7 +763,7 @@
     return {
       title: r.title,
       titles: r.titles,
-      body: r.body,
+      body: cleanBody(r.body, c.platform),
       source: src,
       sourceTitle: state.compose.sourceTitle,
       words: r.words,
@@ -787,7 +813,13 @@
       state.genLoading = false;
       state.route = 'compose';
       render('pop');
-      toast('素材太短了，再多给一点');
+      /* 只说「素材太短」用户不知道该干嘛。把取到的字数和下一步讲清楚。 */
+      openParseFail({
+        message: '这条只取到 ' + src.trim().length + ' 字，凑不成一篇稿。',
+        detail: '常见原因：页面要登录、正文由脚本后加载，或分享链接指向的是摘要页。',
+        url: state.compose.mode === 'link' ? state.compose.link1 : '',
+        title: state.compose.sourceTitle || ''
+      });
       state.busy = false;
       return;
     }
@@ -843,7 +875,7 @@
   function fullText(withTitle) {
     var r = state.result;
     if (!r) return '';
-    var t = (withTitle === false ? '' : r.title + '\n\n') + r.body;
+    var t = (withTitle === false ? '' : r.title + '\n\n') + window.WJEngine.toPlain(r.body);
     if (state.settings.declare) {
       t += '\n\n——\n本文由 AI 辅助创作，事实已人工核对。';
     }
@@ -2523,7 +2555,7 @@
 
       case 'work-copy': {
         var wc = state.works.filter(function (x) { return x.id === t.dataset.id; })[0];
-        if (wc && wc.data) copy(wc.data.title + '\n\n' + wc.data.body);
+        if (wc && wc.data) copy(wc.data.title + '\n\n' + window.WJEngine.toPlain(wc.data.body));
         closeSheet();
         break;
       }

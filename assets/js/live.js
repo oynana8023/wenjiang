@@ -564,8 +564,29 @@ window.WJLive = (function () {
   }
 
   function pickUrl(input) {
-    var m = String(input || '').match(/https?:\/\/[^\s，。；、）)】"']+/);
-    return m ? m[0] : '';
+    /* 分享面板复制出来的链接常带 &amp; 转义、零宽字符，末尾还可能粘上句号或右括号。
+       以前直接截到空白为止，末尾这些字符会让服务端 404，看起来像「这个平台解析不了」。 */
+    var s = String(input || '')
+      .replace(/&amp;/gi, '&')
+      .replace(/[\u200b-\u200d\ufeff]/g, '')
+      .trim();
+    var m = s.match(/https?:\/\/[^\s，。；、）)】"'\u3000<>]+/i);
+    if (!m) return '';
+    return m[0].replace(/[.,;:!?。，、）)】]+$/, '');
+  }
+
+  /* 跟踪参数（spm/utm/spss…）对取正文没用，个别站点还会因此判成非法请求。
+     只在整条链失败后拿它当第二方案，正常情况还是按用户粘的原文去取。 */
+  function bareUrl(u) {
+    try {
+      var x = new URL(u);
+      if (!x.search) return '';
+      if (/weixin\.qq\.com$|mp\.weixin\.qq\.com$/i.test(x.hostname)) return '';
+      x.search = '';
+      x.hash = '';
+      var s = x.toString();
+      return s === u ? '' : s;
+    } catch (e) { return ''; }
   }
 
   /* 链接分四类：
@@ -749,6 +770,21 @@ window.WJLive = (function () {
         if (onStep) onStep('解析服务正在唤醒，稍等重试', 1, 1);
         await new Promise(function (r) { setTimeout(r, 2500); });
         try { return await attempt(serverOnly, 20000); } catch (e2) { e0 = e2; }
+      }
+
+      /* 最后一招：去掉跟踪参数再取一次。小蜜蜂、头条、小红书的分享链接
+         常带一长串 spss/utm 参数，个别站点按整条 URL 取会直接判失效，
+         而正文其实只跟路径里的 ID 有关。 */
+      var bare = bareUrl(url);
+      if (bare) {
+        if (onStep) onStep('换一条干净的链接再试', 1, 1);
+        var bases2 = parseBases();
+        for (var bi = 0; bi < bases2.length; bi++) {
+          try {
+            var rb = await callBase(bases2[bi], bare, minLen, 15000, titleHint);
+            if (rb) return shape(rb, 'cloud');
+          } catch (e3) { /* 换下一个 */ }
+        }
       }
       var err = new Error((e0 && e0.code === 'DEAD' && e0.message) || '这个链接没取到正文');
       err.detail = (e0 && e0.detail) || (e0 && e0.message);
@@ -1451,6 +1487,7 @@ window.WJLive = (function () {
     SOURCES: SOURCES,
     hot: hot,
     parseLink: parseLink,
+    pickUrl: pickUrl,
     meta: meta,
     cover: cover,
     parseBase: parseBase,

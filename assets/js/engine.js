@@ -565,7 +565,7 @@ window.WJEngine = (function () {
       shape: '场景开头 · 三个小标题 · 收在判断'
     },
     xhs: {
-      name: '小红书', mode: 'note', len: [350, 600], para: [1, 2], sub: false, tags: 4,
+      name: '小红书', mode: 'note', len: [300, 600], para: [1, 2], sub: false, tags: 4,
       who: '在刷，只给三秒，先看图再看第一句。',
       struct: '第一句必须是钩子（结果/价格/反常识），不写「今天想和大家聊聊」；中间 3 条具体信息，每条一行，以「· 」开头，带数字、型号或体验；再一段两句的感受；最后一行 3–5 个话题标签。',
       tone: '第一人称、口语、短句，可以有一个语气词。',
@@ -648,6 +648,11 @@ window.WJEngine = (function () {
 
   /* 发出去之前先按平台规矩查一遍：结构缺项、篇幅跑偏、AI 腔，
      查出来就让模型重写一次，而不是把不合格的稿子直接交给人。 */
+  function platTags(key) {
+    var p = PLAT[key] || PLAT.toutiao;
+    return p.tags || 0;
+  }
+
   function platformCheck(text, key) {
     var p = PLAT[key] || PLAT.toutiao;
     var body = String(text || '');
@@ -1415,21 +1420,24 @@ window.WJEngine = (function () {
 
   function mdToHtml(md) {
     var lines = String(md).split('\n');
-    var html = [], list = null, para = [];
+    var html = [], list = null, ol = null, para = [];
 
     function flushPara() {
       if (para.length) { html.push('<p>' + para.map(inline).join('<br>') + '</p>'); para = []; }
     }
     function flushList() {
       if (list) { html.push('<ul>' + list.map(function (li) { return '<li>' + inline(li) + '</li>'; }).join('') + '</ul>'); list = null; }
+      if (ol) { html.push('<ol>' + ol.map(function (li) { return '<li>' + inline(li) + '</li>'; }).join('') + '</ol>'); ol = null; }
     }
 
     lines.forEach(function (raw) {
-      var line = raw.trim();
+      var line = raw.trim().replace(/^＃+/, function (m) { return '#'.repeat(m.length); });
       if (!line) { flushPara(); flushList(); return; }
-      if (/^##\s+/.test(line)) {
+      /* 一到六级标题都要认。以前只认「## 」，模型偶尔写「### 优点」，
+         页面上就原样露出三个井号，复制出去也是一样。 */
+      if (/^#{1,6}\s+/.test(line)) {
         flushPara(); flushList();
-        html.push('<h3>' + inline(line.replace(/^##\s+/, '')) + '</h3>');
+        html.push('<h3>' + inline(line.replace(/^#{1,6}\s+/, '')) + '</h3>');
         return;
       }
       if (/^>\s?/.test(line)) {
@@ -1437,10 +1445,18 @@ window.WJEngine = (function () {
         html.push('<blockquote>' + inline(line.replace(/^>\s?/, '')) + '</blockquote>');
         return;
       }
-      if (/^[·\-]\s?/.test(line)) {
+      if (/^[·\-*]\s?/.test(line)) {
         flushPara();
+        if (ol) { html.push('<ol>' + ol.map(function (li) { return '<li>' + inline(li) + '</li>'; }).join('') + '</ol>'); ol = null; }
         if (!list) list = [];
-        list.push(line.replace(/^[·\-]\s?/, ''));
+        list.push(line.replace(/^[·\-*]\s?/, ''));
+        return;
+      }
+      if (/^\d{1,2}[.、)]\s*/.test(line)) {
+        flushPara();
+        if (list) { html.push('<ul>' + list.map(function (li) { return '<li>' + inline(li) + '</li>'; }).join('') + '</ul>'); list = null; }
+        if (!ol) ol = [];
+        ol.push(line.replace(/^\d{1,2}[.、)]\s*/, ''));
         return;
       }
       flushList();
@@ -1448,6 +1464,38 @@ window.WJEngine = (function () {
     });
     flushPara(); flushList();
     return html.join('');
+  }
+
+  /* 模型偶尔不听话：给小红书加「### 优点」，给头条加三级标题，或者用星号当项目符号。
+     这里统一收一遍：多级标题压成「## 」，星号列表换成「· 」，多余的井号清掉。
+     不这么做，复制到平台编辑器里就是一堆 #，用户还得逐行删。 */
+  function tidyBody(md) {
+    return String(md || '')
+      .replace(/\r\n?/g, '\n')
+      .replace(/^[ \t]*[#＃]{2,6}[ \t]*/gm, '## ')
+      .replace(/^[ \t]*[#＃][ \t]+/gm, '')
+      .replace(/^[ \t]*[*+][ \t]+/gm, '· ')
+      .replace(/[ \t]+$/gm, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  /* 复制、导出用的纯文本：把 markdown 记号全部去掉。
+     公众号/头条/小红书的编辑器都不认 ##，粘进去就是一堆井号，用户还得手删。 */
+  function toPlain(md) {
+    return String(md || '')
+      .replace(/\r\n?/g, '\n')
+      /* 只清标题记号：井号后面带空格的，或者连写两个以上的。
+         单个「#AI眼镜」是话题标签，不能把井号也吃掉。 */
+      .replace(/^[ \t]*[#＃]{1,6}[ \t]+/gm, '')
+      .replace(/^[ \t]*[#＃]{2,6}(?=[^\s#＃])/gm, '')
+      .replace(/^[ \t]*[-*+][ \t]+/gm, '· ')
+      .replace(/^[ \t]*>[ \t]?/gm, '')
+      .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+      .replace(/`([^`\n]+)`/g, '$1')
+      .replace(/[ \t]+$/gm, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
   }
 
 
@@ -1604,6 +1652,17 @@ window.WJEngine = (function () {
     health: 'clean', school: 'clean'
   };
 
+  /* 类目的短标签。场景没命中时，「画的是」需要一个说得通的落点，
+     以前直接把场景句按逗号截断，会切出「浅灰台面上」这种半截话。 */
+  var CAT_TAG = {
+    phone: '手机', car: '汽车', chip: '芯片', robot: '机器人', ai: '数据中心',
+    laptop: '电脑', gadget: '数码产品', glass: '智能眼镜', drink: '酒水',
+    food: '食物', health: '诊室', school: '校园', finance: '金融', stage: '发布会',
+    office: '办公区', travel: '旅途', pet: '宠物', beauty: '美妆', fitness: '健身',
+    farm: '农场', factory: '工厂', weather: '天气', kid: '孩子', home: '家里',
+    place: '城市', law: '法庭', port: '港口', stage: '舞台', finance: '金融', health: '诊室'
+  };
+
   var VIS_LOOK = {
     news: ['纪实质感摄影', 'documentary photography', '自然光，现场感', 'natural light, on-location feel'],
     wechat: ['克制的编辑类摄影', 'restrained editorial photography', '侧逆光，层次分明', 'side backlight with clear layering'],
@@ -1673,7 +1732,16 @@ window.WJEngine = (function () {
     [/高铁|列车|地铁/, '一列停靠的列车车头', 'the front of a stopped train', 'vehicle', 9, '列车', '一列列车'],
     [/飞机|航班|机场/, '一架客机停在廊桥旁', 'an airliner at a jet bridge', 'vehicle', 8, '飞机', '一架飞机'],
     [/工人|员工|师傅|操作工/, '一位穿工装的人在流水线旁，只拍到双手与侧身', 'a worker in overalls at the line, hands and side profile only', 'people', 7, '工人', '车间里的人'],
-    [/农民|果农|种植户/, '一双手正在采摘果实', 'a pair of hands picking fruit', 'people', 6, '手', '一双手']
+    [/农民|果农|种植户/, '一双手正在采摘果实', 'a pair of hands picking fruit', 'people', 6, '手', '一双手'],
+    [/集装箱|货柜|码头|港口|吞吐量|岸桥|堆场/, '码头堆叠的集装箱与岸桥，远处停着货轮', 'stacked shipping containers and gantry cranes at a port with a cargo ship beyond', 'port', 9, '集装箱', '一堆集装箱'],
+    [/货轮|船舶|航运|海运|远洋/, '一艘停靠的货轮，船身有锈迹与吃水线', 'a docked cargo ship with rust stains and a visible waterline', 'vehicle', 8, '货轮', '一艘货轮'],
+    [/光伏|储能|硅片|电池片|组件厂/, '屋顶上一排深蓝色光伏板，支架投下影子', 'a row of dark blue solar panels on a roof, mounting frames casting shadows', 'tech', 9, '光伏板', '一排光伏板'],
+    [/药品|疫苗|药企|临床|仿制药|医保/, '白色台面上几只药瓶与一板胶囊', 'several medicine bottles and a blister pack on a white counter', 'health', 8, '药瓶', '几只药瓶'],
+    [/房价|楼市|地产|楼盘|购房|二手房/, '一排高层住宅楼，阳台与空调外机清晰', 'a row of high-rise apartment blocks with balconies and air-conditioning units', 'place', 8, '楼房', '一片住宅楼'],
+    [/黄金|金价|金条|金饰/, '几根金条叠放在深色绒布上', 'several gold bars stacked on dark velvet', 'finance', 8, '金条', '几根金条'],
+    [/演唱会|音乐节|巡演|舞台/, '舞台上的追光灯与音箱阵列，台下是模糊的人影', 'stage spotlights and speaker arrays with a blurred crowd below', 'stage', 8, '舞台', '一个舞台'],
+    [/游戏|手游|玩家|主机|Steam/, '一只游戏手柄放在桌面上，旁边是亮着的屏幕', 'a game controller on a desk beside a glowing screen', 'tech', 7, '手柄', '一只手柄'],
+    [/服装|羽绒服|面料|T恤|鞋履/, '一件挂在木质衣架上的外套，布料有纹理', 'a jacket on a wooden hanger with visible fabric texture', 'object', 7, '衣服', '一件外套']
   ];
 
   /* 场景优先于事件：文里写了「车间/流水线」，就别再给夜景写字楼。
@@ -1694,6 +1762,10 @@ window.WJEngine = (function () {
       only: ['office', 'finance', 'tech', 'place', 'laptop', 'people'],
       cn: '空荡的办公区，几张空工位，显示器还亮着', en: 'a quiet open-plan office with empty desks and monitors still on',
       subCn: '一张空工位上亮着的显示器', subEn: 'a monitor still glowing on an empty desk', expect: '工位', short: '一张空工位', tag: '空工位' },
+    { re: /港口|码头|集装箱|吞吐量|航运|海运|堆场/,
+      only: ['port', 'vehicle', 'pack', 'place', 'factory'],
+      cn: '港口码头，集装箱堆场与岸桥，海面反着天光', en: 'a container terminal with gantry cranes and harbour water reflecting the sky',
+      subCn: '堆叠的集装箱与岸桥', subEn: 'stacked containers and a gantry crane', expect: '集装箱', short: '一堆集装箱', tag: '港口' },
     { re: /仓库|库存|堆放|仓储/,
       only: ['pack', 'drink', 'food', 'vehicle', 'factory'],
       cn: '仓库货架与打包台，纸箱整齐堆叠', en: 'a warehouse aisle with neatly stacked cartons',
@@ -1742,8 +1814,14 @@ window.WJEngine = (function () {
     pack: ['pack', 'drink', 'food'],
     law: ['law'],
     tech: ['tech'],
-    vehicle: ['vehicle'],
-    people: ['people']
+    vehicle: ['vehicle', 'port', 'people'],
+    people: ['people'],
+    port: ['port', 'vehicle', 'pack', 'people'],
+    health: ['health', 'tech', 'people'],
+    place: ['place', 'vehicle', 'people', 'stage'],
+    finance: ['finance', 'place', 'object'],
+    stage: ['stage', 'people', 'tech'],
+    object: ['object', 'pack', 'food', 'home']
   };
 
   function visObjects(scan, title) {
@@ -1797,7 +1875,7 @@ window.WJEngine = (function () {
     if (second && main && main.cn.indexOf(second.expect) > -1) second = null;
 
     /* 有实物时以实物的组定类目，别再让「续航」「消费」这类词把类目带偏 */
-    var GROUP_CAT = { tech: 'gadget', vehicle: 'car', drink: 'drink', pack: 'food', people: 'office' };
+    var GROUP_CAT = { tech: 'gadget', vehicle: 'car', drink: 'drink', pack: 'food', people: 'office', port: 'place', health: 'health', stage: 'stage', finance: 'finance', object: 'home', place: 'place' };
     var cat = main ? (VIS_CAT[main.g] ? main.g : (GROUP_CAT[main.g] || visCatOf(title, plain)))
       : visCatOf(title, plain);
     var cc = VIS_CAT[cat] || VIS_CAT.place;
@@ -1842,69 +1920,117 @@ window.WJEngine = (function () {
     var look = VIS_LOOK[opts.style] || VIS_LOOK.news;
     var pal = VIS_PALETTE[VIS_GROUP[cat] || 'life'];
 
-    var subCn, subEn, shortCn, expect;
-    if (main) {
-      subCn = main.cn + (color ? '，' + color.cn + '为主色' : '') + (second ? '，旁边' + second.cn : '');
-      subEn = main.en + (color ? ', ' + color.en + ' dominant' : '') + (second ? ', with ' + second.en + ' nearby' : '');
-      shortCn = main.short + (second ? ' + ' + second.short : '');
-      expect = main.expect;
-    } else if (setHit) {
-      /* 没有实物、但有明确场景：画场景里该有的东西，而不是类目模板里的泛化物件 */
-      subCn = setHit.subCn + (color ? '，' + color.cn + '为主色' : '');
-      subEn = setHit.subEn + (color ? ', ' + color.en + ' dominant' : '');
-      shortCn = setHit.short;
-      expect = setHit.expect;
-    } else {
-      subCn = cc[0] + (color ? '，' + color.cn + '配色' : '');
-      subEn = cc[1] + (color ? ', ' + color.en + ' finish' : '');
-      shortCn = cc[0].split('，')[0];
-      expect = cc[4];
-    }
+    /* 三张图以前只换画幅、不换机位，主体和场景一个字没改，模型当然给出三张
+       「同一张图裁成不同比例」。现在拆成三个机位：封面拍主体，头图拍环境，
+       方图拍细节——主体、距离、镜头、背景四样都不同，同一篇稿子也不重样。 */
+    var baseCn = main
+      ? (main.cn + (color ? '，' + color.cn + '为主色' : ''))
+      : (setHit ? (setHit.subCn + (color ? '，' + color.cn + '为主色' : '')) : (cc[0] + (color ? '，' + color.cn + '配色' : '')));
+    var baseEn = main
+      ? (main.en + (color ? ', ' + color.en + ' dominant' : ''))
+      : (setHit ? (setHit.subEn + (color ? ', ' + color.en + ' dominant' : '')) : (cc[1] + (color ? ', ' + color.en + ' finish' : '')));
+    var baseShort = main ? main.short : (setHit ? setHit.short : cc[0].split('，')[0]);
+    var baseExpect = main ? main.expect : (setHit ? setHit.expect : cc[4]);
+    var baseHits = (main && main.hits) ? main.hits.slice(0) : (setHits ? setHits.slice(0) : []);
 
-    /* 一句人话摘要，放在提示词上方，用户一眼能判断「画的是不是这个」 */
-    var setTag = setHit ? (setHit.tag || setCn.split('，')[0]) : (setCn.split('，')[0]);
-    var brief = '画的是：' + shortCn + ' · ' + setTag;
+    /* 场景名：命中场景用它的短标签；没命中就用类目短标签，别把场景句按逗号截一半 */
+    var setTag = setHit ? (setHit.tag || setCn.split('，')[0]) : (CAT_TAG[cat] || '现场');
 
-    /* 这张图是从原文哪几个词来的，摆给用户看：不对就是他一眼能指出来 */
-    var basis = [];
-    (main ? main.hits : []).forEach(function (k) { if (basis.indexOf(k) < 0) basis.push(k); });
-    if (setHits) {
-      setHits.forEach(function (k) { if (basis.indexOf(k) < 0 && basis.length < 4) basis.push(k); });
-    }
+    /* 细节机位优先拍「陪衬物」：主体已经占了两张，第三张再拍它就没意义了。
+       没有陪衬就拍主体的材质局部，仍是同一件东西，但视角完全不同。 */
+    var detailCn = second
+      ? ('近景特写：' + second.cn + '，背景里' + baseShort + '虚化成光斑')
+      : ('近景特写：' + baseShort + '的局部，能看清材质、接缝和做工');
+    var detailEn = second
+      ? ('close-up of ' + second.en + ', with ' + baseShort + ' blurred into bokeh behind')
+      : ('extreme close-up on a detail of ' + baseEn + ', material, seams and finish clearly visible');
+    var detailExpect = second ? second.expect : baseExpect;
+    var detailShort = second ? second.short : baseShort;
 
-    function build(frame, simple) {
+    var shots = [
+      {
+        /* 封面：主体撑满，环境只做背景，适合压标题 */
+        name: '封面 · 竖版', ratio: '3:4', size: '864x1152',
+        subjectCn: baseCn,
+        subjectEn: baseEn,
+        sceneCn: setHit
+          ? ('背景是虚化的' + setTag + '，只留一点环境暗示，不抢主体')
+          : '背景轻微虚化，色调干净，不抢主体',
+        sceneEn: setHit
+          ? ('the ' + setTag + ' blurred into soft bokeh behind, environment only suggested')
+          : 'a softly blurred, clean-toned backdrop that stays out of the way',
+        frameCn: '竖构图，主体占画面六成，落在下三分之二，上方留出干净空间压标题',
+        frameEn: 'vertical composition, subject filling sixty percent of the frame in the lower two thirds, clean space above for a headline',
+        lens: '85mm 镜头，f/2.0，浅景深', lensEn: '85mm lens, f/2.0, shallow depth of field',
+        expect: baseExpect,
+        brief: '画的是：' + baseShort + (setHit ? ' · ' + setTag : ' · 近景'),
+        basis: baseHits
+      },
+      {
+        /* 头图：退到广角，把「在哪里、和什么在一起」讲清楚 */
+        name: '头图 · 横版', ratio: '16:9', size: '1344x768',
+        subjectCn: setCn + '，' + baseShort + '位于画面左侧三分之一，占画面比例比近景小得多',
+        subjectEn: setEn + ', with ' + baseShort + ' placed in the left third and much smaller in frame',
+        sceneCn: '完整的环境，能看到空间纵深和周围的陈设',
+        sceneEn: 'the full environment with visible depth and surrounding fittings',
+        frameCn: '横构图，广角，环境占画面七成，主体偏左，右侧留白',
+        frameEn: 'horizontal wide composition, the environment taking seventy percent of the frame, subject offset to the left with clean space on the right',
+        lens: '24mm 广角，f/4，全景深', lensEn: '24mm wide lens, f/4, deep focus',
+        expect: setHit ? setHit.expect : baseExpect,
+        brief: '画的是：' + (setHit ? setTag + '全景' : '环境全景') + ' · ' + baseShort,
+        basis: (setHits && setHits.length ? setHits : baseHits)
+      },
+      {
+        /* 方图：贴近拍，讲材质、接口、标签这些「看得见但没人拍」的细节 */
+        name: '细节 · 方图', ratio: '1:1', size: '1024x1024',
+        subjectCn: detailCn,
+        subjectEn: detailEn,
+        sceneCn: '背景完全虚化，不留陈设',
+        sceneEn: 'background fully blurred, no props',
+        frameCn: '方构图，主体占满画面，浅景深，只保留一处对焦点',
+        frameEn: 'square composition, subject filling the frame, shallow depth of field with a single focal point',
+        lens: '100mm 微距，f/2.8', lensEn: '100mm macro lens, f/2.8',
+        expect: detailExpect,
+        brief: '画的是：' + detailShort + '的细节',
+        basis: (second && second.hits && second.hits.length ? second.hits : baseHits)
+      }
+    ];
+
+    function build(shot, simple) {
       var light = simple ? '均匀柔光，背景是干净的纯色' : look[2];
       var lightEn = simple ? 'even soft light on a clean seamless backdrop' : look[3];
-      var promptCn = '画面主体：' + subCn + '。' +
-        '场景：' + (simple ? '纯净的浅灰背景，没有多余陈设' : setCn) + '。' +
-        '构图：' + frame.cn + '。' +
+      var promptCn = '画面主体：' + shot.subjectCn + '。' +
+        '场景：' + (simple ? '纯净的浅灰背景，没有多余陈设' : shot.sceneCn) + '。' +
+        '构图：' + shot.frameCn + '。' +
         '光线：' + light + '。' +
         '色彩：' + pal[0] + '。' +
         '风格：' + look[0] + '，真实材质，不卡通、不插画。' +
-        '镜头：' + frame.lens + '。' +
+        '镜头：' + shot.lens + '。' +
         '画质：高清，细节真实，轻微胶片颗粒。' +
         '不要：任何文字、字母、数字、水印、logo、拼接图、分屏、畸形结构、过度饱和。';
-      var prompt = subEn + ', ' + (simple ? 'on a clean seamless light grey backdrop, no extra props' : setEn) + ', ' +
-        frame.en + ', ' + lightEn + ', ' + pal[1] + ', ' + look[1] + ', photorealistic materials, not cartoon, not illustration, ' +
-        frame.lensEn + ', high detail, fine film grain, ' +
+      var prompt = shot.subjectEn + ', ' +
+        (simple ? 'on a clean seamless light grey backdrop, no extra props' : shot.sceneEn) + ', ' +
+        shot.frameEn + ', ' + lightEn + ', ' + pal[1] + ', ' + look[1] +
+        ', photorealistic materials, not cartoon, not illustration, ' +
+        shot.lensEn + ', high detail, fine film grain, ' +
         'no text, no letters, no numbers, no watermark, no logo, no collage, no split screen, no distorted anatomy, no oversaturation';
       return {
-        name: frame.name,
-        ratio: frame.ratio,
-        size: frame.size,
-        subject: brief,
-        expect: expect,
-        basis: basis,
+        name: shot.name,
+        ratio: shot.ratio,
+        size: shot.size,
+        subject: shot.brief,
+        expect: shot.expect,
+        basis: shot.basis,
         prompt: prompt,
         promptCn: promptCn,
         alt: simple ? null : {
-          prompt: subEn + ', on a clean seamless light grey backdrop, no extra props, centered, ' + lightEn + ', ' + pal[1] + ', product photography, high detail, no text, no letters, no watermark, no logo',
-          promptCn: '画面主体：' + subCn + '。场景：纯净的浅灰背景，没有多余陈设。构图：居中。光线：均匀柔光。色彩：' + pal[0] + '。风格：产品摄影。不要：任何文字、字母、水印、logo。'
+          prompt: shot.subjectEn + ', on a clean seamless light grey backdrop, no extra props, centered, ' + lightEn + ', ' + pal[1] + ', product photography, high detail, no text, no letters, no watermark, no logo',
+          promptCn: '画面主体：' + shot.subjectCn + '。场景：纯净的浅灰背景，没有多余陈设。构图：居中。光线：均匀柔光。色彩：' + pal[0] + '。风格：产品摄影。不要：任何文字、字母、水印、logo。'
         }
       };
     }
 
-    return VIS_FRAME.map(function (f) { return build(f, false); });
+    return shots.map(function (s) { return build(s, false); });
   }
 
   return {
@@ -1912,6 +2038,8 @@ window.WJEngine = (function () {
     comments: comments,
     merge: merge,
     mdToHtml: mdToHtml,
+    toPlain: toPlain,
+    tidyBody: tidyBody,
     visuals: visuals,
     stripMd: stripMd,
     countWords: countWords,
@@ -1921,6 +2049,7 @@ window.WJEngine = (function () {
     hashStr: hashStr,
     platformBrief: platformBrief,
     platformHint: platformHint,
-    platformCheck: platformCheck
+    platformCheck: platformCheck,
+    platTags: platTags
   };
 })();
