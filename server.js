@@ -459,13 +459,16 @@ async function weiboPosts(title, limit) {
   const cid = '100103type=1&t=10&q=#' + t + '#';
   const j = await wbJson('/api/container/getIndex?containerid=' + encodeURIComponent(cid) + '&page_type=searchall');
   const rows = [];
+  let first = null;
   for (const c of (j.data && j.data.cards) || []) {
     const mb = c && c.card_type === 9 && c.mblog;
     if (!mb) continue;
     const txt = tidyText(stripTags(String(mb.text || '')));
     if (txt.length < 20) continue;
+    if (rows.some((r) => r.indexOf(txt.slice(0, 18)) > -1)) continue;
     const who = (mb.user && mb.user.screen_name) || '';
     rows.push((who ? who + '：' : '') + txt);
+    if (!first && mb.id) first = { url: 'https://m.weibo.cn/detail/' + mb.id, title: '相关微博原文' };
     if (rows.length >= (limit || 6)) break;
   }
   if (!rows.length) return null;
@@ -475,7 +478,8 @@ async function weiboPosts(title, limit) {
     text,
     chars: text.length,
     via: 'weibo',
-    note: '话题页由脚本动态渲染，这里取的是该话题下微博正文'
+    note: '话题页由脚本动态渲染，这里取的是该话题下微博正文',
+    related: first
   };
 }
 
@@ -540,6 +544,29 @@ async function bingSearch(title, limit) {
   return out;
 }
 
+/* 搜回来的报道必须真的在讲这件事。只对上一两个词就收，等于给用户一篇别的新闻。 */
+function titleMatch(text, title) {
+  const body = String(text || '').slice(0, 1200);
+  const base = String(title || '').replace(/[^\u4e00-\u9fa5A-Za-z0-9]/g, ' ');
+  const toks = new Set();
+  base.split(/\s+/).forEach((w) => {
+    if (w.length >= 2) toks.add(w);
+    if (/[\u4e00-\u9fa5]/.test(w)) {
+      for (let i = 0; i + 2 <= w.length; i += 1) toks.add(w.slice(i, i + 2));
+    }
+  });
+  if (!toks.size) return true;
+  let hit = 0, total = 0;
+  toks.forEach((t) => {
+    if (t.length < 2) return;
+    total += 1;
+    if (body.indexOf(t) > -1) hit += 1;
+  });
+  if (!total) return true;
+  /* 命中不到一半就说明搜到的是另一件事，宁可不给也不能给错 */
+  return hit >= 2 && hit / total >= 0.5;
+}
+
 async function relatedParse(title) {
   for (const q of newsQueries(title).slice(0, 3)) {
     let news = [];
@@ -553,6 +580,7 @@ async function relatedParse(title) {
         const html = await grabHtml(new URL(n.url), UA_MOBILE);
         const out = extract(html);
         if (out.text.length < 180) continue;
+        if (!titleMatch(out.title + ' ' + out.text, title)) continue;
         return {
           title: out.title || n.title,
           text: out.text.slice(0, 12000),
@@ -567,6 +595,102 @@ async function relatedParse(title) {
   return null;
 }
 
+
+/* 空壳页/错误页的识别：这些文字出现说明拿到的是「页面骨架」或者拦截页，不能当正文 */
+const JUNK_RE = /(参数错误|请升级客户端|去验证|环境异常|开启JavaScript|访问过于频繁|页面不存在|内容不存在|该内容已被删除|404 Not Found)/;
+
+function chineseRatio(t) {
+  const cn = (String(t).match(/[\u4e00-\u9fa5]/g) || []).length;
+  return cn / Math.max(1, String(t).length);
+}
+
+/* 一段文字能不能当素材用：够长、主体是中文、不是拦截页 */
+function usable(t, min) {
+  const x = String(t || '').trim();
+  if (x.length < (min || 120)) return false;
+  if (JUNK_RE.test(x.slice(0, 240))) return false;
+  if (chineseRatio(x) < 0.25) return false;
+  return true;
+}
+
+/* 从微博各种形态的链接里取出这条微博的 id / bid */
+function weiboIdOf(u) {
+  const s = String(u || '');
+  let m = s.match(/m\.weibo\.cn\/(?:detail|status)\/([A-Za-z0-9]+)/);
+  if (m) return m[1];
+  m = s.match(/weibo\.(?:com|cn)\/detail\/([A-Za-z0-9]+)/);
+  if (m) return m[1];
+  m = s.match(/weibo\.(?:com|cn)\/\d+\/([A-Za-z0-9]{6,})/);
+  if (m) return m[1];
+  return '';
+}
+
+/* 单条微博：m.weibo.cn 的 statuses/show 直接给原文，不需要登录 */
+async function weiboStatus(id) {
+  const j = await wbJson('/statuses/show?id=' + encodeURIComponent(id));
+  const d = j && j.data;
+  if (!d || !d.text) return null;
+  const body = tidyText(stripTags(String(d.text)));
+  if (!body || body.length < 6) return null;
+  const who = (d.user && d.user.screen_name) || '';
+  let text = (who ? who + '：' : '') + body;
+  const rt = d.retweeted_status;
+  if (rt && rt.text) {
+    const sub = tidyText(stripTags(String(rt.text)));
+    if (sub) text += '\n\n// 转发自 ' + ((rt.user && rt.user.screen_name) || '') + '：' + sub;
+  }
+  if (!usable(text, 20)) return null;
+  return {
+    title: body.slice(0, 40),
+    text: text.slice(0, 12000),
+    chars: text.length,
+    via: 'weibo',
+    note: '这是这条微博的原文',
+    related: { url: 'https://m.weibo.cn/detail/' + id, title: '原微博' }
+  };
+}
+
+/* 站点名尾巴去掉，剩下的才有资格当标题去搜同题报道 */
+function cleanShellTitle(t, host) {
+  let x = String(t || '').replace(/\s+/g, ' ').trim();
+  x = x.replace(/\s*[-_|｜]\s*(微博|新浪微博|抖音|抖音搜索|快手|小红书|知乎|百度|百度搜索|今日头条|头条|哔哩哔哩|bilibili).*$/i, '');
+  x = x.replace(/^(微博|抖音|快手|小红书|知乎|百度|今日头条)[\-_|｜:：\s]*/i, '');
+  if (/^(微博|抖音|快手|小红书|知乎|百度|头条|哔哩哔哩)$/i.test(x)) return '';
+  if (x.length < 4) return '';
+  return x.slice(0, 60);
+}
+
+/* 页面骨架兜底：正文拿不到，但标题、摘要、小标题通常在 HTML 里躺着。
+   这些是页面自己写的元信息，属于真实内容，不是编的。 */
+function digestOf(html) {
+  const src = String(html || '');
+  const out = extract(src);
+  let title = (out && out.title) || '';
+  if (!title) {
+    const mt = src.match(/<title[^>]*>([\s\S]{1,120}?)<\/title>/i);
+    if (mt) title = tidyText(stripTags(mt[1]));
+  }
+  let desc = '';
+  const pats = [
+    /<meta[^>]+(?:name|property)=["'](?:description|og:description|twitter:description)["'][^>]*content=["']([^"']{10,400})["']/i,
+    /<meta[^>]+content=["']([^"']{10,400})["'][^>]*(?:name|property)=["'](?:description|og:description|twitter:description)["']/i
+  ];
+  for (const re of pats) {
+    const m = src.match(re);
+    if (m) { desc = tidyText(stripTags(m[1])); break; }
+  }
+  const heads = [];
+  const hre = /<h[12][^>]*>([\s\S]{2,80}?)<\/h[12]>/gi;
+  let h;
+  while ((h = hre.exec(src)) && heads.length < 8) {
+    const t = tidyText(stripTags(h[1]));
+    if (t && t.length >= 4 && t.length <= 50 && heads.indexOf(t) < 0) heads.push(t);
+  }
+  const body = (out && out.text && out.text.length > 40) ? out.text : '';
+  const text = tidyText([desc || body].concat(heads).join('\n')).slice(0, 4000);
+  return { title, desc, heads, text, chars: text.length };
+}
+
 async function parseUrl(url, hintTitle) {
   let target;
   try {
@@ -576,43 +700,76 @@ async function parseUrl(url, hintTitle) {
   }
   if (!/^https?:$/.test(target.protocol)) throw new Error('只支持 http/https');
 
+  const isWx = /mp\.weixin\.qq\.com/.test(target.hostname);
+  const need = isWx ? 90 : 120;
+
   const cached = pageGet(url);
   if (cached) {
     const hit = extract(cached.html);
-    if (hit.text.length >= (/mp\.weixin\.qq\.com/.test(target.hostname) ? 90 : 120)) return hit;
+    if (hit.text.length >= need && usable(hit.text, need)) return hit;
   }
 
   const tries = [UA_MOBILE, UA_DESKTOP];
   let lastErr = '';
+  let bestHtml = '';
   for (const ua of tries) {
     try {
       const html = await grabHtml(target, ua);
       pageSet(url, html);
+      if (html && html.length > bestHtml.length) bestHtml = html;
       if (/环境异常|去验证|该内容已被发布者删除|此内容因违规无法查看/.test(html) && !/id=["']js_content["']/.test(html)) {
         lastErr = '微信拦住了解析（文章要求微信内打开，或已被删除）';
         continue;
       }
       const out = extract(html);
-      const need = /mp\.weixin\.qq\.com/.test(target.hostname) ? 90 : 120;
-      if (out.text.length >= need) return out;
-      lastErr = '正文只有 ' + out.text.length + ' 字';
+      if (out.text.length >= need && usable(out.text, need)) return out;
+      if (JUNK_RE.test(out.text.slice(0, 120))) lastErr = isWx ? '这篇公众号文章打不开（链接可能已失效或被删除）' : '站点返回的是拦截页，不是正文';
+      else lastErr = '正文只有 ' + out.text.length + ' 字';
     } catch (e) {
       lastErr = e.name === 'AbortError' ? '抓取超时' : e.message;
     }
   }
-  /* 直抓失败：话题/搜索页走平台原文，其他站点找同题报道 */
-  const title = String(hintTitle || '').trim() || guessTitle(url);
+
+  /* 兜底一：微博单条。m.weibo.cn/detail 是纯脚本页，直抓必 0 字，
+     但 statuses/show 接口给的是这条微博的原文，最准。 */
+  const wid = weiboIdOf(url);
+  if (wid) {
+    try {
+      const st = await weiboStatus(wid);
+      if (st) return st;
+    } catch (e) { /* 继续往下 */ }
+  }
+
+  const dig = bestHtml ? digestOf(bestHtml) : null;
+  let title = String(hintTitle || '').trim() || guessTitle(url);
+  if (!title && dig && dig.title) title = cleanShellTitle(dig.title, target.hostname);
+
+  /* 兜底二：微博话题页取话题下的真实博文 */
   if (title && /weibo\.(com|cn)$/i.test(target.hostname)) {
     try {
       const w = await weiboPosts(title);
       if (w) return w;
-    } catch (e) { /* 继续兜底 */ }
+    } catch (e) { /* 继续往下 */ }
   }
+
+  /* 兜底三：同题报道 */
   if (title) {
     try {
       const rel = await relatedParse(title);
       if (rel) return rel;
-    } catch (e) { /* 继续兜底 */ }
+    } catch (e) { /* 继续往下 */ }
+  }
+
+  /* 兜底四：标题 + 摘要 + 小标题。宁可短，也不假装有正文。 */
+  if (dig && usable(dig.text, 50)) {
+    return {
+      title: cleanShellTitle(dig.title, target.hostname) || dig.title,
+      text: dig.text,
+      chars: dig.text.length,
+      via: 'digest',
+      note: '这页正文由脚本渲染，这里是页面自带的标题与摘要',
+      related: { url, title: cleanShellTitle(dig.title, target.hostname) || dig.title }
+    };
   }
 
   const err = new Error(lastErr || '解析失败');

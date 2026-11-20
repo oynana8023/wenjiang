@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI;
 
-  var VERSION = 'v2.3.0';
+  var VERSION = 'v2.4.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -853,7 +853,7 @@
     openSheet(html, {
       title: '素材详情',
       foot: '<button class="btn btn-primary btn-block" data-act="use-article" data-id="' + a.id + '">' +
-        U.ic('pen', 16) + ' 用这篇试试</button>'
+        U.ic('edit', 16) + ' 用这篇试试</button>'
     });
   }
 
@@ -1343,13 +1343,13 @@
     var d = String((err && err.detail) || '');
     /* 只有真的 5xx / 连不上才算「服务不在线」；内容抓不到是业务失败，服务本身是好的 */
     var offline = /HTTP 5\d\d|连不上|Failed to fetch|NetworkError/i.test(d);
-    lastFail = err && err.url ? { url: err.url, title: err.title || '' } : null;
+    var hint = String((err && err.title) || '');
+    lastFail = err && err.url ? { url: err.url, title: hint } : null;
 
     var why = offline
-      ? '解析服务这一次没响应（免费沙盒实例每隔一阵会重启，重启的十几秒里就会这样）。' +
-        '点下面的<b>再试一次</b>通常就恢复了；要长期稳定，去<b>我的 → 解析服务</b>按说明部署自己的 Worker。'
-      : '服务是在线的，是这一页本身拿不到正文：微博话题页、抖音搜索页由脚本动态渲染，知乎等站点有抓取风控，' +
-        '服务器拿到的常常是空壳或被 403。可以直接点<b>用浏览器打开</b>看原文，或换成文章页链接再解析。';
+      ? '解析服务这一次没响应（免费沙盒实例每隔一阵会重启，重启的十几秒里就会这样）。点<b>再试一次</b>通常就恢复。'
+      : '服务是在线的，是这一页本身不给正文：微博、抖音、快手这些页面由脚本渲染，知乎有风控，服务器拿到的常常是空壳。' +
+        '换成文章页链接最稳；只有标题也能先写起来。';
 
     var detail = d ? '<div class="sec-sub" style="margin-top:10px;word-break:break-all;line-height:1.8;white-space:pre-line">' + esc(d) + '</div>' : '';
 
@@ -1357,10 +1357,14 @@
       '<p>' + esc((err && err.message) || '解析失败') + '</p>' +
       '<div class="note mt-s">' + U.ic('info', 14) + '<div>' + why + '</div></div>' + detail,
       {
-        title: '这个链接没解析成功',
-        foot: (lastFail
-          ? '<button class="btn btn-primary btn-block" data-act="retry-parse">' + U.ic('refresh', 16) + ' 再试一次</button>'
+        title: '这个链接没取到正文',
+        foot: (hint
+          ? '<button class="btn btn-primary btn-block" data-act="title-write" data-title="' + esc(hint) + '">' +
+            U.ic('edit', 16) + ' 就用这个标题写</button>'
           : '') +
+          (lastFail
+            ? '<button class="btn ' + (hint ? 'btn-soft' : 'btn-primary') + ' btn-block" data-act="retry-parse">' + U.ic('refresh', 16) + ' 再试一次</button>'
+            : '') +
           (err && err.url
             ? '<button class="btn btn-soft btn-block" data-act="copy" data-text="' + esc(err.url) + '">' + U.ic('copy', 15) + ' 复制链接</button>' +
               '<button class="btn btn-soft btn-block" data-act="open-url" data-url="' + esc(err.url) + '">' + U.ic('external', 15) + ' 用浏览器打开</button>'
@@ -2002,6 +2006,21 @@
         state.compose.mode = 'text';
         render('push');
         break;
+
+      /* 正文取不到时不要把人堵在死胡同：有标题就先按标题写，用户再补两句细节 */
+      case 'title-write': {
+        var ht = String(btn.dataset.title || '').trim();
+        closeSheet();
+        state.compose.mode = 'text';
+        state.compose.text1 = ht;
+        state.compose.text2 = '';
+        state.compose.sourceTitle = ht;
+        state.compose.sourceNote = '只拿到标题，正文没取到';
+        state.result = null;
+        render('push');
+        toast('先按标题写，补两句细节会更实');
+        break;
+      }
 
       case 'close':
         closeSheet();

@@ -277,6 +277,7 @@ async function relatedParse(title) {
         const { html } = await grab(new URL(n.url), UA_MOBILE);
         const out = extract(html);
         if (out.text.length < 180) continue;
+        if (!titleMatch(out.text, title)) continue;
         return {
           title: out.title || n.title,
           text: out.text.slice(0, TEXT_LIMIT),
@@ -291,6 +292,117 @@ async function relatedParse(title) {
   return null;
 }
 
+
+const JUNK_RE = /(参数错误|请升级客户端|去验证|环境异常|开启JavaScript|访问过于频繁|页面不存在|内容不存在|该内容已被删除|404 Not Found)/;
+
+function chineseRatio(t) {
+  const cn = (String(t).match(/[\u4e00-\u9fa5]/g) || []).length;
+  return cn / Math.max(1, String(t).length);
+}
+
+function usable(t, min) {
+  const x = String(t || '').trim();
+  if (x.length < (min || 120)) return false;
+  if (JUNK_RE.test(x.slice(0, 240))) return false;
+  if (chineseRatio(x) < 0.25) return false;
+  return true;
+}
+
+function weiboIdOf(u) {
+  const s = String(u || '');
+  let m = s.match(/m\.weibo\.cn\/(?:detail|status)\/([A-Za-z0-9]+)/);
+  if (m) return m[1];
+  m = s.match(/weibo\.(?:com|cn)\/detail\/([A-Za-z0-9]+)/);
+  if (m) return m[1];
+  m = s.match(/weibo\.(?:com|cn)\/\d+\/([A-Za-z0-9]{6,})/);
+  if (m) return m[1];
+  return '';
+}
+
+async function weiboStatus(id) {
+  const j = await wbJson('/statuses/show?id=' + encodeURIComponent(id));
+  const d = j && j.data;
+  if (!d || !d.text) return null;
+  const body = tidyText(stripTags(String(d.text)));
+  if (!body || body.length < 6) return null;
+  const who = (d.user && d.user.screen_name) || '';
+  let text = (who ? who + '：' : '') + body;
+  const rt = d.retweeted_status;
+  if (rt && rt.text) {
+    const sub = tidyText(stripTags(String(rt.text)));
+    if (sub) text += '\n\n// 转发自 ' + ((rt.user && rt.user.screen_name) || '') + '：' + sub;
+  }
+  if (!usable(text, 20)) return null;
+  return {
+    title: body.slice(0, 40),
+    text: text.slice(0, TEXT_LIMIT),
+    chars: text.length,
+    via: 'weibo',
+    note: '这是这条微博的原文',
+    related: { url: 'https://m.weibo.cn/detail/' + id, title: '原微博' }
+  };
+}
+
+function cleanShellTitle(t) {
+  let x = String(t || '').replace(/\s+/g, ' ').trim();
+  x = x.replace(/\s*[-_|｜]\s*(微博|新浪微博|抖音|抖音搜索|快手|小红书|知乎|百度|百度搜索|今日头条|头条|哔哩哔哩|bilibili).*$/i, '');
+  x = x.replace(/^(微博|抖音|快手|小红书|知乎|百度|今日头条)[\-_|｜:：\s]*/i, '');
+  if (/^(微博|抖音|快手|小红书|知乎|百度|头条|哔哩哔哩)$/i.test(x)) return '';
+  if (x.length < 4) return '';
+  return x.slice(0, 60);
+}
+
+function digestOf(html) {
+  const src = String(html || '');
+  const out = extract(src);
+  let title = (out && out.title) || '';
+  if (!title) {
+    const mt = src.match(/<title[^>]*>([\s\S]{1,120}?)<\/title>/i);
+    if (mt) title = tidyText(stripTags(mt[1]));
+  }
+  let desc = '';
+  const pats = [
+    /<meta[^>]+(?:name|property)=["'](?:description|og:description|twitter:description)["'][^>]*content=["']([^"']{10,400})["']/i,
+    /<meta[^>]+content=["']([^"']{10,400})["'][^>]*(?:name|property)=["'](?:description|og:description|twitter:description)["']/i
+  ];
+  for (const re of pats) {
+    const m = src.match(re);
+    if (m) { desc = tidyText(stripTags(m[1])); break; }
+  }
+  const heads = [];
+  const hre = /<h[12][^>]*>([\s\S]{2,80}?)<\/h[12]>/gi;
+  let h;
+  while ((h = hre.exec(src)) && heads.length < 8) {
+    const t = tidyText(stripTags(h[1]));
+    if (t && t.length >= 4 && t.length <= 50 && heads.indexOf(t) < 0) heads.push(t);
+  }
+  const body = (out && out.text && out.text.length > 40) ? out.text : '';
+  const text = tidyText([desc || body].concat(heads).join('\n')).slice(0, 4000);
+  return { title, desc, heads, text, chars: text.length };
+}
+
+function titleMatch(text, title) {
+  const body = String(text || '').slice(0, 1200);
+  const base = String(title || '').replace(/[^\u4e00-\u9fa5A-Za-z0-9]/g, ' ');
+  const toks = new Set();
+  base.split(/\s+/).forEach((w) => {
+    if (w.length >= 2) toks.add(w);
+    if (/[\u4e00-\u9fa5]/.test(w)) {
+      for (let i = 0; i + 2 <= w.length; i += 1) toks.add(w.slice(i, i + 2));
+    }
+  });
+  if (!toks.size) return true;
+  let hit = 0, total = 0;
+  toks.forEach((t) => {
+    if (t.length < 2) return;
+    total += 1;
+    if (body.indexOf(t) > -1) hit += 1;
+  });
+  if (!total) return true;
+  /* 命中不到一半就说明搜到的是另一件事，宁可不给也不能给错 */
+  return hit >= 2 && hit / total >= 0.5;
+}
+
 async function parseUrl(raw, hintTitle) {
   let target;
   try {
@@ -301,32 +413,48 @@ async function parseUrl(raw, hintTitle) {
   if (!/^https?:$/.test(target.protocol)) throw new Error('只支持 http/https');
   if (isPrivateHost(target.hostname)) throw new Error('不支持内网地址');
 
+  const isWx = /mp\.weixin\.qq\.com/.test(target.hostname);
+  const need = isWx ? 90 : 120;
+
   const hit = cachedGet('p:' + target.href);
-  if (hit) return hit;
+  if (hit && hit.text && hit.text.length >= need) return hit;
 
   let lastErr = '';
+  let bestHtml = '';
   for (const ua of [UA_MOBILE, UA_DESKTOP]) {
     try {
       const { html } = await grab(target, ua);
+      if (html && html.length > bestHtml.length) bestHtml = html;
       if (/环境异常|去验证|该内容已被发布者删除|此内容因违规无法查看|该公众号已迁移/.test(html) &&
           !/id=["']js_content["']/.test(html)) {
         lastErr = '微信拦住了解析（文章可能已被删除，或只在微信内可看）';
         continue;
       }
-      const isWx = /mp\.weixin\.qq\.com$/.test(target.hostname);
       const out = extract(html);
-      const need = isWx ? 90 : 120;
-      if (out.text.length >= need) {
-        const value = { title: out.title, text: out.text.slice(0, TEXT_LIMIT), chars: out.text.length };
+      if (out.text.length >= need && usable(out.text, need)) {
+        const value = { title: out.title, text: out.text.slice(0, TEXT_LIMIT), chars: out.text.length, via: 'direct' };
         cachedSet('p:' + target.href, value);
         return value;
       }
-      lastErr = '正文只有 ' + out.text.length + ' 字（这个页面可能由脚本渲染，或要求登录）';
+      if (JUNK_RE.test(out.text.slice(0, 120))) lastErr = isWx ? '这篇公众号文章打不开（链接可能已失效或被删除）' : '站点返回的是拦截页，不是正文';
+      else lastErr = '正文只有 ' + out.text.length + ' 字';
     } catch (e) {
       lastErr = e && e.name === 'AbortError' ? '抓取超时' : (e && e.message) || '抓取失败';
     }
   }
-  const title = String(hintTitle || '').trim() || guessTitle(raw);
+
+  const wid = weiboIdOf(raw);
+  if (wid) {
+    try {
+      const st = await weiboStatus(wid);
+      if (st) return st;
+    } catch (e) { /* 继续 */ }
+  }
+
+  const dig = bestHtml ? digestOf(bestHtml) : null;
+  let title = String(hintTitle || '').trim() || guessTitle(raw);
+  if (!title && dig && dig.title) title = cleanShellTitle(dig.title);
+
   if (title && /weibo\.(com|cn)$/i.test(target.hostname)) {
     try {
       const w = await weiboPosts(title);
@@ -339,209 +467,20 @@ async function parseUrl(raw, hintTitle) {
       if (rel) return rel;
     } catch (e) { /* 继续兜底 */ }
   }
-  throw new Error(lastErr || '解析失败');
-}
-
-/* ---------------- 元信息：分类 / 发布时间 / 头图 / 原图 ---------------- */
-
-const CATS = [
-  ['科技数码', /(手机|芯片|处理器|半导体|AI|人工智能|大模型|模型|苹果|iPhone|华为|小米|OPPO|vivo|荣耀|三星|特斯拉|SpaceX|机器人|算法|开源|软件|系统|鸿蒙|安卓|iOS|笔记本|显卡|GPU|算力|数据中心|卫星|火箭|量子|发布会|新品)/g],
-  ['财经商业', /(股价|市值|营收|财报|融资|上市|IPO|收购|并购|裁员|降薪|涨价|降价|消费|电商|零售|品牌|市场|经济|投资|基金|利率|关税|供应链|工厂|产能)/g],
-  ['汽车出行', /(汽车|车型|续航|试驾|新能源|电车|充电|智驾|自动驾驶|车企|比亚迪|理想|蔚来|小鹏|问界|油车)/g],
-  ['娱乐影视', /(电影|剧集|电视剧|综艺|明星|演员|导演|票房|演唱会|音乐|专辑|番剧|动漫|二次元|红毯|官宣)/g],
-  ['游戏电竞', /(游戏|电竞|主机|Steam|手游|版本更新|玩家|开服|联动|抽卡|赛事|战队)/g],
-  ['体育竞技', /(比赛|球队|赛季|冠军|奥运|球员|联赛|进球|夺冠|决赛|NBA|中超|世界杯|全运会)/g],
-  ['健康医疗', /(健康|医生|医院|疾病|药品|疫苗|睡眠|减肥|体检|心理|抑郁|养生)/g],
-  ['教育学习', /(学生|考试|高考|中考|考研|大学|课程|教师|留学|作业|招生)/g],
-  ['生活方式', /(美食|餐厅|旅行|旅游|城市|天气|家居|穿搭|咖啡|露营|宠物|摄影|探店)/g],
-  ['社会民生', /(交通|地铁|高铁|房价|租房|社区|物业|外卖|快递|就业|工资|社保|养老|诈骗|消防)/g]
-];
-
-const SOURCE_CAT = {
-  ithome: '科技数码', geekpark: '科技数码', sspai: '数字生活',
-  '36kr': '财经商业', zhihu: '话题讨论', bilibili: '视频热门',
-  douyin: '短视频', weibo: '社交热搜', baidu: '搜索热榜', toutiao: '资讯热点'
-};
-
-function metaTags(h) {
-  const out = {};
-  const re = /<meta\b[^>]*>/gi;
-  let m;
-  while ((m = re.exec(h))) {
-    const tag = m[0];
-    const k = (tag.match(/(?:property|name|itemprop)\s*=\s*["']([^"']+)["']/i) || [])[1];
-    const v = (tag.match(/content\s*=\s*["']([^"']*)["']/i) || [])[1];
-    if (k && v != null) out[k.toLowerCase()] = decode(v).trim();
+  if (dig && usable(dig.text, 50)) {
+    const t2 = cleanShellTitle(dig.title) || dig.title;
+    return {
+      title: t2,
+      text: dig.text,
+      chars: dig.text.length,
+      via: 'digest',
+      note: '这页正文由脚本渲染，这里是页面自带的标题与摘要',
+      related: { url: target.href, title: t2 }
+    };
   }
-  return out;
-}
-
-function classify(title, extra, fallback) {
-  let best = '', bestScore = 0;
-  for (const [name, re] of CATS) {
-    const n = (String(title).match(re) || []).length * 2 + (String(extra).match(re) || []).length;
-    if (n > bestScore) { bestScore = n; best = name; }
-  }
-  if (bestScore >= 2) return best;
-  return fallback || '';
-}
-
-function absUrl(u, base) {
-  if (!u) return '';
-  let s = String(u).trim().replace(/^["']|["']$/g, '');
-  if (!s || /^data:|^javascript:/i.test(s)) return '';
-  /* 页面里的图片地址常被转义成 &amp; / &#x2F;，不还原就会 404 */
-  s = s.replace(/&amp;/g, '&').replace(/&#x2[fF];|&#47;/g, '/').replace(/&quot;/g, '');
-  if (s.startsWith('//')) s = 'https:' + s;
-  if (/^https?:\/\//i.test(s)) return s;
-  if (!base) return '';
-  try { return new URL(s, base).href; } catch (e) { return ''; }
-}
-
-/* 图片地址和标题做「去标点、去空白」的归一化，用来判断哪张图配的是这条热搜 */
-function imgKey(s) {
-  return String(s || '').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
-}
-
-/* 一堆候选中挑最像头图的那张：百度缩略图带 size=w931 / r1,1，图标是 size=f54_54 这种 */
-function pickHead(list) {
-  let best = '', score = -99;
-  for (const u of list) {
-    let s = 0;
-    if (/[?&]size=w\d{3,}/.test(u)) s += 3;
-    if (/[?&]size=r\d+,\d+/.test(u)) s += 2;
-    const f = u.match(/[?&]size=f(\d+)_(\d+)/);
-    if (f && Number(f[1]) < 320) s -= 6;
-    if (/logo|avatar|icon|qrcode/i.test(u)) s -= 6;
-    if (/^https?:\/\/gips\d?\.baidu\.com/i.test(u) && !/[?&]size=w\d{3,}/.test(u)) s -= 3;
-    if (s > score) { score = s; best = u; }
-  }
-  return best;
-}
-
-function normTime(v) {
-  if (!v) return '';
-  const s = String(v).trim();
-  if (/^\d{10}$/.test(s)) return new Date(Number(s) * 1000).toISOString();
-  if (/^\d{13}$/.test(s)) return new Date(Number(s)).toISOString();
-  const d = new Date(s.replace(/\./g, '-'));
-  if (!isNaN(d.getTime()) && d.getFullYear() > 2000) return d.toISOString();
-  return '';
-}
-
-function metaOf(html, target, srcId) {
-  const h = String(html);
-  const m = metaTags(h);
-  const base = target.origin + '/';
-
-  const ld = {};
-  for (const b of h.matchAll(/<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)) {
-    try {
-      const j = JSON.parse(b[1].trim());
-      for (const one of (Array.isArray(j) ? j : [j])) {
-        if (!one || typeof one !== 'object') continue;
-        if (one['@graph']) for (const g of one['@graph']) Object.assign(ld, g);
-        else Object.assign(ld, one);
-      }
-    } catch (e) { /* 站点写坏的 JSON-LD 很常见 */ }
-  }
-
-  const title = m['og:title'] || m['twitter:title'] || ld.headline ||
-    (h.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '';
-  const desc = m['og:description'] || m['description'] || m['twitter:description'] || ld.description || '';
-  const wxCt = (h.match(/var\s+ct\s*=\s*["'](\d{9,13})["']/) || [])[1];
-  const wxName = (h.match(/var\s+nickname\s*=\s*["']([^"']+)["']/) || [])[1];
-
-  const published = normTime(
-    m['article:published_time'] || m['og:release_date'] || m['pubdate'] ||
-    ld.datePublished || ld.dateCreated || wxCt ||
-    (h.match(/<time[^>]+datetime=["']([^"']+)["']/i) || [])[1] ||
-    /* 国内站点大多把时间写在 span 里，没有 og / JSON-LD */
-    (h.match(/(?:pubtime|publish[-_]?time|post[-_]?time|article[-_]?time|time[-_]?source)[^>]*>\s*([^<]{8,32})</i) || [])[1] ||
-    (h.match(/(20\d{2}[-/年]\s?\d{1,2}[-/月]\s?\d{1,2}日?\s+\d{1,2}:\d{2})/) || [])[1]
-  );
-
-  const site = m['og:site_name'] || wxName || (ld.publisher && ld.publisher.name) ||
-    target.hostname.replace(/^www\./, '');
-  const author = m['article:author'] || m['author'] || wxName ||
-    (ld.author && (ld.author.name || (Array.isArray(ld.author) ? ld.author[0].name : ''))) || '';
-  const section = m['article:section'] || '';
-  const keywords = (m['keywords'] || ld.keywords || '')
-    .split(/[,，;；|]/).map((x) => x.trim()).filter((x) => x && x.length < 16).slice(0, 6);
-
-  /* 百度热搜这类「榜单页」没有 og:image，大图藏在内嵌 JSON 里：
-     {"poster":"https://gips1.baidu.com/...size=w931...","title":"这条热搜的标题"} */
-  const mediaPics = [];
-  for (const mm of h.matchAll(/"poster"\s*:\s*"([^"]+)"[\s\S]{0,800}?"title"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) {
-    mediaPics.push({ u: mm[1].replace(/\\\//g, '/'), t: mm[2] });
-    if (mediaPics.length >= 8) break;
-  }
-  const pageKey = imgKey(String(title).replace(/\s*[-_|]\s*百度.*$/, ''));
-  const poster = (pageKey
-    ? mediaPics.find((x) => {
-        const k = imgKey(x.t);
-        return k && (k.indexOf(pageKey.slice(0, 12)) >= 0 || pageKey.indexOf(k.slice(0, 12)) >= 0);
-      })
-    : null) || mediaPics[0];
-
-  const raw = [
-    poster && poster.u,
-    m['og:image'], m['og:image:url'], m['twitter:image'], m['twitter:image:src'],
-    (h.match(/var\s+msg_cdn_url\s*=\s*["']([^"']+)["']/) || [])[1],
-    typeof ld.image === 'string' ? ld.image : (Array.isArray(ld.image) ? ld.image[0] : (ld.image && ld.image.url))
-  ];
-  const inner = [...h.matchAll(/<img[^>]+?(?:data-src|data-original|data-echo|src)\s*=\s*["']([^"']+)["']/gi)]
-    .map((x) => x[1]).slice(0, 14);
-
-  const images = [];
-  for (const u of raw.concat(inner)) {
-    const a = absUrl(u, base);
-    if (!a) continue;
-    if (/logo|avatar|icon|qrcode|erweima|blank|spacer|pixel|1x1|sprite|emoji|placeholder/i.test(a)) continue;
-    if (/\/t\.(png|jpg|gif)$|\/default\.(png|jpg)$|\/loading[^/]*\.(gif|png)$/i.test(a)) continue;
-    if (/\.(svg|ico)(\?|$)/i.test(a)) continue;
-    /* 百度把图标、箭头都做成 gips 图，带 size=f54_54 / f186_48 这种小尺寸 */
-    const small = a.match(/[?&]size=f(\d+)_(\d+)/);
-    if (small && Number(small[1]) < 320) continue;
-    /* 同一张图常被 CDN 用两个域名各给一份，按文件名去重 */
-    var baseName = a.split('?')[0].split('/').pop().toLowerCase();
-    if (images.indexOf(a) < 0 && !images.some(function (x) { return x.split('?')[0].split('/').pop().toLowerCase() === baseName; })) {
-      images.push(a);
-    }
-    if (images.length >= 8) break;
-  }
-
-  const titlePlain = tidyText(stripTags(title)).slice(0, 120);
-
-  /* 百度搜索页：标题尾巴挂「 - 百度」，描述是「来自百度的搜索结果」，都不能直接用；
-     真正的摘要和来源（新华社这类）藏在内嵌 JSON 的 summary / sourceList 里 */
-  const isBaiduSearch = /(^|\.)baidu\.com$/i.test(target.hostname) && /^\/s\b/.test(target.pathname);
-  let titleOut = titlePlain;
-  let descOut = tidyText(stripTags(desc)).slice(0, 260);
-  let authorOut = String(author || '').trim().slice(0, 40);
-  if (isBaiduSearch) {
-    titleOut = titlePlain.replace(/\s*[-_|]\s*百度.*$/i, '').trim() || titlePlain;
-    const sum = (h.match(/"summary"\s*:\s*"((?:[^"\\]|\\.)*)"/) || [])[1];
-    if (sum) descOut = tidyText(sum.replace(/\\"/g, '"').replace(/\\\//g, '/')).slice(0, 260);
-    else if (/^来自百度的搜索结果$/.test(descOut)) descOut = '';
-    if (!authorOut) {
-      const src = (h.match(/"sourceList"\s*:\s*\[\s*\{\s*"text"\s*:\s*"([^"]+)"/) || [])[1];
-      if (src) authorOut = String(src).trim();
-    }
-  }
-
-  return {
-    title: titleOut,
-    desc: descOut,
-    site: String(site || '').slice(0, 40),
-    author: authorOut,
-    published,
-    section: String(section || '').slice(0, 20),
-    category: classify(titleOut, [descOut, keywords.join(' '), section].join(' '), SOURCE_CAT[srcId] || ''),
-    keywords,
-    images,
-    head: pickHead(images)
-  };
+  const err = new Error(lastErr || '解析失败');
+  err.title = title;
+  throw err;
 }
 
 async function metaFor(url, srcId) {

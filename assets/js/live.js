@@ -151,6 +151,7 @@ window.WJLive = (function () {
     if (!d.ok) {
       var e = new Error(d.error || '解析失败');
       e.code = d.code || '';
+      e.title = d.title || '';
       throw e;
     }
     var text = String(d.text || '');
@@ -452,11 +453,10 @@ window.WJLive = (function () {
   /* 公共代理只当最后的兜底。公开服务这两年收缩得很厉害，能通的越来越少，
      所以主力必须是自己的服务端（云端实例 / 自建 Worker / VPS）。
      每条通道单独限时，失败不影响下一条；全部失败时把每条的原因摊开给用户看 */
-  var PROXIES = [
-    { id: 'codetabs', label: '公共代理 1', wrap: function (u) { return 'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(u); } },
-    { id: 'allorigins', label: '公共代理 2', wrap: function (u) { return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u); } },
-    { id: 'jina', label: '阅读器', wrap: function (u) { return 'https://r.jina.ai/' + u; }, text: true }
-  ];
+  /* 2026-11 实测：codetabs / allorigins / r.jina.ai 三个都在国内直接超时（沙盒与手机都一样），
+     留在链路里只会让一次失败拖到 22 秒，还把「通道全挂」的锅甩给用户。
+     所以默认清空。真要加，只加自己部署过的、确认能在手机上通的地址。 */
+  var PROXIES = [];
 
   /* 把底层错误翻译成人话：502 是解析服务掉线，abort 是超时，Failed to fetch 多半被网络拦了 */
   function errMsg(e) {
@@ -472,7 +472,7 @@ window.WJLive = (function () {
   /* 所有通道同时开跑，谁先拿到合格正文就用谁；其余继续跑完也不会影响结果 */
   function firstSuccess(tasks, budget) {
     return new Promise(function (resolve, reject) {
-      var left = tasks.length, done = false, errs = [];
+      var left = tasks.length, done = false, errs = [], hint = '';
       if (!left) return reject(new Error('没有可用的解析通道'));
       var timer = setTimeout(function () {
         if (done) return;
@@ -491,11 +491,13 @@ window.WJLive = (function () {
             resolve({ data: r, task: t });
           })
           .catch(function (err) {
+            if (err && err.title && !hint) hint = err.title;
             errs.push(t.label + '：' + (err && err.status >= 500 ? 'HTTP ' + err.status + ' ' : '') + errMsg(err));
             if (--left === 0 && !done) {
               done = true; clearTimeout(timer);
               var e = new Error('所有通道都没成功');
               e.detail = errs.join('\n');
+              e.title = hint;
               reject(e);
             }
           });
@@ -627,17 +629,32 @@ window.WJLive = (function () {
     }
 
     var tasks = [];
+    var bases = parseBases();
 
-    var same = await hasServer();
-    if (same) {
-      tasks.push({ label: '站内服务', via: 'server', run: function () {
-        return callBase('', url, minLen, 18000, titleHint).then(function (r) { return r; });
-      } });
+    /* 连不上过一次的地址，先记 30 分钟别再等它。
+       国内直连 workers.dev 基本必超时，每次失败都花 18 秒等一个注定不通的地址，是最伤的体验。 */
+    function deadMap() {
+      try { var m = JSON.parse(localStorage.getItem('wj.base.dead') || '{}'); return (m && typeof m === 'object') ? m : {}; } catch (e) { return {}; }
+    }
+    function baseKey(b) { return hostOf(b) || b; }
+    function isDead(b) { var t = deadMap()[baseKey(b)]; return !!(t && Date.now() - t < 18e5); }
+    function markBase(b, dead) {
+      try {
+        var m = deadMap();
+        if (dead) m[baseKey(b)] = Date.now(); else delete m[baseKey(b)];
+        localStorage.setItem('wj.base.dead', JSON.stringify(m));
+      } catch (e) { /* ignore */ }
     }
 
-    parseBases().forEach(function (b) {
+    var spare = [];
+    bases.forEach(function (b) {
+      if (isDead(b)) { spare.push(b); return; }
       tasks.push({ label: hostOf(b) || '解析服务', via: 'cloud', run: function () {
-        return viaServer(b, hostOf(b) || '解析服务')().then(function (x) { return x.data; });
+        return callBase(b, url, minLen, 9000, titleHint).then(
+          function (r) { markBase(b, false); return r; },
+          /* 只有网络层失败（超时/连不上）才记「不通」；业务失败说明服务是活的 */
+          function (e) { if (!(e && e.status) && !(e && e.code)) markBase(b, true); throw e; }
+        );
       } });
     });
 
@@ -669,32 +686,35 @@ window.WJLive = (function () {
 
     if (onStep) onStep('并发请求 ' + tasks.length + ' 条通道', 1, 1);
 
-    async function attempt(list) {
-      var win = await firstSuccess(list || tasks, 22000);
+    async function attempt(list, budget) {
+      var win = await firstSuccess(list, budget || 20000);
       return shape(win.data, win.task.via);
     }
 
-    /* 云端实例睡觉或重启时会回 502，唤醒通常要几秒，给两次退避重试 */
     var serverOnly = tasks.filter(function (t) { return t.via === 'cloud' || t.via === 'server'; });
-    var waits = [2500, 7000];
 
-    for (var round = 0; ; round++) {
-      try {
-        /* 第二轮起只跑服务端通道：公共代理刚才已经证明不通，没必要再等 */
-        return await attempt(round === 0 ? tasks : serverOnly);
-      } catch (e) {
-        var lost = /HTTP 5\d\d/.test(String((e && e.detail) || ''));
-        if (lost && round < waits.length && serverOnly.length) {
-          if (onStep) onStep('解析服务正在唤醒，稍等重试', 1, 1);
-          await new Promise(function (r) { setTimeout(r, waits[round]); });
-          continue;
-        }
-        var err = new Error('所有解析通道都没成功');
-        err.detail = (e && e.detail) || (e && e.message);
-        err.url = url;
-        err.kind = urlKind(url);
-        throw err;
+    try {
+      return await attempt(tasks, 20000);
+    } catch (e0) {
+      /* 被标记「不通」的地址再给一次机会：可能刚换了网络 */
+      if (spare.length) {
+        var retryList = spare.map(function (b) {
+          return { label: hostOf(b) || '解析服务', via: 'cloud', run: function () { return callBase(b, url, minLen, 8000, titleHint); } };
+        });
+        try { return await attempt(retryList, 9000); } catch (e1) { /* 继续 */ }
       }
+      /* 云端实例睡觉或重启时会回 5xx，唤醒通常要几秒 */
+      if (/HTTP 5\d\d/.test(String((e0 && e0.detail) || '')) && serverOnly.length) {
+        if (onStep) onStep('解析服务正在唤醒，稍等重试', 1, 1);
+        await new Promise(function (r) { setTimeout(r, 2500); });
+        try { return await attempt(serverOnly, 20000); } catch (e2) { e0 = e2; }
+      }
+      var err = new Error('这个链接没取到正文');
+      err.detail = (e0 && e0.detail) || (e0 && e0.message);
+      err.title = (e0 && e0.title) || titleHint;
+      err.url = url;
+      err.kind = urlKind(url);
+      throw err;
     }
   }
 
