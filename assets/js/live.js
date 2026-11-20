@@ -1265,9 +1265,7 @@ window.WJLive = (function () {
   /* 真出一张小图才算「可用」：接口收下 200 但返回空图的情况太常见了 */
   async function probeImage(cfg, model) {
     var base = normBase(cfg.base);
-    if (VISION_RE.test(String(model).toLowerCase())) {
-      return { status: 'missing', why: '这是识图模型，不能出图' };
-    }
+    var looksVision = VISION_RE.test(String(model).toLowerCase());
     var t0 = Date.now();
     try {
       var url = await genImage({ base: base, key: cfg.key, model: model }, 'a single red apple on a white table, product photo', '1024x1024');
@@ -1275,7 +1273,9 @@ window.WJLive = (function () {
       return { status: 'ok', why: '实测出图成功 · ' + ((Date.now() - t0) / 1000).toFixed(1) + 's' };
     } catch (e) {
       var w = whyFail(e.status, e.message);
-      return { status: w === 'missing' || w === 'paid' || w === 'auth' ? w : 'error', why: String(e.message || '出图失败').slice(0, 120) };
+      var why = String(e.message || '出图失败').slice(0, 120);
+      if (looksVision && w !== 'auth' && w !== 'paid') why = '名字是识图模型，真画也画不出来：' + why;
+      return { status: w === 'missing' || w === 'paid' || w === 'auth' ? w : 'error', why: why };
     }
   }
 
@@ -1350,7 +1350,7 @@ window.WJLive = (function () {
     var errs = [];
     for (var i = 0; i < list.length; i++) {
       var p = list[i];
-      if (!p.imageModel || VISION_RE.test(String(p.imageModel).toLowerCase())) continue;
+      if (!p.imageModel) continue;
       try {
         var url = await genImage({ base: p.base, key: p.key, model: p.imageModel }, prompt, size);
         return { url: url, provider: p, model: p.imageModel };
@@ -1399,19 +1399,22 @@ window.WJLive = (function () {
 
   async function genImage(cfg, prompt, size) {
     var base = normBase(cfg.base);
-    var body = { model: cfg.model, prompt: prompt, n: 1, size: size || '1024x1024' };
-    var d;
-    try {
-      d = await llmJSON(base, '/images/generations', { key: cfg.key, ms: 150000, body: body });
-    } catch (e) {
-      /* 有的厂商不认 size 或 n，去掉再试一次，别因为一个可选参数判死 */
-      if (e.status === 400) {
-        d = await llmJSON(base, '/images/generations', {
-          key: cfg.key, ms: 150000,
-          body: { model: cfg.model, prompt: prompt }
-        });
-      } else { throw e; }
+    /* 各家认的尺寸不一样（智谱只认 1024x1024 / 864x1152 / 1344x768…，DALL·E 只认三档），
+       所以按「想要的 → 方图 → 不传」三级降级，别因为一个尺寸参数整单失败。 */
+    var tries = [size || '1024x1024', '1024x1024', ''];
+    var d = null, lastErr = null;
+    for (var i = 0; i < tries.length; i++) {
+      var body = { model: cfg.model, prompt: prompt, n: 1 };
+      if (tries[i]) body.size = tries[i];
+      try {
+        d = await llmJSON(base, '/images/generations', { key: cfg.key, ms: 150000, body: body });
+        break;
+      } catch (e) {
+        lastErr = e;
+        if (e.status !== 400 && e.status !== 422) throw e;
+      }
     }
+    if (!d) throw lastErr || new Error('出图接口没有响应');
     var it = d && d.data && (Array.isArray(d.data) ? d.data[0] : d.data);
     if (!it) {
       var alt = d && (d.images && d.images[0]);

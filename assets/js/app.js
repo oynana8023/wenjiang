@@ -124,11 +124,14 @@
           m.status !== 'missing' && m.status !== 'paid' && m.status !== 'auth';
       })[0];
       var was = p.imageModel;
-      p.imageModel = cand ? cand.id : '';
-      p.imgNote = cand
-        ? '原来选的 ' + was + ' 是识图模型，出不了图，已换成 ' + cand.id
-        : '原来选的 ' + was + ' 是识图模型，出不了图，已清空';
-      fixed++;
+      if (cand) {
+        p.imageModel = cand.id;
+        p.imgNote = '原来选的 ' + was + ' 是识图模型，已换成 ' + cand.id;
+        fixed++;
+      } else {
+        /* 没有别的候选就先留着，出图时真画一次再定生死，别让用户直接没图可用 */
+        p.imgNote = was + ' 名字上看是识图模型，点生成会真画一次验证';
+      }
     });
     if (fixed) save();
     return fixed;
@@ -2905,12 +2908,14 @@
     var r = state.result;
     if (!r) return;
     var rawChain = providerChain('image');
-    var chain = rawChain.filter(function (p) { return !IMG_VISION_RE.test(p.imageModel || ''); });
+    /* 名字像识图模型的排到最后：正规厂商确实出不了，但聚合网关有时什么名字都能出，
+       所以不硬删，先让真·出图模型上，再给它一次机会。 */
+    var chain = rawChain.slice().sort(function (a, b) {
+      return (IMG_VISION_RE.test(a.imageModel || '') ? 1 : 0) - (IMG_VISION_RE.test(b.imageModel || '') ? 1 : 0);
+    });
     if (!chain.length) {
       if (state.resultTab !== 'images') { state.resultTab = 'images'; render('same'); }
-      toast(rawChain.length
-        ? '现在配的 ' + rawChain[0].imageModel + ' 是识图模型，出不了图；去「我的 → 出图模型」换一个'
-        : '没有可用的出图模型，先用下面的提示词去即梦/豆包出图', 4000);
+      toast('没有配置出图模型，先用下面的提示词去即梦/豆包出图', 4000);
       return;
     }
     var vs = E.visuals(r.body, { title: r.title, style: r.styleKey });

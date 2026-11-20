@@ -1118,8 +1118,8 @@ window.WJEngine = (function () {
 
   /* 三个画幅：尺寸直接给厂商，别让它自己裁 */
   var VIS_FRAME = [
-    { name: '封面 · 竖版', ratio: '3:4', size: '768x1024', cn: '主体位于画面下三分之二，上方留出干净空间', en: 'subject in the lower two thirds, clean empty space above', lens: '85mm 镜头，f/2.0，浅景深', lensEn: '85mm lens, f/2.0, shallow depth of field' },
-    { name: '头图 · 横版', ratio: '16:9', size: '1024x576', cn: '主体偏左，右侧留白', en: 'subject offset to the left with clean space on the right', lens: '35mm 镜头，f/2.8', lensEn: '35mm lens, f/2.8' },
+    { name: '封面 · 竖版', ratio: '3:4', size: '864x1152', cn: '主体位于画面下三分之二，上方留出干净空间', en: 'subject in the lower two thirds, clean empty space above', lens: '85mm 镜头，f/2.0，浅景深', lensEn: '85mm lens, f/2.0, shallow depth of field' },
+    { name: '头图 · 横版', ratio: '16:9', size: '1344x768', cn: '主体偏左，右侧留白', en: 'subject offset to the left with clean space on the right', lens: '35mm 镜头，f/2.8', lensEn: '35mm lens, f/2.8' },
     { name: '特写 · 方图', ratio: '1:1', size: '1024x1024', cn: '贴近主体的材质特写', en: 'close-up on the material and texture of the subject', lens: '100mm 微距，f/4', lensEn: '100mm macro, f/4' }
   ];
 

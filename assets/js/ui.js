@@ -584,13 +584,9 @@ window.WJUI = (function () {
   function images(state) {
     var r = state.result;
     var s = state.settings;
-    var imgProv = (s.providers || []).filter(function (p) {
-      if (!p.imageModel || !p.base || !p.key) return false;
-      /* 识图模型不能出图，别把它算进「可用」里 */
-      return !/(vision|-vl\b|4v\b|4o\b|glm-4v)/i.test(p.imageModel);
-    });
+    var imgProv = (s.providers || []).filter(function (p) { return p.imageModel && p.base && p.key; });
     var h = '<div class="sec-head mt-m"><div class="h2" style="font-size:15px">配图</div>' +
-      '<span class="sec-sub">' + (imgProv.length ? imgProv.length + ' 个出图模型可用' : '未配置出图模型') + '</span></div>';
+      '<span class="sec-sub">' + (imgProv.length ? imgProv.length + ' 个出图模型' : '未配置出图模型') + '</span></div>';
 
     /* 真实配图：能用原文的就别生成，至少保真 */
     if (r.cover) {
@@ -739,11 +735,13 @@ window.WJUI = (function () {
     var chatOn = null;
     for (var ci = 0; ci < ps.length; ci++) { if (ps[ci].model) { chatOn = ps[ci]; break; } }
     var imgN = 0;
-    var imgFix = '';
+    var imgFix = '', visN = 0;
     for (var ii = 0; ii < ps.length; ii++) {
       var pv = ps[ii];
-      /* 识图模型不能出图，不该计入「可出图」 */
-      if (pv.imageModel && !/(vision|-vl\b|4v\b|4o\b|glm-4v|omni)/i.test(pv.imageModel)) imgN++;
+      if (!pv.imageModel) continue;
+      /* 名字像识图模型的单列出来：能不能用要看真画一次的结果 */
+      if (/(vision|-vl\b|4v\b|4o\b|glm-4v|omni)/i.test(pv.imageModel)) visN++;
+      else imgN++;
       if (pv.imgNote) imgFix = pv.imgNote;
     }
     var chatName = chatOn ? (chatOn.model + (chatOn.name ? ' · ' + chatOn.name : '')) : '';
@@ -754,7 +752,7 @@ window.WJUI = (function () {
       '<span class="rt"><b>大模型配置</b><small>' + esc(chatName || '未选择模型，使用本机规则引擎') + '</small></span>' +
       '<span class="chev">' + ic('right', 15) + '</span></button>';
     h += '<button class="row" data-act="open-image-model"><span class="ri">' + ic('image', 15) + '</span>' +
-      '<span class="rt"><b>出图模型</b><small>' + esc(imgN ? imgN + ' 个模型可出图' : (imgFix ? '原配置是识图模型，需要重选' : '未配置，只用提示词方案')) + '</small></span>' +
+      '<span class="rt"><b>出图模型</b><small>' + esc(imgN ? imgN + ' 个模型可出图' : (visN ? visN + ' 个待验证（名字像识图模型）' : '未配置，只用提示词方案')) + '</small></span>' +
       '<span class="chev">' + ic('right', 15) + '</span></button>';
     h += '</div></div>';
 

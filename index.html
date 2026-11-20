@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- 文匠 AI · 单文件构建 2026-11-20T10:58:42.709Z · 源文件见 src/ 与 assets/ -->
+<!-- 文匠 AI · 单文件构建 2026-11-20T11:09:22.266Z · 源文件见 src/ 与 assets/ -->
 <html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="UTF-8">
@@ -4163,8 +4163,8 @@ window.WJEngine = (function () {
 
   /* 三个画幅：尺寸直接给厂商，别让它自己裁 */
   var VIS_FRAME = [
-    { name: '封面 · 竖版', ratio: '3:4', size: '768x1024', cn: '主体位于画面下三分之二，上方留出干净空间', en: 'subject in the lower two thirds, clean empty space above', lens: '85mm 镜头，f/2.0，浅景深', lensEn: '85mm lens, f/2.0, shallow depth of field' },
-    { name: '头图 · 横版', ratio: '16:9', size: '1024x576', cn: '主体偏左，右侧留白', en: 'subject offset to the left with clean space on the right', lens: '35mm 镜头，f/2.8', lensEn: '35mm lens, f/2.8' },
+    { name: '封面 · 竖版', ratio: '3:4', size: '864x1152', cn: '主体位于画面下三分之二，上方留出干净空间', en: 'subject in the lower two thirds, clean empty space above', lens: '85mm 镜头，f/2.0，浅景深', lensEn: '85mm lens, f/2.0, shallow depth of field' },
+    { name: '头图 · 横版', ratio: '16:9', size: '1344x768', cn: '主体偏左，右侧留白', en: 'subject offset to the left with clean space on the right', lens: '35mm 镜头，f/2.8', lensEn: '35mm lens, f/2.8' },
     { name: '特写 · 方图', ratio: '1:1', size: '1024x1024', cn: '贴近主体的材质特写', en: 'close-up on the material and texture of the subject', lens: '100mm 微距，f/4', lensEn: '100mm macro, f/4' }
   ];
 
@@ -5538,9 +5538,7 @@ window.WJLive = (function () {
   /* 真出一张小图才算「可用」：接口收下 200 但返回空图的情况太常见了 */
   async function probeImage(cfg, model) {
     var base = normBase(cfg.base);
-    if (VISION_RE.test(String(model).toLowerCase())) {
-      return { status: 'missing', why: '这是识图模型，不能出图' };
-    }
+    var looksVision = VISION_RE.test(String(model).toLowerCase());
     var t0 = Date.now();
     try {
       var url = await genImage({ base: base, key: cfg.key, model: model }, 'a single red apple on a white table, product photo', '1024x1024');
@@ -5548,7 +5546,9 @@ window.WJLive = (function () {
       return { status: 'ok', why: '实测出图成功 · ' + ((Date.now() - t0) / 1000).toFixed(1) + 's' };
     } catch (e) {
       var w = whyFail(e.status, e.message);
-      return { status: w === 'missing' || w === 'paid' || w === 'auth' ? w : 'error', why: String(e.message || '出图失败').slice(0, 120) };
+      var why = String(e.message || '出图失败').slice(0, 120);
+      if (looksVision && w !== 'auth' && w !== 'paid') why = '名字是识图模型，真画也画不出来：' + why;
+      return { status: w === 'missing' || w === 'paid' || w === 'auth' ? w : 'error', why: why };
     }
   }
 
@@ -5623,7 +5623,7 @@ window.WJLive = (function () {
     var errs = [];
     for (var i = 0; i < list.length; i++) {
       var p = list[i];
-      if (!p.imageModel || VISION_RE.test(String(p.imageModel).toLowerCase())) continue;
+      if (!p.imageModel) continue;
       try {
         var url = await genImage({ base: p.base, key: p.key, model: p.imageModel }, prompt, size);
         return { url: url, provider: p, model: p.imageModel };
@@ -5672,19 +5672,22 @@ window.WJLive = (function () {
 
   async function genImage(cfg, prompt, size) {
     var base = normBase(cfg.base);
-    var body = { model: cfg.model, prompt: prompt, n: 1, size: size || '1024x1024' };
-    var d;
-    try {
-      d = await llmJSON(base, '/images/generations', { key: cfg.key, ms: 150000, body: body });
-    } catch (e) {
-      /* 有的厂商不认 size 或 n，去掉再试一次，别因为一个可选参数判死 */
-      if (e.status === 400) {
-        d = await llmJSON(base, '/images/generations', {
-          key: cfg.key, ms: 150000,
-          body: { model: cfg.model, prompt: prompt }
-        });
-      } else { throw e; }
+    /* 各家认的尺寸不一样（智谱只认 1024x1024 / 864x1152 / 1344x768…，DALL·E 只认三档），
+       所以按「想要的 → 方图 → 不传」三级降级，别因为一个尺寸参数整单失败。 */
+    var tries = [size || '1024x1024', '1024x1024', ''];
+    var d = null, lastErr = null;
+    for (var i = 0; i < tries.length; i++) {
+      var body = { model: cfg.model, prompt: prompt, n: 1 };
+      if (tries[i]) body.size = tries[i];
+      try {
+        d = await llmJSON(base, '/images/generations', { key: cfg.key, ms: 150000, body: body });
+        break;
+      } catch (e) {
+        lastErr = e;
+        if (e.status !== 400 && e.status !== 422) throw e;
+      }
     }
+    if (!d) throw lastErr || new Error('出图接口没有响应');
     var it = d && d.data && (Array.isArray(d.data) ? d.data[0] : d.data);
     if (!it) {
       var alt = d && (d.images && d.images[0]);
@@ -6350,13 +6353,9 @@ window.WJUI = (function () {
   function images(state) {
     var r = state.result;
     var s = state.settings;
-    var imgProv = (s.providers || []).filter(function (p) {
-      if (!p.imageModel || !p.base || !p.key) return false;
-      /* 识图模型不能出图，别把它算进「可用」里 */
-      return !/(vision|-vl\b|4v\b|4o\b|glm-4v)/i.test(p.imageModel);
-    });
+    var imgProv = (s.providers || []).filter(function (p) { return p.imageModel && p.base && p.key; });
     var h = '<div class="sec-head mt-m"><div class="h2" style="font-size:15px">配图</div>' +
-      '<span class="sec-sub">' + (imgProv.length ? imgProv.length + ' 个出图模型可用' : '未配置出图模型') + '</span></div>';
+      '<span class="sec-sub">' + (imgProv.length ? imgProv.length + ' 个出图模型' : '未配置出图模型') + '</span></div>';
 
     /* 真实配图：能用原文的就别生成，至少保真 */
     if (r.cover) {
@@ -6505,11 +6504,13 @@ window.WJUI = (function () {
     var chatOn = null;
     for (var ci = 0; ci < ps.length; ci++) { if (ps[ci].model) { chatOn = ps[ci]; break; } }
     var imgN = 0;
-    var imgFix = '';
+    var imgFix = '', visN = 0;
     for (var ii = 0; ii < ps.length; ii++) {
       var pv = ps[ii];
-      /* 识图模型不能出图，不该计入「可出图」 */
-      if (pv.imageModel && !/(vision|-vl\b|4v\b|4o\b|glm-4v|omni)/i.test(pv.imageModel)) imgN++;
+      if (!pv.imageModel) continue;
+      /* 名字像识图模型的单列出来：能不能用要看真画一次的结果 */
+      if (/(vision|-vl\b|4v\b|4o\b|glm-4v|omni)/i.test(pv.imageModel)) visN++;
+      else imgN++;
       if (pv.imgNote) imgFix = pv.imgNote;
     }
     var chatName = chatOn ? (chatOn.model + (chatOn.name ? ' · ' + chatOn.name : '')) : '';
@@ -6520,7 +6521,7 @@ window.WJUI = (function () {
       '<span class="rt"><b>大模型配置</b><small>' + esc(chatName || '未选择模型，使用本机规则引擎') + '</small></span>' +
       '<span class="chev">' + ic('right', 15) + '</span></button>';
     h += '<button class="row" data-act="open-image-model"><span class="ri">' + ic('image', 15) + '</span>' +
-      '<span class="rt"><b>出图模型</b><small>' + esc(imgN ? imgN + ' 个模型可出图' : (imgFix ? '原配置是识图模型，需要重选' : '未配置，只用提示词方案')) + '</small></span>' +
+      '<span class="rt"><b>出图模型</b><small>' + esc(imgN ? imgN + ' 个模型可出图' : (visN ? visN + ' 个待验证（名字像识图模型）' : '未配置，只用提示词方案')) + '</small></span>' +
       '<span class="chev">' + ic('right', 15) + '</span></button>';
     h += '</div></div>';
 
@@ -6719,11 +6720,14 @@ window.WJUI = (function () {
           m.status !== 'missing' && m.status !== 'paid' && m.status !== 'auth';
       })[0];
       var was = p.imageModel;
-      p.imageModel = cand ? cand.id : '';
-      p.imgNote = cand
-        ? '原来选的 ' + was + ' 是识图模型，出不了图，已换成 ' + cand.id
-        : '原来选的 ' + was + ' 是识图模型，出不了图，已清空';
-      fixed++;
+      if (cand) {
+        p.imageModel = cand.id;
+        p.imgNote = '原来选的 ' + was + ' 是识图模型，已换成 ' + cand.id;
+        fixed++;
+      } else {
+        /* 没有别的候选就先留着，出图时真画一次再定生死，别让用户直接没图可用 */
+        p.imgNote = was + ' 名字上看是识图模型，点生成会真画一次验证';
+      }
     });
     if (fixed) save();
     return fixed;
@@ -9500,12 +9504,14 @@ window.WJUI = (function () {
     var r = state.result;
     if (!r) return;
     var rawChain = providerChain('image');
-    var chain = rawChain.filter(function (p) { return !IMG_VISION_RE.test(p.imageModel || ''); });
+    /* 名字像识图模型的排到最后：正规厂商确实出不了，但聚合网关有时什么名字都能出，
+       所以不硬删，先让真·出图模型上，再给它一次机会。 */
+    var chain = rawChain.slice().sort(function (a, b) {
+      return (IMG_VISION_RE.test(a.imageModel || '') ? 1 : 0) - (IMG_VISION_RE.test(b.imageModel || '') ? 1 : 0);
+    });
     if (!chain.length) {
       if (state.resultTab !== 'images') { state.resultTab = 'images'; render('same'); }
-      toast(rawChain.length
-        ? '现在配的 ' + rawChain[0].imageModel + ' 是识图模型，出不了图；去「我的 → 出图模型」换一个'
-        : '没有可用的出图模型，先用下面的提示词去即梦/豆包出图', 4000);
+      toast('没有配置出图模型，先用下面的提示词去即梦/豆包出图', 4000);
       return;
     }
     var vs = E.visuals(r.body, { title: r.title, style: r.styleKey });
