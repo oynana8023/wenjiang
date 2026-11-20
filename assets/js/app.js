@@ -34,7 +34,7 @@
     },
     hot: { bySrc: {}, active: 'weibo', loading: false, updatedAt: 0, okCount: 0 },
     compose: {
-      mode: 'link', link1: '', text1: '', text2: '',
+      mode: 'link', link1: '', text1: '', text2: '', titleOnly: false,
       style: 'news', strength: 2, platform: 'toutiao',
       extra: '', deai: true, faithful: true, adv: false, sourceTitle: '', sourceUrl: ''
     },
@@ -539,7 +539,9 @@
       return true;
     }
     if (c.mode === 'text') {
-      if (c.text1.trim().length < 30) { toast('还差一点，至少 30 字'); return false; }
+      /* 标题直写这条路，素材本来就只有一个标题，不能拿 30 字门槛把人拦回去 */
+      var low = c.titleOnly ? 6 : 30;
+      if (c.text1.trim().length < low) { toast(c.titleOnly ? '至少写几个字的主题' : '还差一点，至少 30 字'); return false; }
       return true;
     }
     if (c.text1.trim().length < 30 || c.text2.trim().length < 30) {
@@ -2012,15 +2014,16 @@
 
       /* 正文取不到时不要把人堵在死胡同：有标题就先按标题写，用户再补两句细节 */
       case 'title-write': {
-        var ht = String(btn.dataset.title || '').trim();
+        var ht = String(t.dataset.title || '').trim();
         closeSheet();
         state.compose.mode = 'text';
         state.compose.text1 = ht;
         state.compose.text2 = '';
         state.compose.sourceTitle = ht;
         state.compose.sourceNote = '只拿到标题，正文没取到';
+        state.compose.titleOnly = true;
         state.result = null;
-        render('push');
+        go('compose', { nav: 'push' });
         toast('先按标题写，补两句细节会更实');
         break;
       }
