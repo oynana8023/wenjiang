@@ -720,18 +720,213 @@ window.WJLive = (function () {
 
   /* ---------------- 模型 ---------------- */
 
+  /* 各家「OpenAI 兼容」地址并不都是 /v1：
+     智谱是 /api/paas/v4，阿里百炼是 /compatible-mode/v1，火山方舟是 /api/v3……
+     以前一律补 /v1，用户只填域名时请求必然 404，看起来就像「配好了却用不了」。 */
+  var BASE_FIX = [
+    { re: /(^|\.)(open\.)?bigmodel\.cn$/i, path: '/api/paas/v4' },
+    { re: /(^|\.)dashscope\.aliyuncs\.com$/i, path: '/compatible-mode/v1' },
+    { re: /(^|\.)integrate\.api\.nvidia\.com$/i, path: '/v1' },
+    { re: /(^|\.)openrouter\.ai$/i, path: '/api/v1' },
+    { re: /(^|\.)api\.groq\.com$/i, path: '/openai/v1' },
+    { re: /(^|\.)ark\.cn-beijing\.volces\.com$/i, path: '/api/v3' },
+    { re: /(^|\.)api\.together\.xyz$/i, path: '/v1' },
+    { re: /(^|\.)api\.fireworks\.ai$/i, path: '/inference/v1' }
+  ];
+
   function normBase(base) {
     var b = String(base || '').trim().replace(/\/+$/, '');
     if (!b) return '';
-    if (!/^https?:\/\//.test(b)) b = 'https://' + b;
-    if (!/\/v\d+$/.test(b) && !/\/v\d+\//.test(b)) b += '/v1';
-    return b;
+    if (!/^https?:\/\//i.test(b)) b = 'https://' + b;
+    var u;
+    try { u = new URL(b); } catch (e) { return b; }
+    var p = String(u.pathname || '').replace(/\/+$/, '');
+    if (!p || p === '/') {
+      for (var i = 0; i < BASE_FIX.length; i++) {
+        if (BASE_FIX[i].re.test(u.hostname)) { p = BASE_FIX[i].path; break; }
+      }
+    }
+    if (!p) p = '/v1';
+    else if (!/\/v\d+$/.test(p)) p += '/v1';
+    return u.origin + p;
   }
 
   function headers(key) {
-    var h = { 'Content-Type': 'application/json' };
+    var h = { 'Content-Type': 'application/json', Accept: 'application/json' };
     if (key) h.Authorization = 'Bearer ' + key;
     return h;
+  }
+
+  /* ---------------- 常用服务商预设 ---------------- */
+  var PRESETS = [
+    { key: 'zhipu', name: '智谱 GLM', base: 'https://open.bigmodel.cn/api/paas/v4', tip: 'glm-4-flash / glm-4v-flash 等免费模型' },
+    { key: 'deepseek', name: 'DeepSeek', base: 'https://api.deepseek.com/v1', tip: 'deepseek-chat 便宜、中文稳' },
+    { key: 'siliconflow', name: '硅基流动', base: 'https://api.siliconflow.cn/v1', tip: '聚合国产开源模型，有免费额度' },
+    { key: 'dashscope', name: '阿里百炼', base: 'https://dashscope.aliyuncs.com/compatible-mode/v1', tip: 'qwen 系列，新号有免费额度' },
+    { key: 'moonshot', name: 'Kimi', base: 'https://api.moonshot.cn/v1', tip: '长文压缩见长' },
+    { key: 'ark', name: '火山方舟', base: 'https://ark.cn-beijing.volces.com/api/v3', tip: '豆包，需填接入点 ID（ep- 开头）' },
+    { key: 'nvidia', name: 'NVIDIA NIM', base: 'https://integrate.api.nvidia.com/v1', tip: '免费额度，但浏览器不能直连，自动走中转' },
+    { key: 'openrouter', name: 'OpenRouter', base: 'https://openrouter.ai/api/v1', tip: '几百个模型，带 :free 的才是免费' },
+    { key: 'groq', name: 'Groq', base: 'https://api.groq.com/openai/v1', tip: '速度极快，有免费档' },
+    { key: 'openai', name: 'OpenAI', base: 'https://api.openai.com/v1', tip: '官方，需充值' },
+    { key: 'ollama', name: '本地 Ollama', base: 'http://localhost:11434/v1', tip: '电脑上跑，不用 Key' }
+  ];
+
+  /* ---------------- 跨域中转 ----------------
+     NVIDIA、部分厂商不给浏览器发 CORS 头，直连一定失败。
+     解析服务（云端实例 / 自建 Worker）已经是一个我们自己的转发器，
+     复用它的 /api/llm 把模型请求转一手，就不受厂商跨域策略限制了。 */
+  var RELAY_KEY = 'wj.llm.relay';
+  var DIRECT_KEY = 'wj.llm.direct';
+
+  function relayOverride() {
+    try { return String(localStorage.getItem(RELAY_KEY) || '').trim(); } catch (e) { return ''; }
+  }
+  function setRelayOverride(v) {
+    try {
+      if (v) localStorage.setItem(RELAY_KEY, String(v).trim());
+      else localStorage.removeItem(RELAY_KEY);
+    } catch (e) { /* ignore */ }
+  }
+
+  function directMap() {
+    try { return JSON.parse(localStorage.getItem(DIRECT_KEY) || '{}') || {}; } catch (e) { return {}; }
+  }
+  function directOk(host) {
+    var m = directMap();
+    return m[host] === 0 ? false : m[host] === 1 ? true : null;
+  }
+  function markDirect(host, ok) {
+    try {
+      var m = directMap();
+      m[host] = ok ? 1 : 0;
+      localStorage.setItem(DIRECT_KEY, JSON.stringify(m));
+    } catch (e) { /* ignore */ }
+  }
+
+  function relayList() {
+    var out = [];
+    var o = relayOverride();
+    if (o) out.push(normBase(o) === o ? o : o.replace(/\/+$/, ''));
+    /* 同源（node server.js 托管时零跨域）；纯静态托管上没有这个接口，跳过 */
+    if (!/\.github\.io$|\.pages\.dev$|\.netlify\.app$|\.vercel\.app$/i.test(location.hostname)) out.push('');
+    parseBases().forEach(function (b) { if (b && out.indexOf(b) < 0) out.push(b); });
+    return out;
+  }
+
+  function isNetErr(e) {
+    if (!e) return false;
+    if (e.name === 'AbortError') return true;
+    return /Failed to fetch|NetworkError|Load failed|network error|连不上/i.test(String(e.message || ''));
+  }
+
+  function isHttpUrl(s) { return /^https?:\/\//i.test(String(s || '')); }
+
+  function readLLMData(status, data, raw) {
+    var err = '';
+    if (data && typeof data === 'object') {
+      var e = data.error || data;
+      if (typeof e === 'string') err = e;
+      else err = e.message || e.msg || e.detail || '';
+      if (!err && data.message) err = data.message;
+      if (!err && data.code && data.code !== 200) err = '错误码 ' + data.code;
+    } else if (typeof data === 'string') {
+      err = data.slice(0, 200);
+    }
+    if (!err && !data && raw) err = String(raw).slice(0, 200);
+    return { status: status, ok: status >= 200 && status < 300, data: data, error: String(err || '') };
+  }
+
+  async function readLLMRes(r) {
+    var raw = '';
+    try { raw = await r.text(); } catch (e) { /* ignore */ }
+    var data = null;
+    try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = raw.slice(0, 400); }
+    return readLLMData(r.status, data, raw);
+  }
+
+  /* 一次模型请求：先直连，跨域失败自动换中转并记住结果 */
+  async function llmFetch(base, path, opts) {
+    opts = opts || {};
+    var b = normBase(base);
+    if (!b) throw new Error('先填 Base URL');
+    var host = hostOf(b);
+    var method = opts.method || 'POST';
+    var body = opts.body ? JSON.stringify(opts.body) : null;
+    var ms = opts.ms || 60000;
+    var lastErr = null;
+
+    if (directOk(host) !== false) {
+      var tk = timeout(ms);
+      try {
+        var r = await fetch(b + path, {
+          method: method,
+          signal: tk.signal,
+          headers: headers(opts.key),
+          body: body,
+          cache: 'no-store'
+        });
+        markDirect(host, true);
+        return await readLLMRes(r);
+      } catch (e) {
+        if (!isNetErr(e)) { markDirect(host, true); throw e; }
+        markDirect(host, false);
+        lastErr = e;
+      } finally {
+        tk.done();
+      }
+    }
+
+    var list = relayList();
+    for (var i = 0; i < list.length; i++) {
+      var rb = list[i];
+      var tk2 = timeout(ms + 8000);
+      try {
+        var url = apiUrl(rb, '/api/llm');
+        var rr = await fetch(url, {
+          method: 'POST',
+          signal: tk2.signal,
+          headers: { 'Content-Type': 'application/json' },
+          cache: 'no-store',
+          body: JSON.stringify({ base: b, path: path, method: method, key: opts.key || '', body: opts.body || null })
+        });
+        if (!rr.ok) { lastErr = new Error('中转 HTTP ' + rr.status); continue; }
+        var j = await rr.json();
+        if (j && j.ok === false && j.status == null) { lastErr = new Error(j.error || '中转失败'); continue; }
+        return readLLMData(j && j.status ? j.status : 200, j && j.data, '');
+      } catch (e) {
+        lastErr = e;
+      } finally {
+        tk2.done();
+      }
+    }
+    var msg = list.length ? '直连被跨域拦下，中转通道也没通' : ((lastErr && lastErr.message) || '模型接口连不上');
+    var err = new Error(msg);
+    err.code = list.length ? 'RELAY_DOWN' : 'NET_DOWN';
+    err.relayTried = list.length;
+    err.detail = String((lastErr && lastErr.message) || '');
+    throw err;
+  }
+
+  async function llmJSON(base, path, opts) {
+    var r = await llmFetch(base, path, opts);
+    if (r.ok) return r.data;
+    var err = new Error(r.error || ('HTTP ' + r.status));
+    err.status = r.status;
+    err.data = r.data;
+    throw err;
+  }
+
+  /* 失败原因归类：缺模型 / 没权限 / 要付费 / 限流 / 超时 */
+  function whyFail(status, msg) {
+    var s = String(msg || '').toLowerCase();
+    if (status === 401 || /invalid.*(api.?key|token|key)|incorrect.*(key|token)|unauthor|authentication|令牌|鉴权|apikey|token expired/.test(s)) return 'auth';
+    if (/insufficient|balance|quota|credit|余额|额度|欠费|充值|billing|payment|subscription|付费|no permission|not allowed|无权|未开通|not activated/.test(s)) return 'paid';
+    if (status === 402 || status === 403) return 'paid';
+    if (status === 404 || /not found|does not exist|no such model|unknown model|invalid model|模型不存在|不存在的模型|不支持该模型|invalid.*model/.test(s)) return 'missing';
+    if (status === 429 || /rate.?limit|too many|限流|频繁|overloaded|busy|请求太频繁/.test(s)) return 'limited';
+    if (/timeout|timed out|aborted|超时/.test(s)) return 'slow';
+    return 'error';
   }
 
   var FAMILY = [
@@ -743,7 +938,7 @@ window.WJLive = (function () {
     { re: /deepseek.*r1|deepseek.*reason/i, name: 'DeepSeek R1', good: '中文推理与成本优势明显，适合结构化改写' },
     { re: /deepseek/i, name: 'DeepSeek', good: '中文语感好、价格低，适合批量改写' },
     { re: /qwen|通义/i, name: 'Qwen 系', good: '中文理解扎实，长文本与电商文案见长' },
-    { re: /glm|chatglm|智谱/i, name: 'GLM 系', good: '中文书面语规范，适合资讯与公文风格' },
+    { re: /glm|chatglm|cogview|智谱/i, name: 'GLM 系', good: '中文书面语规范，适合资讯与公文风格' },
     { re: /kimi|moonshot/i, name: 'Kimi', good: '长文档阅读与摘要，适合把长材料压缩成稿' },
     { re: /doubao|豆包|ep-202/i, name: '豆包', good: '中文口语化与短视频脚本自然' },
     { re: /ernie|文心/i, name: '文心', good: '中文资讯与营销文案，合规表达稳' },
@@ -756,71 +951,273 @@ window.WJLive = (function () {
     { re: /yi-|零一/i, name: 'Yi', good: '中英双语均衡' }
   ];
 
-  function annotate(id) {
+  /* 明显不是「文字对话」的模型，先在列表里剔掉，省得测几百个 */
+  var JUNK_RE = /(embed|rerank|bge[-_]|gte[-_]|moderation|guard|safety|detector|whisper|\btts\b|text-to-speech|speech|asr\b|transcribe|realtime|veo\b|sora\b|kling|ocr\b|nvclip|\bclip\b|reward|classifier|pii\b|deberta|minilm|arctic|nemoretriever|gliner|parler|\bbark\b|music|stable-audio|upscal|inpaint|controlnet|\bvae\b|tagger|sam2|depth|segment|translate|riva|calibration|synthetic|diffusion-xl-base)/i;
+  var IMG_RE = /(dall-e|gpt-image|image|flux|seedream|kolors|cogview|sd-?xl|sd3|imagen|wanx|t2i|stable-diffusion|midjourney|paint|t2i)/i;
+
+  /* 厂商 /models 偶尔漏掉的免费型号，先摆进来，标成「待验证」，
+     点一次测试就知道真伪，不会凭空当成可用。 */
+  var KNOWN_FREE = {
+    'open.bigmodel.cn': [
+      { id: 'glm-4-flash', kind: 'chat' },
+      { id: 'glm-4-flash-250414', kind: 'chat' },
+      { id: 'glm-4v-flash', kind: 'chat' },
+      { id: 'glm-4.5-flash', kind: 'chat' },
+      { id: 'glm-z1-flash', kind: 'chat' },
+      { id: 'cogview-3-flash', kind: 'image' }
+    ]
+  };
+
+  function annotate(id, meta) {
     var s = String(id).toLowerCase();
+    meta = meta || {};
     var tags = [];
     var kind = 'chat';
 
-    if (/embed|rerank|bge|gte|text-embedding|moderation/.test(s)) kind = 'other';
-    if (/(tts|whisper|audio|speech|asr|veo|sora|video)/.test(s)) kind = 'other';
+    if (JUNK_RE.test(s)) kind = 'other';
+    if (meta.outImage || IMG_RE.test(s)) { kind = 'image'; tags.push('image'); }
 
-    var isImage = /(dall-e|gpt-image|image|flux|seedream|kolors|cogview|sd-?xl|imagen|wanx|t2i|stable-diffusion|midjourney|pic|paint)/.test(s);
-    if (isImage) { kind = 'image'; tags.push('image'); }
-
-    if (/(vision|vl|-v\b|4o|4\.1|omni|claude-3|claude-4|claude-sonnet|claude-opus|gemini|glm-4v|qwen-vl|pixtral|internvl|step-1v|grok-vision)/.test(s)) tags.push('vision');
-    if (/(^|[-_/])(o1|o3|o4)|r1|reasoner|thinking|qwq|reason/.test(s)) tags.push('reason');
-    if (/(mini|nano|flash|turbo|lite|haiku|small|air|speed|8b|7b|3b)/.test(s)) tags.push('fast');
-    if (/(32b|70b|72b|110b|235b|405b|large|max|pro|opus|4\.5|sonnet|plus)/.test(s)) tags.push('heavy');
+    if (/(vision|vl\b|-v\b|4o|4\.1|omni|claude-3|claude-4|claude-sonnet|claude-opus|gemini|glm-4v|qwen-vl|pixtral|internvl|step-1v|grok-vision|nemotron.*vl|super-vl)/.test(s)) tags.push('vision');
+    if (/(^|[-_/])(o1|o3|o4|o5)|r1\b|reasoner|thinking|qwq|reason/.test(s)) tags.push('reason');
+    if (/(mini|nano|flash|turbo|lite|haiku|small|air|speed|8b|7b|3b|4b|lightning|bolt)/.test(s)) tags.push('fast');
+    if (/(32b|70b|72b|110b|235b|405b|550b|large|max|pro\b|opus|4\.5|sonnet|plus|ultra)/.test(s)) tags.push('heavy');
+    if (meta.free) tags.push('free');
 
     var fam = null;
     for (var i = 0; i < FAMILY.length; i++) {
       if (FAMILY[i].re.test(id)) { fam = FAMILY[i]; break; }
     }
-    var good = fam ? fam.good : '通用对话模型，可尝试用于改写';
+    var good = fam ? fam.good : '可尝试用于改写，先测一下再当主力';
     if (kind === 'image') good = '文生图模型，可直接为稿子配图';
-    if (kind === 'other') good = '非对话模型，不能用于文字改写';
+    if (kind === 'other') {
+      tags = [];
+      fam = null;
+      good = '向量 / 重排 / 语音 / 审核类，不能用来改写';
+    }
 
-    return { kind: kind, tags: tags, family: fam ? fam.name : '通用', good: good };
+    var family = kind === 'other' ? '非对话' : (fam ? fam.name : (kind === 'image' ? '文生图' : '通用'));
+    return { kind: kind, tags: tags, family: family, good: good };
+  }
+
+  /* 排序分：免费、中文友好、已知能打排前面，自动选默认值时不再瞎挑 */
+  function rankOf(m) {
+    var s = 0;
+    if (m.kind === 'chat') s += 20;
+    if (m.kind === 'image') s += 10;
+    if (m.free) s += 12;
+    if (/gpt-4o|gpt-4\.1|gpt-5|claude.*sonnet|deepseek-chat|glm-4\.5|glm-4-flash|qwen-plus|qwen-max|qwen3|kimi|moonshot|gemini-2|doubao|hunyuan|ernie/.test(String(m.id).toLowerCase())) s += 8;
+    if ((m.tags || []).indexOf('heavy') > -1) s += 3;
+    if (/(preview|experimental|beta|alpha|deprecated|legacy)/.test(String(m.id).toLowerCase())) s -= 4;
+    if (/guard|detector|safety|censor/.test(String(m.id).toLowerCase())) s -= 20;
+    return s;
+  }
+
+  function pickArr(d) {
+    if (Array.isArray(d)) return d;
+    if (d && Array.isArray(d.data)) return d.data;
+    if (d && Array.isArray(d.models)) return d.models;
+    if (d && d.data && Array.isArray(d.data.models)) return d.data.models;
+    if (d && d.data && Array.isArray(d.data.data)) return d.data.data;
+    if (d && d.result && Array.isArray(d.result.data)) return d.result.data;
+    return [];
   }
 
   async function listModels(cfg) {
     var base = normBase(cfg.base);
     if (!base) throw new Error('先填写 Base URL');
-    var d = await getJSON(base + '/models', 12000, { headers: headers(cfg.key) });
-    var arr = (d && (d.data || d.models)) || [];
-    var out = [];
+    var d = null, firstErr = null;
+    try {
+      d = await llmJSON(base, '/models', { method: 'GET', key: cfg.key, ms: 20000 });
+    } catch (e) {
+      firstErr = e;
+    }
+    var arr = d ? pickArr(d) : [];
+    var out = [], seen = {};
+
     for (var i = 0; i < arr.length; i++) {
-      var id = typeof arr[i] === 'string' ? arr[i] : arr[i].id || arr[i].name;
-      if (!id) continue;
-      var a = annotate(id);
+      var raw = arr[i];
+      var id = typeof raw === 'string' ? raw : (raw.id || raw.model || raw.name || '');
+      if (!id || seen[id]) continue;
+      seen[id] = 1;
+      var price = raw && raw.pricing && (raw.pricing.prompt != null ? raw.pricing.prompt : raw.pricing.input);
+      var free = (price != null && Number(price) === 0) || /:free$/i.test(id) || raw.free === true;
+      var outMod = raw && raw.architecture && raw.architecture.output_modalities;
+      var a = annotate(id, { free: free, outImage: Array.isArray(outMod) && outMod.indexOf('image') > -1 });
       out.push({
         id: id,
         kind: a.kind,
         tags: a.tags,
         family: a.family,
         good: a.good,
-        owned: (arr[i] && arr[i].owned_by) || ''
+        free: !!free,
+        owned: (raw && (raw.owned_by || raw.owned)) || '',
+        status: ''
       });
     }
-    if (!out.length) throw new Error('接口没有返回模型列表');
+
+    /* /models 401/403 = Key 本身有问题，摆预设型号只会误导；
+       超时、网络错也一样如实上报。只有 404（这家没有 /models）才用内置型号兜底。 */
+    if (!arr.length && firstErr && firstErr.status !== 404) throw firstErr;
+
+    /* 厂商列表漏掉的已知免费型号补进来（智谱的 flash 系列经常不返回） */
+    var extra = KNOWN_FREE[hostOf(base)] || [];
+    for (var k = 0; k < extra.length; k++) {
+      if (seen[extra[k].id]) continue;
+      seen[extra[k].id] = 1;
+      var a2 = annotate(extra[k].id, { free: true, outImage: extra[k].kind === 'image' });
+      out.push({
+        id: extra[k].id, kind: a2.kind, tags: a2.tags, family: a2.family,
+        good: a2.good, free: true, owned: '', status: '', preset: true
+      });
+    }
+
+    if (!out.length) {
+      var msg = (firstErr && (firstErr.message || firstErr)) || '接口没有返回模型列表';
+      if (/Failed to fetch|NetworkError|Load failed/i.test(String(msg))) {
+        msg = '浏览器直连被拦（跨域），中转也没走通。检查 Key、地址，或到「解析服务」里填一个能用的中转地址。';
+      }
+      throw new Error(msg);
+    }
+
     out.sort(function (a, b) {
-      var rank = function (m) { return m.kind === 'chat' ? 0 : m.kind === 'image' ? 1 : 2; };
-      return rank(a) - rank(b) || a.id.localeCompare(b.id);
+      var rk = function (m) { return m.kind === 'chat' ? 0 : m.kind === 'image' ? 1 : 2; };
+      return rk(a) - rk(b) || rankOf(b) - rankOf(a) || a.id.localeCompare(b.id);
     });
     return out;
   }
 
+  function bestChat(models, exclude) {
+    var best = null, bs = -1e9;
+    (models || []).forEach(function (m) {
+      if (m.kind !== 'chat' || m.status === 'missing' || m.status === 'paid' || m.status === 'auth') return;
+      if (exclude && exclude.indexOf(m.id) > -1) return;
+      var s = rankOf(m) + (m.status === 'ok' ? 100 : 0);
+      if (s > bs) { bs = s; best = m; }
+    });
+    return best;
+  }
+
+  function bestImage(models) {
+    var best = null, bs = -1e9;
+    (models || []).forEach(function (m) {
+      if (m.kind !== 'image' || m.status === 'missing' || m.status === 'paid') return;
+      var s = rankOf(m) + (m.status === 'ok' ? 100 : 0);
+      if (s > bs) { bs = s; best = m; }
+    });
+    return best;
+  }
+
+  /* 并发池：一次测几个，别把免费额度打爆，也别让用户干等 */
+  async function pool(items, n, fn, onTick) {
+    var i = 0, done = 0, total = items.length;
+    async function run() {
+      while (i < total) {
+        var idx = i++;
+        await fn(items[idx], idx);
+        done++;
+        if (onTick) onTick(done, total, items[idx]);
+      }
+    }
+    var arr = [];
+    for (var k = 0; k < Math.min(n, total); k++) arr.push(run());
+    await Promise.all(arr);
+    return done;
+  }
+
+  /* 真发一条极短的对话，通了才算可用。
+     只测文字模型；出图的另走 probeImage（不会真出图）。 */
+  async function probeModels(cfg, models, opts) {
+    opts = opts || {};
+    var base = normBase(cfg.base);
+    var list = (models || []).filter(function (m) { return m.kind === 'chat'; });
+    if (opts.limit) list = list.slice(0, opts.limit);
+    var stat = { ok: 0, paid: 0, missing: 0, auth: 0, limited: 0, slow: 0, error: 0, total: list.length };
+    if (!list.length) return stat;
+    var touched = [];
+
+    await pool(list, opts.conc || 4, async function (m) {
+      touched.push(m);
+      if (opts.stop && opts.stop()) return;
+      try {
+        var d;
+        try {
+          d = await llmJSON(base, '/chat/completions', {
+            key: cfg.key,
+            ms: opts.ms || 20000,
+            body: {
+              model: m.id,
+              messages: [{ role: 'user', content: '在吗' }],
+              max_tokens: 4,
+              temperature: 0.1,
+              stream: false
+            }
+          });
+        } catch (e1) {
+          /* o 系列 / gpt-5 不收 max_tokens 和 temperature，换个写法再试一次 */
+          if (!(e1.status === 400 && /max_tokens|max_completion|temperature|unsupported|parameter/i.test(e1.message || ''))) throw e1;
+          d = await llmJSON(base, '/chat/completions', {
+            key: cfg.key,
+            ms: opts.ms || 20000,
+            body: { model: m.id, messages: [{ role: 'user', content: '在吗' }] }
+          });
+        }
+        var txt = d && d.choices && d.choices[0] && (d.choices[0].message || {}).content;
+        m.status = 'ok';
+        m.why = '';
+        m.said = String(txt || '').trim().slice(0, 24);
+        stat.ok++;
+      } catch (e) {
+        var w = whyFail(e.status, e.message);
+        m.status = w;
+        m.why = String(e.message || '').slice(0, 120);
+        stat[w] = (stat[w] || 0) + 1;
+      }
+    }, function (done, total, m) {
+      if (opts.onTick) opts.onTick(done, total, m, stat);
+    });
+
+    if (stat.auth >= Math.max(1, Math.ceil(stat.total * 0.6))) {
+      /* 整批都 401 = Key 的问题，不是模型的问题。把刚才打的「Key 无效」擦掉，
+         免得用户补好 Key 之后这些模型还一直挂着红标。 */
+      touched.forEach(function (m) {
+        if (m.status === 'auth') { m.status = ''; m.why = ''; }
+      });
+      var ae = new Error('Key 没通过验证（' + stat.auth + '/' + stat.total + ' 个模型都返回 401/403）');
+      ae.code = 'AUTH';
+      throw ae;
+    }
+    return stat;
+  }
+
+  /* 出图模型：发一个空 prompt，模型存在会回「prompt 不能为空」，不存在才会回 model not found。
+     这样既能判断有没有权限，又不会真的生成图片扣钱。 */
+  async function probeImage(cfg, model) {
+    var base = normBase(cfg.base);
+    try {
+      await llmJSON(base, '/images/generations', {
+        key: cfg.key,
+        ms: 25000,
+        body: { model: model, prompt: '', n: 1 }
+      });
+      return { status: 'ok', why: '接口接受该模型' };
+    } catch (e) {
+      var w = whyFail(e.status, e.message);
+      return { status: w === 'missing' || w === 'paid' || w === 'auth' ? w : 'ok', why: String(e.message || '').slice(0, 120) };
+    }
+  }
+
   async function testModel(cfg, model) {
     var base = normBase(cfg.base);
-    var d = await getJSON(base + '/chat/completions', 30000, {
-      method: 'POST',
-      headers: headers(cfg.key),
-      body: JSON.stringify({
+    var d = await llmJSON(base, '/chat/completions', {
+      key: cfg.key,
+      ms: 40000,
+      body: {
         model: model || cfg.model,
         messages: [{ role: 'user', content: '回复两个字：可用' }],
         max_tokens: 16,
+        temperature: 0.1,
         stream: false
-      })
+      }
     });
     var txt = d && d.choices && d.choices[0] && (d.choices[0].message || {}).content;
     return { ok: true, text: String(txt || '').trim() || '已连通', usage: d.usage || null };
@@ -839,8 +1236,9 @@ window.WJLive = (function () {
         return { text: txt, provider: p, model: p.model, switched: i > 0, from: i };
       } catch (e) {
         var msg = (e && e.message) || '调用失败';
-        if (/HTTP 40[13]/.test(msg)) msg += '（Key 无效或没权限）';
-        if (/HTTP 429/.test(msg)) msg += '（触发限流）';
+        if (e && (e.status === 401 || e.status === 403)) msg += '（Key 无效或没权限）';
+        if (e && e.status === 429) msg += '（触发限流）';
+        if (e && (e.status === 402 || /balance|quota|余额/i.test(msg))) msg += '（余额不足）';
         errs.push((p.name || p.base) + '：' + msg);
       }
     }
@@ -867,17 +1265,33 @@ window.WJLive = (function () {
 
   async function chat(cfg, messages, opts) {
     var base = normBase(cfg.base);
-    var d = await getJSON(base + '/chat/completions', 90000, {
-      method: 'POST',
-      headers: headers(cfg.key),
-      body: JSON.stringify({
-        model: (opts && opts.model) || cfg.model,
-        messages: messages,
-        temperature: (opts && opts.temperature) != null ? opts.temperature : 0.8,
-        max_tokens: (opts && opts.maxTokens) || 2400,
-        stream: false
-      })
-    });
+    var model = (opts && opts.model) || cfg.model;
+    var d;
+    try {
+      d = await llmJSON(base, '/chat/completions', {
+        key: cfg.key,
+        ms: 90000,
+        body: {
+          model: model,
+          messages: messages,
+          temperature: (opts && opts.temperature) != null ? opts.temperature : 0.8,
+          max_tokens: (opts && opts.maxTokens) || 2400,
+          stream: false
+        }
+      });
+    } catch (e) {
+      /* 推理模型（o1/o3/gpt-5 一类）只认 max_completion_tokens */
+      if (!(e.status === 400 && /max_tokens|max_completion|temperature|unsupported|parameter/i.test(e.message || ''))) throw e;
+      d = await llmJSON(base, '/chat/completions', {
+        key: cfg.key,
+        ms: 120000,
+        body: {
+          model: model,
+          messages: messages,
+          max_completion_tokens: (opts && opts.maxTokens) || 2400
+        }
+      });
+    }
     var txt = d && d.choices && d.choices[0] && (d.choices[0].message || {}).content;
     if (!txt) throw new Error('模型没有返回内容');
     return String(txt);
@@ -885,21 +1299,25 @@ window.WJLive = (function () {
 
   async function genImage(cfg, prompt, size) {
     var base = normBase(cfg.base);
-    var d = await getJSON(base + '/images/generations', 120000, {
-      method: 'POST',
-      headers: headers(cfg.key),
-      body: JSON.stringify({
+    var d = await llmJSON(base, '/images/generations', {
+      key: cfg.key,
+      ms: 120000,
+      body: {
         model: cfg.model,
         prompt: prompt,
         n: 1,
-        size: size || '1024x1024',
-        response_format: 'b64_json'
-      })
+        size: size || '1024x1024'
+      }
     });
-    var it = d && d.data && d.data[0];
-    if (!it) throw new Error('接口没有返回图片');
+    var it = d && d.data && (Array.isArray(d.data) ? d.data[0] : d.data);
+    if (!it) {
+      var alt = d && (d.images && d.images[0]);
+      if (alt) return typeof alt === 'string' ? alt : (alt.url || ('data:image/png;base64,' + alt.b64_json));
+      throw new Error('接口没有返回图片');
+    }
     if (it.b64_json) return 'data:image/png;base64,' + it.b64_json;
     if (it.url) return it.url;
+    if (typeof it === 'string') return it;
     throw new Error('返回格式不认识');
   }
 
@@ -946,6 +1364,15 @@ window.WJLive = (function () {
     hasServer: hasServer,
     listModels: listModels,
     testModel: testModel,
+    probeModels: probeModels,
+    probeImage: probeImage,
+    bestChat: bestChat,
+    bestImage: bestImage,
+    rankOf: rankOf,
+    whyFail: whyFail,
+    presets: PRESETS,
+    relayOverride: relayOverride,
+    setRelayOverride: setRelayOverride,
     chat: chat,
     chatChain: chatChain,
     genImageChain: genImageChain,

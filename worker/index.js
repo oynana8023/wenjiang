@@ -14,7 +14,7 @@
  * 部署方式见 README「三分钟上线自己的解析服务」。
  */
 
-const VERSION = '3.2.0';
+const VERSION = '3.3.0';
 const MAX_BYTES = 12 * 1024 * 1024;
 const TEXT_LIMIT = 12000;
 const TIMEOUT = 13000;
@@ -698,9 +698,65 @@ async function coverFor(src, title) {
 
 /* ---------------- HTTP ---------------- */
 
+/* ---------------- 模型接口中转 ----------------
+   NVIDIA 等厂商不返回 CORS 头，浏览器直连必失败。
+   只放行模型接口的固定路径，并拒绝内网地址，避免变成任意代理。 */
+const LLM_PATHS = ['/models', '/chat/completions', '/images/generations', '/embeddings', '/responses', '/completions'];
+
+function isPrivateHost(h) {
+  const s = String(h || '').toLowerCase();
+  if (!s) return true;
+  if (/^(localhost|0\.0\.0\.0|\[?::1\]?)$/.test(s) || /\.local$|\.internal$/.test(s)) return true;
+  const m = s.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (!m) return false;
+  const a = +m[1], b = +m[2];
+  if (a === 10 || a === 127 || a === 0) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  return false;
+}
+
+async function relayLLM(request) {
+  let p;
+  try {
+    p = await request.json();
+  } catch (e) {
+    return json({ ok: false, error: '请求格式不对' });
+  }
+  let base;
+  try {
+    base = new URL(String(p.base || ''));
+  } catch (e) {
+    return json({ ok: false, error: 'Base URL 不是合法地址' });
+  }
+  if (!/^https?:$/.test(base.protocol)) return json({ ok: false, error: '只支持 http/https' });
+  if (isPrivateHost(base.hostname)) return json({ ok: false, error: '不允许访问内网地址' });
+  const pth = String(p.path || '');
+  if (LLM_PATHS.indexOf(pth) < 0) return json({ ok: false, error: '这个接口不支持中转' });
+
+  const target = base.origin + base.pathname.replace(/\/+$/, '') + pth;
+  const init = {
+    method: p.method === 'GET' ? 'GET' : 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' }
+  };
+  if (p.key) init.headers.Authorization = 'Bearer ' + p.key;
+  if (init.method === 'POST') init.body = JSON.stringify(p.body || {});
+  try {
+    const r = await fetch(target, init);
+    const text = await r.text();
+    let data;
+    try { data = JSON.parse(text); } catch (e) { data = { raw: text.slice(0, 2000) }; }
+    return json({ ok: true, status: r.status, data });
+  } catch (e) {
+    return json({ ok: false, error: (e && e.message) || '转发失败' });
+  }
+}
+
 const CORS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET,OPTIONS',
+  'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
   'Access-Control-Allow-Headers': '*',
   'Access-Control-Max-Age': '86400'
 };
@@ -729,7 +785,7 @@ const LANDING = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <h1>文匠解析服务 <span class="ok">运行中</span></h1>
 <p>把下面这个地址填进 App 的「我的 → 解析服务」即可：</p>
 <p><code id="u"></code></p>
-<p>接口：<code>GET /api/parse?url=</code> · <code>GET /api/meta?url=</code> · 健康检查 <code>GET /api/health</code></p>
+<p>接口：<code>GET /api/parse?url=</code> · <code>GET /api/meta?url=</code> · <code>POST /api/llm</code>（模型接口中转）· 健康检查 <code>GET /api/health</code></p>
 <p>把 <code>/api/health</code> 这段去掉，剩下的就是根地址。</p>
 <script>document.getElementById('u').textContent=location.origin;</script>
 </div></body></html>`;
@@ -741,13 +797,19 @@ export default {
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS });
     }
-    if (request.method !== 'GET' && request.method !== 'HEAD') {
-      return json({ ok: false, error: '只支持 GET' }, 405);
-    }
-
     const key = env && env.PARSE_KEY;
     if (key && url.searchParams.get('key') !== key && url.pathname.startsWith('/api/')) {
       return json({ ok: false, error: '缺少访问口令' }, 401);
+    }
+
+    /* 模型接口中转：按用户自己的 Key 代发，绕开厂商不给浏览器的 CORS 头 */
+    if (url.pathname === '/api/llm') {
+      if (request.method !== 'POST') return json({ ok: false, error: '只支持 POST' }, 405);
+      return relayLLM(request);
+    }
+
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return json({ ok: false, error: '只支持 GET' }, 405);
     }
 
     if (url.pathname === '/api/health') {

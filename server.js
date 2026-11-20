@@ -1080,7 +1080,102 @@ function readTarget(u) {
   }
 }
 
-function send(res, code, obj) {  const body = JSON.stringify(obj);
+/* ---------------- 模型接口中转 ----------------
+   NVIDIA 等厂商不给浏览器发 CORS 头，页面直连一定失败；智谱 / 百炼这类
+   地址规则又各不相同。这里按用户自己的 Key 代发一次，只放行模型接口的固定路径，
+   不碰内网地址，避免被当成任意代理。 */
+const LLM_PATHS = ['/models', '/chat/completions', '/images/generations', '/embeddings', '/responses', '/completions'];
+
+function isPrivateHost(h) {
+  const s = String(h || '').toLowerCase();
+  if (!s) return true;
+  if (/^(localhost|0\.0\.0\.0|\[?::1\]?)$/.test(s) || /\.local$|\.internal$/.test(s)) return true;
+  const m = s.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (!m) return false;
+  const a = +m[1], b = +m[2];
+  if (a === 10 || a === 127 || a === 0) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  return false;
+}
+
+function readBody(req, limit) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) {
+        reject(new Error('请求体过大'));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+const llmHits = new Map();
+function llmAllowed(ip) {
+  const now = Date.now();
+  const rec = llmHits.get(ip) || { n: 0, at: now };
+  if (now - rec.at > 60000) { rec.n = 0; rec.at = now; }
+  rec.n += 1;
+  llmHits.set(ip, rec);
+  if (llmHits.size > 2000) llmHits.clear();
+  return rec.n <= 300;
+}
+
+async function relayLLM(req, res, ip) {
+  if (!llmAllowed(ip)) return send(res, 200, { ok: false, error: '请求太频繁，歇一分钟再试' });
+  let p;
+  try {
+    p = JSON.parse((await readBody(req, 2 * 1024 * 1024)) || '{}');
+  } catch (e) {
+    return send(res, 200, { ok: false, error: '请求格式不对：' + e.message });
+  }
+  let base;
+  try {
+    base = new URL(String(p.base || ''));
+  } catch (e) {
+    return send(res, 200, { ok: false, error: 'Base URL 不是合法地址' });
+  }
+  if (!/^https?:$/.test(base.protocol)) return send(res, 200, { ok: false, error: '只支持 http/https' });
+  if (isPrivateHost(base.hostname)) return send(res, 200, { ok: false, error: '不允许访问内网地址' });
+  const pth = String(p.path || '');
+  if (LLM_PATHS.indexOf(pth) < 0) return send(res, 200, { ok: false, error: '这个接口不支持中转' });
+
+  const target = base.origin + base.pathname.replace(/\/+$/, '') + pth;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), pth === '/images/generations' ? 150000 : 100000);
+  try {
+    const init = {
+      method: p.method === 'GET' ? 'GET' : 'POST',
+      signal: ctrl.signal,
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' }
+    };
+    if (p.key) init.headers.Authorization = 'Bearer ' + p.key;
+    if (init.method === 'POST') init.body = JSON.stringify(p.body || {});
+    const r = await fetch(target, init);
+    const text = await r.text();
+    let data = null;
+    try { data = JSON.parse(text); } catch (e) { data = { raw: text.slice(0, 2000) }; }
+    return send(res, 200, { ok: true, status: r.status, data });
+  } catch (e) {
+    return send(res, 200, { ok: false, error: e.name === 'AbortError' ? '上游超时' : (e.message || '转发失败') });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* ---------------- 服务 ---------------- */
+
+function send(res, code, obj) {
+  const body = JSON.stringify(obj);
   res.writeHead(code, {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
@@ -1109,7 +1204,20 @@ const server = http.createServer(async (req, res) => {
 
   if (u.pathname.startsWith('/api/')) {
     try {
-      if (u.pathname === '/api/health') return send(res, 200, { ok: true, version: '3.2.0', runtime: 'node' });
+      if (u.pathname === '/api/health') return send(res, 200, { ok: true, version: '3.3.0', runtime: 'node' });
+      if (u.pathname === '/api/llm') {
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204, {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Content-Type',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS'
+          });
+          return res.end();
+        }
+        if (req.method !== 'POST') return send(res, 405, { ok: false, error: '只支持 POST' });
+        const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '';
+        return relayLLM(req, res, ip);
+      }
       if (u.pathname === '/api/hot') {
         const d = await getHot(u.searchParams.get('src') || 'all');
         return send(res, 200, d);
