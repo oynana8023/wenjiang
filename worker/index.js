@@ -265,13 +265,13 @@ async function baiduNews(title, limit) {
 }
 
 async function relatedParse(title) {
-  for (const q of newsQueries(title).slice(0, 3)) {
+  for (const q of newsQueries(title).slice(0, 4)) {
     let news = [];
     try { news = await bingSearch(q, 6); } catch (e) { news = []; }
     if (!news.length) {
       try { news = await baiduNews(q, 6); } catch (e) { news = []; }
     }
-    for (const n of news.slice(0, 3)) {
+    for (const n of news.slice(0, 4)) {
       if (skipHost(n.url)) continue;
       try {
         const { html } = await grab(new URL(n.url), UA_MOBILE);
