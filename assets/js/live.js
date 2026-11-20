@@ -750,9 +750,16 @@ window.WJLive = (function () {
         await new Promise(function (r) { setTimeout(r, 2500); });
         try { return await attempt(serverOnly, 20000); } catch (e2) { e0 = e2; }
       }
-      var err = new Error('这个链接没取到正文');
+      var err = new Error((e0 && e0.code === 'DEAD' && e0.message) || '这个链接没取到正文');
       err.detail = (e0 && e0.detail) || (e0 && e0.message);
       err.title = (e0 && e0.title) || titleHint;
+      err.code = (e0 && e0.code) || '';
+      /* 竞速层会把多个通道的失败拼成 detail，code 在这一层丢了，只能从文字里认 */
+      if (!err.code && /已经失效|内容不存在|已被删除|分享链接过期/.test(String(err.detail || ''))) {
+        err.code = 'DEAD';
+        err.title = '';
+        err.message = '这条链接已经失效：内容被删除，或分享链接过期。';
+      }
       err.url = url;
       err.kind = urlKind(url);
       throw err;

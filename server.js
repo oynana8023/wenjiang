@@ -1059,6 +1059,17 @@ async function parseUrl(url, hintTitle) {
     }
   }
 
+  /* 死链就地判定：两个 UA 都拿到「内容不存在」页，再花七秒搜同题报道纯属浪费，
+     而且前端 9 秒就超时了，用户只会看到「超时没响应」。 */
+  if (deadHtml) {
+    const err = new Error(isMf
+      ? '这条小蜜蜂链接已经失效：内容被作者删除，或分享链接过期（分享链接带时效，过期就打不开）。在 App 里重新分享一次再粘，或长按正文复制后走「直接粘全文」。'
+      : '这条链接已经失效：内容被删除或仅限 App 内打开。换一条，或把正文复制出来走「直接粘全文」。');
+    err.code = 'DEAD';
+    err.title = '';
+    throw err;
+  }
+
   /* 兜底阶段总共只给 11 秒：宁可早点告诉用户「取不到」，也不让人盯着转圈 */
   const deadline = Date.now() + 7000;
 
@@ -1140,16 +1151,6 @@ async function parseUrl(url, hintTitle) {
       images: bestHtml ? imagesOf(bestHtml, target) : [],
       related: { url, title: cleanShellTitle(dig.title, host) || dig.title }
     };
-  }
-
-  /* 死链要说清楚，别让用户以为是自己链接粘错了 */
-  if (deadHtml) {
-    const err = new Error(isMf
-      ? '这条小蜜蜂链接已经失效：内容被作者删除，或分享链接过期（分享链接带时效，过期就打不开）。在 App 里重新分享一次再粘，或长按正文复制后走「直接粘全文」。'
-      : '这条链接已经失效：内容被删除或仅限 App 内打开。换一条，或把正文复制出来走「直接粘全文」。');
-    err.code = 'DEAD';
-    err.title = title;
-    throw err;
   }
 
   const err = new Error(lastErr || '解析失败');

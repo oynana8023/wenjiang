@@ -1902,13 +1902,19 @@
     var d = String((err && err.detail) || '');
     /* 只有真的 5xx / 连不上才算「服务不在线」；内容抓不到是业务失败，服务本身是好的 */
     var offline = /HTTP 5\d\d|连不上|Failed to fetch|NetworkError/i.test(d);
-    var hint = String((err && err.title) || '');
-    lastFail = err && err.url ? { url: err.url, title: hint } : null;
+    var dead0 = (err && err.code) === 'DEAD';
+    /* 死链的标题是「内容不存在或已被删除」，不能拿去当选题 */
+    var hint = dead0 ? '' : String((err && err.title) || '');
+    lastFail = !dead0 && err && err.url ? { url: err.url, title: hint } : null;
 
-    var why = offline
-      ? '解析服务这一次没响应（免费沙盒实例每隔一阵会重启，重启的十几秒里就会这样）。点<b>再试一次</b>通常就恢复。'
-      : '服务是在线的，是这一页本身不给正文：微博、抖音、快手这些页面由脚本渲染，知乎有风控，服务器拿到的常常是空壳。' +
-        '换成文章页链接最稳；只有标题也能先写起来。';
+    var dead = (err && err.code) === 'DEAD';
+    var why = dead
+      ? '这条链接本身已经打不开了（作者删除、内容下架，或分享链接过期）。换一条新分享出来的链接最稳；' +
+        '也可以长按把正文复制下来，走「直接粘全文」，改写效果一样。'
+      : offline
+        ? '解析服务这一次没响应（免费沙盒实例每隔一阵会重启，重启的十几秒里就会这样）。点<b>再试一次</b>通常就恢复。'
+        : '服务是在线的，是这一页本身不给正文：微博、抖音、快手这些页面由脚本渲染，知乎有风控，服务器拿到的常常是空壳。' +
+          '换成文章页链接最稳；只有标题也能先写起来。';
 
     var detail = d ? '<div class="sec-sub" style="margin-top:10px;word-break:break-all;line-height:1.8;white-space:pre-line">' + esc(d) + '</div>' : '';
 
