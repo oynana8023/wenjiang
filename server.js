@@ -411,9 +411,9 @@ function pageSet(url, html) {
   pageCache.set(url, { at: Date.now(), html });
 }
 
-async function grabHtml(target, ua) {
+async function grabHtml(target, ua, ms) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 15000);
+  const timer = setTimeout(() => ctrl.abort(), ms || 15000);
   const isWx = /mp\.weixin\.qq\.com$/.test(target.hostname);
   try {
     const res = await fetch(target.href, {
@@ -567,8 +567,9 @@ function titleMatch(text, title) {
   return hit >= 2 && hit / total >= 0.5;
 }
 
-async function relatedParse(title) {
+async function relatedParse(title, deadline) {
   for (const q of newsQueries(title).slice(0, 4)) {
+    if (deadline && Date.now() > deadline) return null;
     let news = [];
     try { news = await bingSearch(q, 6); } catch (e) { news = []; }
     if (!news.length) {
@@ -576,8 +577,9 @@ async function relatedParse(title) {
     }
     for (const n of news.slice(0, 4)) {
       if (skipHost(n.url)) continue;
+      if (deadline && Date.now() > deadline) return null;
       try {
-        const html = await grabHtml(new URL(n.url), UA_MOBILE);
+        const html = await grabHtml(new URL(n.url), UA_MOBILE, 7000);
         const out = extract(html);
         if (out.text.length < 180) continue;
         if (!titleMatch(out.title + ' ' + out.text, title)) continue;
@@ -714,7 +716,8 @@ async function parseUrl(url, hintTitle) {
   let bestHtml = '';
   for (const ua of tries) {
     try {
-      const html = await grabHtml(target, ua);
+      /* 站点活着的话 1 秒内就回来了；6 秒还没响应，多半是抓不通，别把时间全耗在等它 */
+      const html = await grabHtml(target, ua, isWx ? 8000 : 6000);
       pageSet(url, html);
       if (html && html.length > bestHtml.length) bestHtml = html;
       if (/环境异常|去验证|该内容已被发布者删除|此内容因违规无法查看/.test(html) && !/id=["']js_content["']/.test(html)) {
@@ -729,6 +732,9 @@ async function parseUrl(url, hintTitle) {
       lastErr = e.name === 'AbortError' ? '抓取超时' : e.message;
     }
   }
+
+  /* 兜底阶段总共只给 11 秒：宁可早点告诉用户「取不到」，也不让人盯着转圈 */
+  const deadline = Date.now() + 7000;
 
   /* 兜底一：微博单条。m.weibo.cn/detail 是纯脚本页，直抓必 0 字，
      但 statuses/show 接口给的是这条微博的原文，最准。 */
@@ -745,7 +751,7 @@ async function parseUrl(url, hintTitle) {
   if (!title && dig && dig.title) title = cleanShellTitle(dig.title, target.hostname);
 
   /* 兜底二：微博话题页取话题下的真实博文 */
-  if (title && /weibo\.(com|cn)$/i.test(target.hostname)) {
+  if (title && Date.now() < deadline && /weibo\.(com|cn)$/i.test(target.hostname)) {
     try {
       const w = await weiboPosts(title);
       if (w) return w;
@@ -753,9 +759,9 @@ async function parseUrl(url, hintTitle) {
   }
 
   /* 兜底三：同题报道 */
-  if (title) {
+  if (title && Date.now() < deadline) {
     try {
-      const rel = await relatedParse(title);
+      const rel = await relatedParse(title, deadline);
       if (rel) return rel;
     } catch (e) { /* 继续往下 */ }
   }
@@ -793,7 +799,8 @@ async function metaFor(url) {
   let lastErr = '';
   for (const ua of [UA_MOBILE, UA_DESKTOP]) {
     try {
-      const html = await grabHtml(target, ua);
+      /* 站点活着的话 1 秒内就回来了；6 秒还没响应，多半是抓不通，别把时间全耗在等它 */
+      const html = await grabHtml(target, ua, isWx ? 8000 : 6000);
       pageSet(url, html);
       if (!/环境异常|去验证/.test(html) || /id=["']js_content["']/.test(html)) return metaOf(html, target);
       lastErr = '微信拦住了解析';
