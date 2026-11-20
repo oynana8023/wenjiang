@@ -14,7 +14,7 @@
  * 部署方式见 README「三分钟上线自己的解析服务」。
  */
 
-const VERSION = '3.1.0';
+const VERSION = '3.2.0';
 const MAX_BYTES = 12 * 1024 * 1024;
 const TEXT_LIMIT = 12000;
 const TIMEOUT = 13000;
