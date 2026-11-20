@@ -1006,6 +1006,9 @@ window.WJEngine = (function () {
     gadget: ['一副无线耳机与充电盒，磨砂塑料表面，耳机斜放',
       'wireless earbuds beside an open charging case, matte plastic surfaces',
       '浅灰背景的极简台面', 'a minimal light grey surface', '耳机'],
+    drink: ['一瓶琥珀色酒液的玻璃酒瓶，瓶身贴着简洁标签，瓶口封蜡',
+      'a glass bottle of amber liquor with a minimal label and wax-sealed neck',
+      '木质吧台与暖光', 'a wooden counter under warm light', '酒瓶'],
     food: ['一杯拉花咖啡放在木质吧台上，旁边是咖啡手柄与粉碗',
       'a latte with poured art on a wooden counter, portafilter and basket beside it',
       '咖啡馆吧台，背景虚化', 'a cafe counter with a blurred background', '咖啡'],
@@ -1015,9 +1018,9 @@ window.WJEngine = (function () {
     school: ['一张课桌，摊开的书、铅笔与写满字的草稿纸',
       'a school desk with an open book, pencils and a scribbled draft',
       '教室窗边，午后光斜进来', 'beside a classroom window with afternoon light', '书本'],
-    finance: ['一块显示折线的屏幕（画面轻微虚化），前景一支金属笔',
-      'a screen showing a blurred line chart, a metal pen in the foreground',
-      '夜晚写字楼室内，窗外城市灯', 'inside an office at night with city lights outside', '屏幕'],
+    finance: ['一栋写字楼的玻璃幕墙，映出天空与楼群的倒影',
+      'the glass facade of an office tower reflecting sky and neighbouring buildings',
+      '傍晚的城市天际线，楼体亮着灯', 'a city skyline at dusk with lit towers', '写字楼'],
     stage: ['空舞台，聚光灯在地面打出光斑，背景是深色幕布',
       'an empty stage with a spotlight pool on the floor and a dark backdrop',
       '剧场内，观众席虚化', 'inside a theatre with blurred seating', '舞台'],
@@ -1051,9 +1054,9 @@ window.WJEngine = (function () {
     home: ['客厅一角，沙发、毯子与一盏落地灯',
       'a corner of a living room with a sofa, a throw blanket and a floor lamp',
       '傍晚的室内暖光', 'indoors in warm evening light', '客厅'],
-    place: ['一张办公桌，摊开的笔记本、笔与一杯咖啡',
-      'a desk with an open notebook, a pen and a cup of coffee',
-      '编辑部桌面，侧窗自然光', 'an editorial desk with side window light', '桌面']
+    place: ['一张木桌，摊开的笔记本、一支笔与一杯水',
+      'a wooden desk with an open notebook, a pen and a glass of water',
+      '室内侧窗自然光', 'indoors with side window light', '桌面']
   };
 
   /* 只用来判定类目，品牌名不进画面描述（否则模型会去画 logo、拼错字） */
@@ -1066,6 +1069,7 @@ window.WJEngine = (function () {
     [/耳机|音箱|相机|手表|手环|无人机|投影|充电宝/i, 'gadget'],
     [/笔记本|电脑|MacBook|平板|iPad|显示器|键盘|主机/i, 'laptop'],
     [/大模型|人工智能|智能体|GPT|DeepSeek|提示词|算法|AI\b/i, 'ai'],
+    [/冰酒|白酒|黄酒|米酒|果酒|红酒|葡萄酒|啤酒|威士忌|香槟|酒厂|酒业/i, 'drink'],
     [/咖啡|奶茶|餐厅|火锅|烘焙|面包|外卖|小吃|菜单|拿铁/i, 'food'],
     [/医院|医生|体检|疫苗|药品|睡眠|健康|疾病|手术|门诊/i, 'health'],
     [/学校|高考|考研|学生|课堂|老师|作业|开学|教育|毕业/i, 'school'],
@@ -1086,9 +1090,9 @@ window.WJEngine = (function () {
   /* 事件只换场景，不当主体 */
   var VIS_EVENT = [
     { re: /发布|公布|官宣|亮相|上线|开售|首销|预售/, cn: '新品发布舞台，背后是一块虚化的大屏', en: 'a launch stage with a large blurred LED wall behind' },
-    { re: /涨价|降价|价格|多少钱|定价|收费|元一杯|客单价/, only: ['food', 'beauty', 'home', 'gadget', 'glass'], cn: '旁边立着一块空白的小价签', en: 'a small blank price card standing nearby' },
+    { re: /涨价|降价|价格|多少钱|定价|收费|元一杯|客单价/, only: ['food', 'beauty', 'home', 'gadget', 'glass'], cn: '浅灰台面上，旁边立着一块空白的小价签', en: 'on a light grey surface with a small blank price card nearby' },
     { re: /裁员|离职|招聘|入职|面试|跳槽|毕业季/, only: ['office', 'place', 'finance', 'laptop'], cn: '空荡的办公区，几张空工位', en: 'a quiet office with several empty desks' },
-    { re: /融资|上市|股价|财报|营收|利润|市值|IPO/i, only: ['finance', 'office', 'place'], cn: '夜晚的写字楼与城市灯光', en: 'an office tower at night among city lights' },
+    { re: /融资|上市|股价|财报|营收|利润|市值|IPO/i, only: ['finance', 'office', 'place'], cn: '傍晚的城市天际线，楼体亮着灯', en: 'a city skyline at dusk with lit towers' },
     { re: /比赛|夺冠|冠军|赛季|决赛|奥运|世界杯/, cn: '灯光打开的体育场', en: 'a floodlit stadium' }
   ];
 
@@ -1097,11 +1101,12 @@ window.WJEngine = (function () {
     life: ['米白与木色，低饱和暖调', 'off-white and wood tones, low-saturation warmth'],
     biz: ['石墨黑与暖金，克制的高光', 'graphite black and warm gold with restrained highlights'],
     nature: ['雾青与土黄，自然低饱和', 'misty teal and earth yellow, naturally desaturated'],
-    clean: ['雾白与浅木，干净通透', 'misty white and pale wood, clean and airy']
+    clean: ['雾白与浅木，干净通透', 'misty white and pale wood, clean and airy'],
+    drink: ['琥珀金与深棕，暖光通透', 'amber gold and deep brown with warm translucency']
   };
   var VIS_GROUP = {
     phone: 'tech', chip: 'tech', robot: 'tech', ai: 'tech', laptop: 'tech', gadget: 'tech', glass: 'tech', factory: 'tech',
-    food: 'life', pet: 'life', beauty: 'life', kid: 'life', home: 'life',
+    food: 'life', drink: 'drink', pet: 'life', beauty: 'life', kid: 'life', home: 'life',
     finance: 'biz', office: 'biz', stage: 'biz',
     farm: 'nature', weather: 'nature', travel: 'nature', fitness: 'nature',
     health: 'clean', school: 'clean'
@@ -1135,6 +1140,109 @@ window.WJEngine = (function () {
     [/透明|玻璃|水晶/, '通透玻璃', 'clear glass']
   ];
 
+  /* ---------------- 从正文里认「具体物件」 ----------------
+     类目模板只能保证「画得像那么回事」，要做到「画的就是这篇」，得把文中的
+     实物抠出来：酒瓶、荔枝、灌装线、纸箱。每条 [正则, 中文, 英文, 组, 权重, 自检词, 简称]。
+     权重高的当主体，同组的第二个当陪衬；地名、机构、抽象词一律不进画面。 */
+  var VIS_OBJ = [
+    [/冰酒|白酒|黄酒|米酒|果酒|酒厂|酒业|酒液/, '一瓶琥珀色酒液的玻璃酒瓶，瓶身贴着简洁标签', 'a glass bottle of amber liquor with a minimal label', 'drink', 10, '酒瓶', '一瓶冰酒'],
+    [/红酒|葡萄酒/, '一瓶红酒，深色玻璃瓶，软木塞', 'a bottle of red wine, dark glass, cork stopper', 'drink', 10, '酒瓶', '一瓶红酒'],
+    [/啤酒/, '一杯冰镇啤酒，杯壁挂着水珠', 'a glass of cold beer with condensation', 'drink', 10, '啤酒', '一杯啤酒'],
+    [/咖啡|拿铁|美式|手冲/, '一杯表面有拉花的咖啡', 'a cup of coffee with poured latte art', 'drink', 9, '咖啡', '一杯咖啡'],
+    [/奶茶/, '一杯奶茶，透明杯身，封膜', 'a cup of milk tea in a clear sealed cup', 'drink', 9, '奶茶', '一杯奶茶'],
+    [/矿泉水|瓶装水|饮料/, '一瓶透明瓶装饮料，瓶身有水珠', 'a clear bottle of drink with condensation', 'drink', 8, '瓶子', '一瓶饮料'],
+    [/空瓶|缺瓶|瓶盖|玻璃瓶|瓶子|灌装/, '一排空的透明玻璃瓶', 'a row of empty clear glass bottles', 'pack', 8, '玻璃瓶', '一排玻璃瓶'],
+    [/纸箱|包装盒|外包装|包装/, '几个牛皮纸箱，胶带封口', 'a few kraft cartons sealed with tape', 'pack', 6, '纸箱', '几个纸箱'],
+    [/快递|包裹|发货/, '堆叠的快递包裹', 'stacked parcels', 'pack', 6, '包裹', '一堆包裹'],
+    [/荔枝/, '几颗带壳的新鲜荔枝，果皮微红', 'a few fresh lychees in their shells', 'food', 7, '荔枝', '几颗荔枝'],
+    [/苹果|柑橘|橙子|草莓|水果/, '一篮新鲜水果', 'a basket of fresh fruit', 'food', 6, '水果', '一篮水果'],
+    [/面包|蛋糕|烘焙|月饼|粽子/, '刚出炉的面包放在木板上', 'freshly baked bread on a wooden board', 'food', 7, '面包', '一份烘焙'],
+    [/火锅|烧烤|菜肴|美食|餐/, '一桌热气腾腾的菜，近景', 'a table of hot dishes in close view', 'food', 6, '菜肴', '一桌菜'],
+    [/零食|小吃/, '几包零食摊在桌面上', 'snack packs spread on a table', 'food', 6, '零食', '几包零食'],
+    [/热饭|饭菜|一顿饭|晚饭|午餐|早餐|外卖|餐盘|饭/, '一碗冒着热气的饭和一双筷子', 'a steaming bowl of rice with chopsticks', 'food', 6, '饭', '一碗热饭'],
+    [/一本书|读书|阅读|新书|作者|小说/, '一本翻开的书，纸页有折痕', 'an open book with dog-eared pages', 'object', 6, '书', '一本翻开的书'],
+    [/鲜花|花束|玫瑰|康乃馨/, '一束用牛皮纸包着的鲜花', 'a bouquet wrapped in kraft paper', 'object', 6, '花', '一束花'],
+    [/手机|iPhone|新机|旗舰机|折叠屏/, '一部深色旗舰手机，背面多摄模组', 'a dark flagship smartphone with a triple camera module', 'tech', 10, '手机', '一部手机'],
+    [/芯片|晶圆|半导体|光刻/, '一枚方形芯片放在黑色防静电垫上', 'a square silicon chip on a black anti-static mat', 'tech', 10, '芯片', '一枚芯片'],
+    [/机器人|机械臂|具身智能/, '一台人形机器人上半身，金属关节外露', 'the upper body of a humanoid robot with exposed metal joints', 'tech', 10, '机器人', '一台机器人'],
+    [/服务器|机柜|数据中心|算力/, '一排服务器机柜，蓝色指示灯连成带状', 'a row of server racks with blue indicator lights', 'tech', 9, '服务器', '一排服务器'],
+    [/耳机/, '一副无线耳机与充电盒', 'wireless earbuds beside an open case', 'tech', 9, '耳机', '一副耳机'],
+    [/眼镜|AR\b|VR\b|头显/, '一副黑框智能眼镜', 'a pair of black-framed smart glasses', 'tech', 9, '眼镜', '一副眼镜'],
+    [/笔记本|电脑|平板|显示器|键盘/, '一台打开的笔记本电脑', 'an open laptop', 'tech', 8, '电脑', '一台电脑'],
+    [/相机|镜头/, '一台相机，金属机身，镜头朝前', 'a camera with a metal body, lens facing forward', 'tech', 9, '相机', '一台相机'],
+    [/无人机/, '一架四轴无人机悬停在空中', 'a quadcopter drone hovering', 'tech', 9, '无人机', '一架无人机'],
+    [/充电宝|电池|电芯/, '一块方形电池与一根数据线', 'a rectangular battery pack and a cable', 'tech', 7, '电池', '一块电池'],
+    [/汽车|轿车|SUV|车型|新能源车|智驾/, '一辆深灰色轿车，四分之三侧面', 'a dark grey sedan in three-quarter view', 'vehicle', 10, '汽车', '一辆车'],
+    [/卡车|货车|物流车/, '一辆厢式货车停在装卸口', 'a box truck at a loading dock', 'vehicle', 9, '货车', '一辆货车'],
+    [/电动车|电瓶车|自行车/, '一辆停靠在路边的电动车', 'a parked e-bike at the kerb', 'vehicle', 8, '电动车', '一辆电动车'],
+    [/高铁|列车|地铁/, '一列停靠的列车车头', 'the front of a stopped train', 'vehicle', 9, '列车', '一列列车'],
+    [/飞机|航班|机场/, '一架客机停在廊桥旁', 'an airliner at a jet bridge', 'vehicle', 8, '飞机', '一架飞机'],
+    [/工人|员工|师傅|操作工/, '一位穿工装的人在流水线旁，只拍到双手与侧身', 'a worker in overalls at the line, hands and side profile only', 'people', 7, '工人', '车间里的人'],
+    [/农民|果农|种植户/, '一双手正在采摘果实', 'a pair of hands picking fruit', 'people', 6, '手', '一双手']
+  ];
+
+  /* 场景优先于事件：文里写了「车间/流水线」，就别再给夜景写字楼。
+     没有具体物件可画时，用场景自带的兜底主体，避免主体和背景两张皮。 */
+  var VIS_SET = [
+    { re: /车间|生产线|流水线|灌装|工厂|出厂|量产|制造|缺瓶|赶工|产能|加班加点/,
+      cn: '车间里，传送带与机械臂，顶部条形灯', en: 'a workshop with a conveyor and a robotic arm under linear ceiling lights',
+      subCn: '一条运转中的传送带', subEn: 'a running conveyor belt', expect: '传送带', short: '一条传送带' },
+    { re: /工位|办公区|开放式办公|裁员|离职|入职|会议|写字楼/,
+      cn: '空荡的办公区，几张空工位，显示器还亮着', en: 'a quiet open-plan office with empty desks and monitors still on',
+      subCn: '一张空工位上亮着的显示器', subEn: 'a monitor still glowing on an empty desk', expect: '工位', short: '一张空工位' },
+    { re: /仓库|库存|堆放|仓储/,
+      cn: '仓库货架与打包台，纸箱整齐堆叠', en: 'a warehouse aisle with neatly stacked cartons',
+      subCn: '堆叠的牛皮纸箱', subEn: 'stacked kraft cartons', expect: '纸箱', short: '几个纸箱' },
+    { re: /晚宴|宴会|国宴|招待|餐桌|酒会/,
+      cn: '宴会厅的长桌，暖光，成排的高脚杯', en: 'a banquet table with rows of wine glasses in warm light',
+      subCn: '成排的高脚杯与白瓷盘', subEn: 'rows of wine glasses and white plates', expect: '酒杯', short: '一桌宴席' },
+    { re: /老人|独居|社区|家庭|孩子|母亲|父亲|夫妻|居家|送餐|食堂/,
+      cn: '居家客厅，暖光，桌角摆着碗筷', en: 'a warm living room with bowls and chopsticks on the table corner',
+      subCn: '一碗冒着热气的饭和一双筷子', subEn: 'a steaming bowl of rice with chopsticks', expect: '饭', short: '一碗热饭' },
+    { re: /超市|货架|便利店|门店|柜台|商超/,
+      cn: '超市货架与价格牌，侧光扫过', en: 'supermarket shelves with price tags under side light',
+      subCn: '货架上排列整齐的商品', subEn: 'neatly arranged goods on a shelf', expect: '货架', short: '一排货架' },
+    { re: /直播间|带货|镜头前/,
+      cn: '直播间补光灯前的桌面，背景虚化', en: 'a desk under studio fill light in a livestream room',
+      subCn: '桌面上的产品与一支麦克风', subEn: 'a product and a microphone on the desk', expect: '产品', short: '直播桌面' },
+    { re: /果园|农田|田间|采摘|种植|稻田/,
+      cn: '果园里挂果的枝条，清晨的光', en: 'fruit-laden branches in an orchard at dawn',
+      subCn: '挂满果实的枝条', subEn: 'branches heavy with fruit', expect: '果树', short: '挂果的枝条' },
+    { re: /医院|诊室|病房|手术/,
+      cn: '干净的诊室，器械盘与白光', en: 'a clean clinic room with an instrument tray',
+      subCn: '不锈钢器械盘与白色台面', subEn: 'a stainless instrument tray on a white counter', expect: '器械', short: '一只器械盘' },
+    { re: /教室|学校|课堂|考场/,
+      cn: '教室课桌，摊开的书与窗边的光', en: 'a classroom desk with an open book and window light',
+      subCn: '摊开的课本与几支铅笔', subEn: 'an open textbook and a few pencils', expect: '书本', short: '一本摊开的书' },
+    { re: /车站|候车|月台|机场/,
+      cn: '清晨的车站月台，铁轨向远处延伸', en: 'a station platform at dawn with tracks running away',
+      subCn: '月台与延伸的铁轨', subEn: 'a platform and receding tracks', expect: '站台', short: '一段月台' },
+    { re: /街道|马路|路口|城市|霓虹|暴雨|台风/,
+      cn: '雨后的街道，积水映出招牌的光', en: 'a city street after rain with puddles reflecting signs',
+      subCn: '湿沥青路面上的一把深色雨伞', subEn: 'a dark umbrella on wet asphalt', expect: '雨伞', short: '一把雨伞' }
+  ];
+
+  var VIS_COMPAT = {
+    drink: ['drink', 'food', 'pack', 'people'],
+    food: ['food', 'drink', 'pack', 'people'],
+    pack: ['pack', 'drink', 'food'],
+    tech: ['tech'],
+    vehicle: ['vehicle'],
+    people: ['people']
+  };
+
+  function visObjects(scan, title) {
+    var out = [];
+    for (var i = 0; i < VIS_OBJ.length; i++) {
+      var o = VIS_OBJ[i];
+      if (!o[0].test(scan)) continue;
+      var w = o[4] + (o[0].test(title) ? 5 : 0);
+      out.push({ cn: o[1], en: o[2], g: o[3], w: w, expect: o[5], short: o[6], at: scan.search(o[0]) });
+    }
+    out.sort(function (a, b) { return b.w - a.w || a.at - b.at; });
+    return out;
+  }
+
   function visCatOf(t) {
     for (var i = 0; i < VIS_ROUTE.length; i++) {
       if (VIS_ROUTE[i][0].test(t)) return VIS_ROUTE[i][1];
@@ -1146,9 +1254,22 @@ window.WJEngine = (function () {
     opts = opts || {};
     var plain = stripMd(String(text || ''));
     var title = String(opts.title || '').replace(/[｜|]/g, ' ').trim();
-    var scan = title + ' ' + plain.slice(0, 600);
+    var scan = title + ' ' + plain.slice(0, 800);
 
-    var cat = visCatOf(scan);
+    /* 先认实物，再谈风格：有实物就画实物，没有才退回类目模板 */
+    var objs = visObjects(scan, title);
+    var main = null, second = null;
+    for (var oi = 0; oi < objs.length; oi++) {
+      if (objs[oi].g === 'people' && objs.length > 1) continue;
+      if (!main) { main = objs[oi]; continue; }
+      var ok = (VIS_COMPAT[main.g] || [main.g]).indexOf(objs[oi].g) > -1;
+      if (ok) { second = objs[oi]; break; }
+    }
+    if (!main) main = null;
+
+    /* 有实物时以实物的组定类目，别再让「续航」「消费」这类词把类目带偏 */
+    var GROUP_CAT = { tech: 'gadget', vehicle: 'car', drink: 'drink', pack: 'food', people: 'office' };
+    var cat = main ? (VIS_CAT[main.g] ? main.g : (GROUP_CAT[main.g] || visCatOf(scan))) : visCatOf(scan);
     var cc = VIS_CAT[cat] || VIS_CAT.place;
 
     /* 颜色只在标题里找，正文颜色词多是比喻，容易带偏 */
@@ -1157,22 +1278,52 @@ window.WJEngine = (function () {
       if (VIS_COLOR[ci][0].test(title)) { color = { cn: VIS_COLOR[ci][1], en: VIS_COLOR[ci][2] }; break; }
     }
 
-    /* 事件换场景；没命中就用类目自带场景 */
-    var setCn = cc[2], setEn = cc[3];
-    for (var ei = 0; ei < VIS_EVENT.length; ei++) {
-      var ev = VIS_EVENT[ei];
-      if (!ev.re.test(scan)) continue;
-      if (ev.only && ev.only.indexOf(cat) < 0) continue;
-      setCn = ev.cn; setEn = ev.en; break;
+    /* 场景：文中场景 > 事件 > 类目默认 */
+    var setCn = cc[2], setEn = cc[3], setHit = null, bestN = 0;
+    /* 多个场景同时出现时按命中次数定，别让一句「欢迎晚宴」压过通篇的「生产线」 */
+    for (var si = 0; si < VIS_SET.length; si++) {
+      var hitm = scan.match(new RegExp(VIS_SET[si].re.source, 'g'));
+      var n = hitm ? hitm.length : 0;
+      if (n > bestN) { bestN = n; setHit = VIS_SET[si]; setCn = setHit.cn; setEn = setHit.en; }
+    }
+    if (!setHit) {
+      for (var ei = 0; ei < VIS_EVENT.length; ei++) {
+        var ev = VIS_EVENT[ei];
+        if (!ev.re.test(scan)) continue;
+        if (ev.only && ev.only.indexOf(cat) < 0) continue;
+        setCn = ev.cn; setEn = ev.en; break;
+      }
+    }
+
+    /* 主物件是水果、农产品时，咖啡馆吧台这类场景不搭，换成中性台面 */
+    if (main && main.g === 'food' && setCn === cc[2] && !/咖啡|奶茶/.test(scan)) {
+      setCn = '木质台面，侧窗自然光'; setEn = 'a wooden surface with side window light';
     }
 
     var look = VIS_LOOK[opts.style] || VIS_LOOK.news;
     var pal = VIS_PALETTE[VIS_GROUP[cat] || 'life'];
-    var subCn = cc[0] + (color ? '，' + color.cn + '配色' : '');
-    var subEn = cc[1] + (color ? ', ' + color.en + ' finish' : '');
+
+    var subCn, subEn, shortCn, expect;
+    if (main) {
+      subCn = main.cn + (color ? '，' + color.cn + '为主色' : '') + (second ? '，旁边' + second.cn : '');
+      subEn = main.en + (color ? ', ' + color.en + ' dominant' : '') + (second ? ', with ' + second.en + ' nearby' : '');
+      shortCn = main.short + (second ? ' + ' + second.short : '');
+      expect = main.expect;
+    } else if (setHit) {
+      /* 没有实物、但有明确场景：画场景里该有的东西，而不是类目模板里的泛化物件 */
+      subCn = setHit.subCn + (color ? '，' + color.cn + '为主色' : '');
+      subEn = setHit.subEn + (color ? ', ' + color.en + ' dominant' : '');
+      shortCn = setHit.short;
+      expect = setHit.expect;
+    } else {
+      subCn = cc[0] + (color ? '，' + color.cn + '配色' : '');
+      subEn = cc[1] + (color ? ', ' + color.en + ' finish' : '');
+      shortCn = cc[0].split('，')[0];
+      expect = cc[4];
+    }
 
     /* 一句人话摘要，放在提示词上方，用户一眼能判断「画的是不是这个」 */
-    var brief = '画的是：' + cc[0].split('，')[0] + (color ? '（' + color.cn + '）' : '') + ' · ' + setCn;
+    var brief = '画的是：' + shortCn + ' · ' + setCn;
 
     function build(frame, simple) {
       var light = simple ? '均匀柔光，背景是干净的纯色' : look[2];
@@ -1195,7 +1346,7 @@ window.WJEngine = (function () {
         ratio: frame.ratio,
         size: frame.size,
         subject: brief,
-        expect: cc[4],
+        expect: expect,
         prompt: prompt,
         promptCn: promptCn,
         alt: simple ? null : {
