@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI;
 
-  var VERSION = 'v2.8.0';
+  var VERSION = 'v2.9.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -611,23 +611,36 @@
 
   function aiPrompt(src, c) {
     var style = U.styleName(c.style);
-    var plat = platformName(c.platform);
+    var platKey = c.platform || 'toutiao';
+    var plat = null;
+    for (var i = 0; i < D.PLATFORMS.length; i++) if (D.PLATFORMS[i].key === platKey) plat = D.PLATFORMS[i];
+    var brief = E.platformBrief(platKey);
     var strength = c.strength === 1 ? '轻度：保留原结构与观点，只替换表达'
       : c.strength === 2 ? '中度：重组句式与段落，替换措辞，保留全部事实'
         : '深度：重排逻辑与叙述顺序，换叙述视角，但不得新增或篡改事实';
-    var sys = '你是一位有十年经验的中文编辑，做过报纸、公众号和短视频。你的习惯是：先读懂素材在讲什么、读者是谁、' +
-      '这次该做润色还是扩写还是评论，然后才动笔。你从不靠同义词替换凑原创，也不写"值得注意的是""综上所述"这类套话。' +
+    var sys = '你是一位做了十年中文内容的老编辑，在报纸、公众号、短视频和数码社区都写过稿。' +
+      '你最清楚一件事：同一条新闻，发到今日头条、小红书、酷安和网易小蜜蜂，读者、结构、句长、标题写法完全是四套东西，' +
+      '把一篇文章复制到四个平台，等于四个平台都发不好。你从不靠同义词替换凑原创，也不写"值得注意的是""综上所述"这类套话。' +
       '事实、数字、人名、机构名、直接引语一律不改；素材里没有的信息绝不添加。只输出 JSON，不要任何解释。';
-    var user = '请把下面的素材改写成【' + style + '】，发布到【' + plat + '】。\n' +
-      '动笔前先判断（不要输出判断过程）：这条素材的体裁是公告、事件、观点还是教程；中心思想是哪一句；手上有哪些硬事实（数字、引语、主体）。\n' +
-      '改写强度：' + strength + '。\n' +
-      (c.deai ? '风格要求：去掉 AI 腔（避免"首先/其次/综上所述/赋能/闭环/值得注意的是"），句子长短交错，允许口语。\n' : '') +
-      (c.faithful ? '硬性要求：数字、人名、机构名、直接引语必须与原文一致，不得编造。\n' : '') +
-      (c.extra ? '额外要求：' + c.extra + '\n' : '') +
-      '输出 JSON：{"title":"主标题","titles":["备选1","备选2","备选3"],"body":"正文，用\\n\\n分段，小标题前加## "}\n' +
-      '写作要求：句子长短交错，允许一两句短句收束；每段不要用同一个开头；不要空泛评价，评价必须落在具体事实上；' +
-      '如果素材信息不足以支撑长文，宁可写短，不要注水。\n' +
-      '正文长度 600-1200 字（微博/评论类 80-180 字，小红书 300-600 字，口播 300-450 字）。\n\n素材：\n' + src.slice(0, 6000);
+    var user = '任务：把下面素材改写成一篇可以直接发到【' + (plat ? plat.name : '今日头条') + '】的稿子。\n\n' +
+      brief + '\n' +
+      '参考写法：' + style + '（与上面的平台要求冲突时，以平台要求为准）。\n' +
+      '改写强度：' + strength + '。\n\n' +
+      '动笔前先在心里做三件事（不要输出过程）：\n' +
+      '1. 列出素材里所有硬事实：数字、时间、主体、原话；\n' +
+      '2. 判断这篇的核心信息是哪一句，读者最想知道的是什么；\n' +
+      '3. 按上面【结构】一段一段落位，缺材料的那一段宁可写短，也不要编。\n\n' +
+      '硬性要求：\n' +
+      '- 篇幅落在指定区间；素材不足时写下限附近，不许为凑字数注水。\n' +
+      '- 严格用该平台的结构和语气，不要混入其他平台的写法（例如给酷安写"姐妹们"、给小红书写"综上所述"）。\n' +
+      '- 标题：1 个主标题 + 3 个备选，全部符合该平台标题习惯，不要同一句式换词。\n' +
+      '- 正文用 \\n\\n 分段；需要小标题时用「## 」开头；不要用「一、二、三」另起一行当小标题，除非平台结构明确要求。\n' +
+      '- 需要话题标签的平台，把标签放进 tags 数组（不带 #），不要写进正文。\n' +
+      '- 写完自检一遍：字数、结构、禁忌词、有没有空泛评价、有没有和素材对不上的地方。不合格就在心里重写，只输出最终稿。\n' +
+      (c.deai ? '- 去 AI 味：删掉"首先/其次/综上所述/赋能/闭环/值得注意的是"，句子长短交错，允许口语。\n' : '') +
+      (c.faithful ? '- 事实保真：数字、人名、机构名、直接引语必须与原文完全一致。\n' : '') +
+      (c.extra ? '- 额外要求：' + c.extra + '\n' : '') +
+      '\n输出 JSON：{"title":"主标题","titles":["备选1","备选2","备选3"],"body":"正文，用\\n\\n分段","tags":["标签1","标签2"]}\n\n素材：\n' + src.slice(0, 6500);
     return [{ role: 'system', content: sys }, { role: 'user', content: user }];
   }
 
@@ -641,7 +654,8 @@
           return {
             title: String(o.title || '').trim(),
             titles: Array.isArray(o.titles) ? o.titles.map(String) : [],
-            body: String(o.body)
+            body: String(o.body),
+            tags: Array.isArray(o.tags) ? o.tags.map(function (t) { return String(t).replace(/^#/, '').trim(); }).filter(Boolean).slice(0, 6) : []
           };
         }
       } catch (e) { /* fallthrough */ }
@@ -664,10 +678,22 @@
       state.genNote = chain.length > 1 ? '模型正在写（' + chain.length + ' 家待命）' : '模型正在写';
       setStep(2);
       try {
-        var res = await L.chatChain(chain, aiPrompt(src, c));
-        if (res.switched) toast('默认服务商没响应，已自动切到 ' + (res.provider.name || '备用'), 3000);
-        var txt = res.text;
-        var o = parseAI(txt);
+        var msgs = aiPrompt(src, c);
+        var res, o, check, tries = 0;
+        while (true) {
+          res = await L.chatChain(chain, msgs);
+          if (res.switched && !tries) toast('默认服务商没响应，已自动切到 ' + (res.provider.name || '备用'), 3000);
+          o = parseAI(res.text);
+          check = E.platformCheck(o.body, c.platform);
+          if (check.ok || tries >= 1) break;
+          /* 结构缺项/篇幅跑偏/AI 腔：把问题回给模型，按平台规矩重写一稿 */
+          tries += 1;
+          state.genNote = '平台自检没通过，正在重写';
+          msgs = msgs.concat([
+            { role: 'assistant', content: String(res.text).slice(0, 4000) },
+            { role: 'user', content: '这稿不符合【' + platformName(c.platform) + '】的要求：' + check.issues.join('；') + '。请严格按上面的平台结构重写，事实和数字不变，只输出 JSON。' }
+          ]);
+        }
         var body = o.body;
         var titles = (o.titles || []).filter(Boolean).slice(0, 4);
         var title = o.title || titles[0] || (state.compose.sourceTitle || '').trim() || '未命名';
@@ -677,6 +703,7 @@
           title: title,
           titles: titles.slice(0, 4),
           body: body,
+          tags: o.tags || [],
           source: src,
           sourceTitle: state.compose.sourceTitle,
           words: E.countWords(body),
@@ -687,6 +714,7 @@
           styleName: U.styleName(c.style),
           platformName: platformName(c.platform),
           modelName: (res.provider.name ? res.provider.name + ' · ' : '') + res.model,
+          selfCheck: check.ok ? '平台自检通过' : '平台自检：' + check.issues[0],
           engine: 'api',
           at: Date.now()
         };
@@ -2130,10 +2158,19 @@
         render('tab');
         break;
 
-      case 'platform':
-        state.compose.platform = t.dataset.platform;
+      case 'platform': {
+        var pk = t.dataset.platform;
+        state.compose.platform = pk;
+        /* 平台决定结构：切到酷安就别还挂着「小红书笔记」的写法标签 */
+        var styleOf = {
+          toutiao: 'news', baijia: 'news', wechat: 'wechat', xhs: 'xhs',
+          douyin: 'video', zhihu: 'zhihu', weibo: 'weibo',
+          coolapk: 'news', bee: 'xhs', bili: 'wechat'
+        };
+        if (styleOf[pk]) state.compose.style = styleOf[pk];
         render('tab');
         break;
+      }
 
       case 'toggle': {
         var k = t.dataset.key;

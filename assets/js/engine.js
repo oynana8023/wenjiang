@@ -65,10 +65,16 @@ window.WJEngine = (function () {
 
   /* 数字、英文、引语、书名号不参与替换：改错一个数字，稿子就废了 */
   var KEEP = /(\d[\d,.]*\s*(?:%|％|亿|万|千|百|元|美元|倍|天|小时|分钟|克|公里|tokens?)?|[A-Za-z][A-Za-z0-9._+\-]*|《[^》]{1,40}》|“[^”]{1,80}”|「[^」]{1,60}」)/g;
+  var PROTECT = /(价格战|价格带|性价比|涨价|降价|提价|定价|订单量|订单数|单机成本|获客成本|成本价|平台抽佣|用户规模|用户量|品牌方|生产线|产业链|供应链|人工智能|大模型)/g;
 
   function synReplace(sentence, pairs, rnd, prob) {
     var store = [];
+    /* 先整体保护：数字/英文/引语，以及「价格战」「订单量」这类一旦拆开就
+       变成病句的固定搭配。以前「打价格战」会被替成「打售价战」。 */
     var out = String(sentence).replace(KEEP, function (m) {
+      store.push(m);
+      return '\u0002' + (store.length - 1) + '\u0002';
+    }).replace(PROTECT, function (m) {
       store.push(m);
       return '\u0002' + (store.length - 1) + '\u0002';
     });
@@ -165,7 +171,7 @@ window.WJEngine = (function () {
 
   /* 这几组会把事实改错或把书面语改成口语，直接不用：
      超过→突破（基准测试不能说突破）、成本→花的钱（「合规花的钱的压力」）、需要→得 等 */
-  var BAD_PAIR = /^(超过|成本|需要|认为|预计|显示|指出|负责人|订单|客户|工厂|生产线)$/;
+  var BAD_PAIR = /^(超过|成本|需要|认为|预计|显示|指出|负责人|订单|客户|工厂|生产线|价格|数据|平台|品牌)$/;
 
   function pickPairs(style) {
     var base = (style === 'xhs' || style === 'video') ? D.SYN_CASUAL : D.SYN_FORMAL;
@@ -259,10 +265,24 @@ window.WJEngine = (function () {
   var GENERIC = ['变化', '趋势', '影响', '问题', '行业', '公司', '用户', '价格', '成本', '企业', '市场', '数据', '产品', '时间'];
   var ATTR = ['续航', '效率', '付费', '复购', '需求', '规模', '体验', '流量', '利润', '质量', '速度', '占比', '涨幅', '水平', '能力', '机会'];
 
+  /* 标题里的主语往往才是真主题。「AI 眼镜进入千元档」抽出来的关键词是
+     「AI」「供应链」，直接用就会写出「你怎么看供应链这一步」这种话。 */
+  function entityOf(title) {
+    var t = String(title || '').replace(/\s*[|｜]\s*.*$/, '').split(/[：:]/)[0]
+      .replace(/[「」“”"'【】\[\]]/g, '').trim();
+    var m = t.match(/^(.*?)(进入|发布|宣布|推出|上线|涨价|降价|裁员|收购|起诉|回应|量产|落地|卖爆|翻车|被|将|已|正在|开始|走向)/);
+    var e = (m ? m[1] : t).trim();
+    e = e.replace(/(的)?(内卷|真相|背后|逻辑|困境|生意|战争|之争|大变局|这一年|这三年)$/, '').trim();
+    if (e.length < 2 || e.length > 14) return '';
+    if (GENERIC.indexOf(e) > -1) return '';
+    return e.replace(/\s+/g, '');
+  }
+
   function pickTopic(kws) {
     for (var i = 0; i < kws.length; i++) {
       var w = kws[i];
-      if (/^[\u4e00-\u9fa5]{2,4}$/.test(w) && GENERIC.indexOf(w) === -1 && ATTR.indexOf(w) === -1) return w;
+      if (!w) continue;
+      if (w.length >= 2 && w.length <= 6 && GENERIC.indexOf(w) === -1 && ATTR.indexOf(w) === -1) return w;
     }
     return kws[0];
   }
@@ -273,6 +293,7 @@ window.WJEngine = (function () {
       if (!w || w === k1) continue;
       if (w.indexOf(k1) > -1 || k1.indexOf(w) > -1) continue;
       if (GENERIC.indexOf(w) > -1 || ATTR.indexOf(w) > -1) continue;
+      if (/^(AI|AR|VR|MR|5G|PC|App|app|iOS|Android)$/.test(w)) continue;
       if (w.length < 2) continue;
       return w;
     }
@@ -311,7 +332,7 @@ window.WJEngine = (function () {
     return out.length > 28 ? out.slice(0, 26) : out;
   }
 
-  function buildTitles(style, kws, core, text, sents) {
+  function buildTitles(style, kws, core, text, sents, platform) {
     var k1 = pickTopic(kws);
     var k2 = secondTopic(kws, k1);
     var has2 = !!k2;
@@ -331,9 +352,9 @@ window.WJEngine = (function () {
         '当' + k1 + '开始变便宜'
       ],
       xhs: [
-        k1 + '踩坑半年，我总结了 3 条经验',
-        '别再瞎买' + k1 + '了，看完这篇再决定',
-        '我把' + k1 + '研究了一遍，结论有点意外'
+        k1 + '这波，3 个细节值得看',
+        '别急着买' + k1 + '，先看这 3 条',
+        '关于' + k1 + '，结论可能和你想的不一样'
       ],
       video: [
         '别再被' + k1 + '忽悠了',
@@ -349,8 +370,27 @@ window.WJEngine = (function () {
         '#' + k1 + '# 一句话说清',
         k1 + '又开始卷了',
         '关于' + k1 + '，我的看法'
+      ],
+      coolapk: [
+        k1 + '这波，优点和槽点都很明显',
+        '别急着冲' + k1 + '，先看这三条',
+        '参数之外，' + k1 + '真正值得说的是这些'
+      ],
+      bee: [
+        k1 + '这事，我先打个分',
+        '被' + k1 + '刷屏了，说点大实话',
+        '关于' + k1 + '，我有不同意见'
+      ],
+      bili: [
+        '聊透' + k1 + '：真正的变量不在表面',
+        k1 + '到底怎么回事？拆开看三层',
+        num ? num + '之后，' + k1 + '要往哪走'
+          : '看完' + k1 + '，我反而更冷静了'
       ]
     };
+    var byPlat = platform && alt[platform] ? alt[platform] : null;
+    /* 平台专用标题放第一位：同一条新闻，酷安和小红书不该共用同一行标题 */
+    if (byPlat) return byPlat.concat([head]);
     return [head].concat(alt[style] || alt.news);
   }
 
@@ -428,10 +468,16 @@ window.WJEngine = (function () {
           : style === 'wechat' ? 'essay'
             : style === 'zhihu' ? 'answer' : 'report';
 
+    /* 平台优先：同一个素材发到酷安和小红书，结构本来就该不一样，
+       风格选择只在没选平台时兜底。 */
+    var p = PLAT[(opts && opts.platform) || ''];
+    if (p && p.mode) mode = p.mode;
+
     /* 目标长度：按平台上限与素材长度定，扩写也不超过原文的 1.6 倍，避免注水 */
-    var cap = 3000;
-    var targets = { report: 760, essay: 980, note: 460, script: 380, answer: 700, comment: 110 };
+    var cap = (p && p.len) ? p.len[1] : 3000;
+    var targets = { report: 760, essay: 980, note: 460, script: 380, answer: 700, comment: 110, review: 640, buzz: 360, weibo: 180 };
     var target = Math.min(cap, targets[mode] || 700);
+    if (p && p.len) target = Math.max(p.len[0], Math.min(target, p.len[1]));
     if (a.srcLen < 320) target = Math.min(target, Math.round(a.srcLen * 1.5) + 60);
     if (a.srcLen > 1600) target = Math.min(target, Math.round(a.srcLen * 0.55) + 120);
 
@@ -439,9 +485,9 @@ window.WJEngine = (function () {
     var action = 'polish';
     if (a.srcLen < target * 0.6 && strength >= 2) action = 'expand';
     if (a.srcLen > target * 1.5) action = 'condense';
-    if (mode === 'comment') action = 'comment';
+    if (mode === 'comment' || mode === 'weibo') action = 'comment';
 
-    return { mode: mode, target: target, action: action, strength: strength };
+    return { mode: mode, target: target, action: action, strength: strength, plat: p || null };
   }
 
   function humanize(text) {
@@ -451,6 +497,7 @@ window.WJEngine = (function () {
       .replace(/总的来说，?/g, '')
       .replace(/毋庸置疑，?/g, '')
       .replace(/不难看出，?/g, '')
+      .replace(/带带到/g, '带到')
       .replace(/赋能|闭环|抓手|组合拳|颗粒度/g, function (m) {
         return { '赋能': '帮助', '闭环': '完整流程', '抓手': '切入点', '组合拳': '一套做法', '颗粒度': '细致程度' }[m];
       })
@@ -459,7 +506,8 @@ window.WJEngine = (function () {
       .trim();
   }
 
-  /* 段落开头不要连着重样，读起来才像人写的 */
+  /* 段落开头不要连着重样，读起来才像人写的。
+     以前会硬塞一句「再看一层，」，比重复更假；现在只做减法，不造新词。 */
   function varyOpeners(paras) {
     var prev = '';
     return paras.map(function (p) {
@@ -467,8 +515,8 @@ window.WJEngine = (function () {
       if (!t) return '';
       var head = t.slice(0, 2);
       if (prev && head === prev) {
-        t = t.replace(/^(同时|此外|另外|因此|所以|不过|但是|而)/, '');
-        if (t.length > 8 && !/^[0-9“#·]/.test(t)) t = '再看一层，' + t;
+        var cut = t.replace(/^(同时|此外|另外|因此|所以|不过|但是|而|再看一层，)/, '');
+        if (cut !== t && cut.length > 8) t = cut;
       }
       prev = t.slice(0, 2);
       return t;
@@ -484,199 +532,625 @@ window.WJEngine = (function () {
     return pool[Math.abs(seed || 0) % pool.length];
   }
 
+  /* ================= 平台写法 =================
+     同一个事实，发到头条和小红书不该是同一段文字。这里把每个平台的
+     读者状态、结构、句长、忌讳写成一份配置，AI 提示词和本机引擎共用，
+     免得两边各写一套、越走越偏。 */
+  var PLAT = {
+    toutiao: {
+      name: '今日头条', mode: 'report', len: [700, 1200], para: [2, 3], sub: false, tags: 0,
+      who: '在信息流里划到你，耐心只有三秒，随时会划走。',
+      struct: '首段 2 句给结果或冲突，不铺垫；第二段交代原因；中间两段放数字、原话、对比；结尾落到「跟普通人有什么关系」或一句提问。',
+      tone: '直白、克制，像跟同事转述一件事。',
+      avoid: '「随着……的发展」「首先/其次/最后」「值得注意的是/综上所述」，大段背景，通篇感叹号。',
+      title: '18–28 字，主体 + 动作 + 结果，可用一个数字；不做无信息量的疑问句。',
+      shape: '结论先行 · 3–5 段 · 结尾落到普通人'
+    },
+    baijia: {
+      name: '百家号', mode: 'report', len: [800, 1400], para: [2, 3], sub: false, tags: 0,
+      who: '多从搜索进来，不知道前因后果，需要一篇能自洽的说明。',
+      struct: '导语一句话交代谁、何时、做了什么、结果如何；第二段补背景与时间线；第三段给关键细节与数字；第四段讲影响与争议；最后一句收束。',
+      tone: '书面、克制、第三人称，不用「我」。',
+      avoid: '第一人称、口语、感叹号、「小编」、未经证实的判断。',
+      title: '20–30 字，把核心名词写全，便于搜索。',
+      shape: '5W 导语 · 背景补全 · 第三人称'
+    },
+    wechat: {
+      name: '公众号', mode: 'essay', len: [1000, 1800], para: [2, 4], sub: true, tags: 0,
+      who: '主动点开，愿意读长文，但对空话和说教极度敏感。',
+      struct: '导语用一个具体场景或反常识判断提出本文要回答的问题；三个小标题（## 开头），分别写发生了什么、为什么会这样、接下来看什么；结尾收在判断上。',
+      tone: '有「我」的判断，句子长短交错，允许一句独立成段。',
+      avoid: '排比三连、口号、首先其次最后、把新闻复述一遍当开头。',
+      title: '16–24 字，留信息差，不夸张。',
+      shape: '场景开头 · 三个小标题 · 收在判断'
+    },
+    xhs: {
+      name: '小红书', mode: 'note', len: [350, 600], para: [1, 2], sub: false, tags: 4,
+      who: '在刷，只给三秒，先看图再看第一句。',
+      struct: '第一句必须是钩子（结果/价格/反常识），不写「今天想和大家聊聊」；中间 3 条具体信息，每条一行，以「· 」开头，带数字、型号或体验；再一段两句的感受；最后一行 3–5 个话题标签。',
+      tone: '第一人称、口语、短句，可以有一个语气词。',
+      avoid: '官方腔、长句、说教、堆 emoji、「姐妹们冲」、空泛形容词。',
+      title: '12–20 字，带数字或身份，不用书名号。',
+      shape: '钩子 · 3 条 · 感受 · 话题标签'
+    },
+    douyin: {
+      name: '抖音口播', mode: 'script', len: [220, 420], para: [1, 1], sub: false, tags: 0,
+      who: '在划视频，前 3 秒决定走不走。',
+      struct: '0–3 秒一句钩子，直接抛结果或疑问；随后 4–6 句事实，一句一个信息；一句转折「但真正的变化不在这」；结尾一句提问或判断。',
+      tone: '念出来顺口，每句不超过 18 字，不用长定语。',
+      avoid: '书面语、据悉/数据显示、连续同句式、复杂从句。',
+      title: '即口播标题，12–18 字，口语。',
+      shape: '3 秒钩子 · 一句一个信息 · 念得顺'
+    },
+    zhihu: {
+      name: '知乎', mode: 'answer', len: [800, 1400], para: [2, 4], sub: false, tags: 0,
+      who: '带着问题来，先要结论，再要证据，会挑逻辑漏洞。',
+      struct: '第一段给结论；三条论据，每条落在数字、案例或原话上；一段边界说明（什么条件下不成立）；最后一句收。',
+      tone: '理性、克制，允许术语但第一次出现要解释。',
+      avoid: '「谢邀」、情绪化、无来源的数据、正确的废话。',
+      title: '问题式或判断式，15–30 字。',
+      shape: '结论 · 三条论据 · 边界条件'
+    },
+    coolapk: {
+      name: '酷安', mode: 'review', len: [500, 900], para: [1, 2], sub: false, tags: 1,
+      who: '数码玩家，反感厂商稿和水文，一眼能看出你有没有真用过。',
+      struct: '一句话结论（值不值/适合谁）；3 条优点，每条对应一个具体参数或使用场景；2 条槽点，必须说清代价；最后一句「谁该买、谁再等等」。',
+      tone: '老用户口吻，短段落，可以用「真香/劝退/智商税」这类社区词，但别堆。',
+      avoid: '参数复读、「性能强悍/值得拥有」、通篇夸、把发布会话术搬过来。',
+      title: '15–25 字，结论或反差，例如「用了两周，优点明显，但这三点要忍」。',
+      shape: '结论 · 3 优点 2 槽点 · 谁该买'
+    },
+    bee: {
+      name: '网易小蜜蜂', mode: 'buzz', len: [250, 500], para: [1, 2], sub: false, tags: 2,
+      who: '年轻人刷生活日常，爱看真实吐槽和评分，不吃营销那套。',
+      struct: '开头一句场景或直接给评分（如「我先打 7 分」）；一句锐评点明态度；2–3 条具体观察，每条一句话；一句「最想吐槽的」；结尾抛问题让大家接。',
+      tone: '口语、有梗、短句，允许自嘲，不装。',
+      avoid: '成功学、说教、营销腔、通篇正能量、长段落。',
+      title: '12–22 字，像发朋友圈的一句话。',
+      shape: '先打分 · 锐评 · 观察 · 抛问题'
+    },
+    bili: {
+      name: 'B站专栏', mode: 'essay', len: [900, 1500], para: [2, 4], sub: true, tags: 2,
+      who: '年轻用户，懂梗，反感标题党和说教，愿意看有信息量的长文。',
+      struct: '开场一句「先说结论」；三个小标题（## 开头）分层展开；中间给一组对比或数字；结尾一段「省流」总结 + 一句「评论区聊聊」。',
+      tone: '轻快、有梗但不油，可以用「省流」「离谱」「劝退」这类词。',
+      avoid: '抖音式喊话、标题党、空洞抒情、硬广。',
+      title: '18–30 字，信息量优先，可带一个梗。',
+      shape: '先说结论 · 三个小标题 · 省流收尾'
+    },
+    weibo: {
+      name: '微博', mode: 'weibo', len: [120, 240], para: [1, 1], sub: false, tags: 2,
+      who: '刷热搜，只看一两句，情绪先于论证。',
+      struct: '一段话：一句态度 + 一个事实或数字 + 一句追问；结尾带 1–2 个 #话题#。',
+      tone: '短、直接、有立场，不抬杠。',
+      avoid: '长段落、小标题、列点、说教。',
+      title: '不超过 24 字，可带话题词。',
+      shape: '一段态度 · 一个事实 · 话题词'
+    }
+  };
+
+  function platformBrief(key) {
+    var p = PLAT[key] || PLAT.toutiao;
+    return '【' + p.name + '】\n' +
+      '读者：' + p.who + '\n' +
+      '结构：' + p.struct + '\n' +
+      '篇幅：' + p.len[0] + '–' + p.len[1] + ' 字，每段 ' + p.para[0] + '–' + p.para[1] + ' 句。\n' +
+      '标题：' + p.title + '\n' +
+      '语气：' + p.tone + '\n' +
+      '禁忌：' + p.avoid + '\n' +
+      (p.tags ? '标签：结尾附 ' + p.tags + '–5 个相关话题标签，用 # 开头，空格分隔。\n' : '标签：不加话题标签。\n');
+  }
+
+  function platformHint(key) {
+    var p = PLAT[key] || PLAT.toutiao;
+    return p.shape + ' · ' + p.len[0] + '–' + p.len[1] + ' 字';
+  }
+
+  /* 发出去之前先按平台规矩查一遍：结构缺项、篇幅跑偏、AI 腔，
+     查出来就让模型重写一次，而不是把不合格的稿子直接交给人。 */
+  function platformCheck(text, key) {
+    var p = PLAT[key] || PLAT.toutiao;
+    var body = String(text || '');
+    var issues = [];
+    var len = countWords(body);
+    if (len < Math.round(p.len[0] * 0.45)) issues.push('篇幅偏短：' + len + ' 字，要求 ' + p.len[0] + '–' + p.len[1] + ' 字');
+    if (len > Math.round(p.len[1] * 1.45)) issues.push('篇幅超出：' + len + ' 字，要求 ' + p.len[0] + '–' + p.len[1] + ' 字');
+    if (key === 'xhs') {
+      if (body.indexOf('· ') < 0 && body.indexOf('• ') < 0) issues.push('缺少「· 」分点，小红书要 3 条具体信息');
+      if (!/#[^\s#]{1,12}/.test(body)) issues.push('缺少话题标签');
+    }
+    if (key === 'douyin') {
+      var longs = splitSentences(body).filter(function (s) {
+        return s.replace(/[^\u4e00-\u9fa5A-Za-z0-9]/g, '').length > 26;
+      });
+      if (longs.length) issues.push('有 ' + longs.length + ' 句超过 26 字，口播念不顺');
+    }
+    if (p.sub) {
+      var n = (body.match(/^## /gm) || []).length;
+      if (n < 2) issues.push('小标题不足：需要 2–3 个「## 」小标题');
+    }
+    if (key === 'coolapk') {
+      if (!/(槽点|缺点|不足|问题也)/.test(body)) issues.push('没有写槽点，酷安读者只信有缺点的体验');
+      if (!/(谁该买|谁该关注|谁该看|适合谁|值不值|建议再等|可以冲)/.test(body)) issues.push('没有给「买不买」的明确建议');
+    }
+    if (key === 'bee') {
+      if (!/(\d+\s*\/\s*10|打分|评分)/.test(body)) issues.push('没有给评分');
+      if (!/[？?]/.test(body)) issues.push('结尾没有提问，社区接不下去');
+    }
+    if (key === 'zhihu' && !/(第一|其一|1[.、])/.test(body)) issues.push('论据没有分条');
+    if (/(值得注意的是|综上所述|毋庸置疑|赋能|闭环|抓手)/.test(body)) issues.push('出现套话或 AI 腔');
+    return { ok: issues.length === 0, issues: issues, len: len };
+  }
+
+  /* ---------- 句子手术 ----------
+     本机引擎以前只做同义词替换，句子骨架还是原文的，所以读起来像
+     「把别人的句子换了几个词」。这里补三件事：认出主语、连续同主语时
+     换说法、长句断开短句合并。 */
+
+  var SUBJ_HEAD = /^(这|那|它|他|她|我们|他们|目前|如今|现在|近日|昨天|今天|今年|去年|其中|同时|不过|但是|因此|所以|另外|此外)/;
+  var SUBJ_RE = /^([^，。；：！？“”]{2,18}?)(?=在|于|将|把|已|正|向|对|与|和|宣布|发布|推出|上线|表示|认为|称|用|靠|能)/;
+
+  function subjectOf(s) {
+    var t = String(s).replace(/^[“”「」\s]+/, '');
+    var m = t.match(SUBJ_RE);
+    if (!m) return '';
+    var sub = m[1].trim();
+    if (sub.length < 2 || SUBJ_HEAD.test(sub)) return '';
+    if (/[0-9]$/.test(sub) && sub.length < 3) return '';
+    return sub;
+  }
+
+  /* 连续两句同一个主语时，第二句换个说法：代词 / 状语提前 / 省略 */
+  function resaySubject(s, sub, k) {
+    var at = s.indexOf(sub);
+    if (at < 0) return s;
+    var rest = s.slice(at + sub.length);
+    var pron = /(公司|集团|平台|团队|机构|工厂|门店|品牌|企业|银行|医院|学校|实验室|工作室|政府|协会)$/.test(sub) ? '它' : '它';
+
+    /* 状语提前：「在 Google Cloud Run 上独立部署了…」→「在 Google Cloud Run 上，它独立部署了…」 */
+    var loc = rest.match(/^(在|于)([^，。]{2,22}?)(上|里|中|内|下|前|后|时)/);
+    if (loc && k % 3 === 0) {
+      var tail = rest.slice(loc[0].length);
+      if (tail.length >= 6) return loc[1] + loc[2] + loc[3] + '，' + pron + tail;
+    }
+    if (/^(把|将)/.test(rest) && k % 3 === 1) return pron + rest;
+    var conn = ['又', '还', '随后', '接着', '之后'][k % 5];
+    var body = rest.replace(/^(在|于)/, '$1');
+    return conn + body;
+  }
+
+  /* 长句断成两句，短句并成一句：节奏才不会一律 */
+  function splitLong(s, rnd) {
+    if (s.length <= 46) return [s];
+    var best = -1;
+    for (var i = 12; i < s.length - 14; i++) {
+      if (s.charAt(i) !== '，') continue;
+      if (Math.abs(i - s.length / 2) < Math.abs(best - s.length / 2)) best = i;
+    }
+    if (best < 0) return [s];
+    var a = s.slice(0, best), b = s.slice(best + 1);
+    if (/[指出表示认为称说介绍透露强调预计提到]$/.test(a)) return [s];
+    if (/^(而|但|却|则|就|也|还|才|更|并|又|且|或|是)/.test(b)) return [s];
+    return [a + '。', b];
+  }
+
+  function flow(list, ctx) {
+    var out = [], prev = '', run = 0;
+    list.forEach(function (raw) {
+      var s = transform(raw, ctx);
+      splitLong(s, ctx.rnd).forEach(function (piece) {
+        if (piece.length < 4) return;
+        var sub = subjectOf(piece);
+        if (sub && prev && (sub === prev || sub.indexOf(prev) === 0 || prev.indexOf(sub) === 0)) {
+          run++;
+          piece = resaySubject(piece, sub, run);
+        } else if (sub && prev !== sub) {
+          run = 0;
+        }
+        if (sub) prev = sub;
+        out.push(piece);
+      });
+    });
+    return out;
+  }
+
+  function groupN(arr, n) {
+    var out = [];
+    for (var i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+    return out;
+  }
+
+  function judgeLine(a, t1, t2, seed) {
+    var k2 = t2 || t1;
+    var k = Math.abs(seed || 0) % 3;
+    if (a.tone === 'positive') {
+      return ['对' + t1 + '来说，这是一次实打实的抬升，不是又一次概念炒作。',
+        '这一次' + t1 + '拿到的是订单和产能，不是又一场发布会。',
+        '短期看是利好，长期还得看' + k2 + '能不能接住。'][k];
+    }
+    if (a.tone === 'negative') {
+      return ['压力已经从' + t1 + '往上顶，' + k2 + '是第一个被挤压的环节。',
+        '热闹是' + t1 + '的，代价最后还是要落到' + k2 + '上。',
+        '这不是' + t1 + '一家的麻烦，' + k2 + '整条链路都得跟着调整。'][k];
+    }
+    return ['决定走向的不是' + t1 + '本身，而是' + k2 + '。',
+      '把' + t1 + '和' + k2 + '放在一起看，事情才清楚。',
+      t1 + '只是表面，真正的变量在' + k2 + '。'][k];
+  }
+
+  function endLine(a, t1, t2, mode) {
+    var k2 = t2 || t1;
+    if (mode === 'ask') return '你怎么看' + t1 + '这一步？';
+    if (a.tone === 'negative') return t1 + '这关能不能过，要看' + k2 + '什么时候稳住。';
+    if (a.tone === 'positive') return '接下来值得盯的是，' + t1 + '这股势头能不能撑过一个季度。';
+    return t1 + '会往哪走，未来几个月' + k2 + '会给出答案。';
+  }
+
+  /* ---------- 褒贬切分 ----------
+     酷安要「优点 / 槽点」、小蜜蜂要「锐评」，都得先知道哪句是在夸、
+     哪句是在挑刺。素材本身两种句子都有，不编，只归类。 */
+  var NEG_CUE = /(但|不过|问题|限制|风险|代价|压力|贵|慢|差|难|不足|缺点|争议|下滑|亏损|裁员|担心|挑战|门槛|并不|只有|仍然|挤压|内卷|退潮|故障|投诉)/;
+  var POS_CUE = /(增长|提升|突破|领先|便宜|下降|改善|降低|提高|成功|机会|优势|利好|省下|加快|翻倍|卖爆|稳定|省)/;
+
+  function polarity(s) {
+    var n = (String(s).match(NEG_CUE) || []).length;
+    var p = (String(s).match(POS_CUE) || []).length;
+    if (n > p) return -1;
+    if (p > n) return 1;
+    return 0;
+  }
+
+  function splitPC(list) {
+    var pos = [], neg = [], mid = [];
+    list.forEach(function (s) {
+      var v = polarity(s);
+      if (v > 0) pos.push(s);
+      else if (v < 0) neg.push(s);
+      else mid.push(s);
+    });
+    return { pos: pos, neg: neg, mid: mid };
+  }
+
+  function briefOf(s, max) {
+    var t = stripPunct(String(s));
+    max = max || 26;
+    if (t.length <= max) return t;
+    var win = t.slice(0, max);
+    /* 只在前 60% 之后找断点。断在句首那个逗号上，会把整句压成
+       「更关键的是，一杯 9.9 元的拿铁。」这种没说完的废话。 */
+    var at = -1;
+    for (var i = win.length - 1; i >= Math.floor(max * 0.6); i--) {
+      if (/[，、；]/.test(win.charAt(i))) { at = i; break; }
+    }
+    if (at > 0) return t.slice(0, at);
+    var next = t.slice(max).search(/[，。；、]/);
+    if (next > -1 && next < 26) return t.slice(0, max + next);
+    /* 找不到像样的断点就整句留着，宁长不残 */
+    return t;
+  }
+
+  /* 模型/引擎加的过渡词，摆在分点或小标题下面会很突兀，统一剥掉 */
+  var LEAD_CONN = /^(更关键的是|从已披露的信息看|再往前一步|数字也能说明问题[：:]|实际看下来|但有一点得说清楚[：:]|另外一个细节是|这里要泼盆冷水[：:]|说到底|换句话说|再往下说|有意思的是|问题来了|你发现没有|更现实的一点是|但这里有个前提[：:]|然而|但|不过|可是)[，,：:]?/;
+
+  function deLead(s) {
+    return String(s || '').replace(LEAD_CONN, '');
+  }
+
+  function takeN(arr, n, fallback) {
+    var out = arr.slice(0, n);
+    if (out.length < n && fallback) {
+      fallback.forEach(function (x) {
+        if (out.length < n && out.indexOf(x) < 0) out.push(x);
+      });
+    }
+    return out;
+  }
+
+  function uniqList(arr) {
+    var out = [];
+    (arr || []).forEach(function (x) { if (x && out.indexOf(x) < 0) out.push(x); });
+    return out;
+  }
+
   function buildBody(style, sents, kws, ctx, opts) {
     var a = ctx.analysis || analyze(sents.join(''), sents, kws);
     var plan = ctx.plan || planFor(a, opts, style);
+    var plat = PLAT[(opts && opts.platform) || 'toutiao'] || PLAT.toutiao;
     var t1 = pickTopic(kws);
     var t2 = secondTopic(kws, t1);
     if (!t2 || t2 === t1) t2 = (kws[1] && kws[1] !== t1) ? kws[1] : (kws[2] || t1);
     var catTags = (D.TAG_BY_CAT[opts.cat] || []).slice(0, 2);
     var center = a.center || sents[0] || '';
     var seed = Math.abs(ctx.seed || 0);
-
-    var cursor = 1;
-    var seenSent = {};
-    function take(n) {
-      var got = [];
-      while (cursor < sents.length && got.length < n) {
-        var x = sents[cursor++];
-        if (seenSent[x]) continue;
-        seenSent[x] = 1;
-        got.push(x);
-      }
-      return got;
-    }
     var written = [];
-    function say(list) {
+
+    var seenSent = {};
+    function dedupe(list) {
       var keep = [];
       list.forEach(function (x) {
+        if (!x || seenSent[x]) return;
         var dup = false;
         for (var i = 0; i < written.length; i++) {
           if (similarity(x, written[i]) > 0.52) { dup = true; break; }
         }
         if (dup) return;
+        seenSent[x] = 1;
         written.push(x);
         keep.push(x);
       });
-      return keep.map(function (x) { return transform(x, ctx); }).join('');
+      return keep;
     }
-    /* 解释句：只解释已有事实，不引入新数据 */
-    function explain(s) {
-      var m = String(s).match(/\d[\d,.]*\s*(?:%|％|亿|万|千|百|元|美元|倍)/);
-      if (m) return '这组数字放在行业里不算小，' + (a.tone === 'negative' ? '压力也是从这里开始传导的。' : '它决定了接下来的节奏。');
-      if (/认为|表示|称|指出/.test(s)) return '这个判断来自一线，比二手转述更有分量。';
-      return '';
+    function say(list) {
+      var keep = dedupe(list);
+      if (!keep.length) return '';
+      return flow(keep, ctx).join('');
     }
-
     function isOpinion(x) {
-      /* 「混合专家架构」里的「专家」不是发言主体，必须看句首 */
       return /^[^，]{0,6}(业内人士|分析师|观察人士|评论员|专家)/.test(x) || (/认为|判断/.test(x) && !/\d/.test(x));
     }
-    function chunk(arr, n) {
-      var out = [];
-      for (var i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
-      return out;
+    function rest(arr, skip) {
+      return arr.filter(function (x) { return x !== skip; });
     }
 
+    /* ---------------- 头条 / 百家号 ----------------
+       头条：前 40 字给结果，后面按「原因—细节—跟普通人有什么关系」走。
+       百家：搜索读者，先补齐 5W，再讲背景和影响，全程第三人称。 */
     if (plan.mode === 'report') {
       var lead = (sents[0] && !isOpinion(sents[0])) ? sents[0] : center;
-      var body = sents.filter(function (x) { return x !== lead; });
-      var facts = body.filter(function (x) { return !isOpinion(x); });
-      var ops = body.filter(isOpinion);
-      var ro = [say([lead])];
-      /* 事实按原顺序两两成段；观点留到最后，通稿不抢在事实前面下判断 */
-      chunk(facts, 2).forEach(function (g) { ro.push(say(g)); });
-      if (ops.length) ro.push(say(ops.slice(0, 2)));
+      var p0 = flow([lead], ctx).join('').replace(/[。！？]$/, '');
+      var ro = [];
+      if (plat.name === '百家号') {
+        var when = (String(center).match(/(今天|昨天|近日|日前|本周|今年|去年|\d+月\d+日)/) || [''])[0];
+        ro.push((when ? when + '，' : '') + stripPunct(transform(lead, ctx)) + '。这件事的来龙去脉，值得完整说一遍。');
+      } else {
+        ro.push(p0 + '。' + judgeLine(a, t1, t2, seed));
+      }
+      var facts = rest(sents, lead).filter(function (x) { return !isOpinion(x); });
+      var ops = rest(sents, lead).filter(isOpinion);
+      groupN(facts, plat.para[1]).forEach(function (g) {
+        var t = say(g);
+        if (t) ro.push(t);
+      });
+      if (ops.length) {
+        var o1 = say(ops.slice(0, 1));
+        if (o1) ro.push(o1);
+      }
+      if (plat.name === '百家号' && a.nums.length) {
+        ro.push('把' + a.nums.slice(0, 3).join('、') + '这几个数字放在一起，能看出变化不是单点，而是整条链路上的连锁反应。');
+      }
+      ro.push(plat.name === '百家号'
+        ? '对普通读者来说，' + t1 + '的变化最终会体现在价格、选择和体验上，后续进展仍要看' + (t2 || '供给端') + '。'
+        : endLine(a, t1, t2, 'ask'));
       return varyOpeners(ro.filter(Boolean)).join('\n\n');
     }
 
+    /* ---------------- 公众号 / B站专栏 ----------------
+       两边都吃长文，但公众号要「判断」，B站要「信息量 + 一点梗」。 */
     if (plan.mode === 'essay') {
+      var bili = plat.name === 'B站专栏';
       var o = [];
       var eLead = (sents[0] && !isOpinion(sents[0])) ? sents[0] : center;
-      seenSent[eLead] = 1;
-      o.push(say([eLead]));
-      if (center !== eLead && !isOpinion(center)) {
-        seenSent[center] = 1;
-        var thesis = stripPunct(transform(center, ctx));
-        o.push((/^(官方|据|业内|数据显示|记者)/.test(thesis) ? '' : '换句话说，') + thesis + '。');
+      if (bili) {
+        o.push('先说结论：' + stripPunct(transform(eLead, ctx)) + '。');
+        o.push('下面把这件事拆成三块，能省流的地方我直接给结论。');
+      } else {
+        var wLead = stripPunct(transform(eLead, ctx));
+        o.push(wLead + '。' + (a.tone === 'negative' ? '这件事值得多说两句。' : '这件事值得拆开看看。'));
       }
-      var centerIsOp = !!center && center !== eLead && isOpinion(center);
-      var pool = sents.filter(function (x) { return !seenSent[x] && !(centerIsOp && x === center); });
-      var use = [];
-      /* 素材少也要有层次：先各给 1 句，剩下的全给最后一节，不注水也不塌成一段 */
-      var takeN = function (n) {
-        var got = [];
-        while (pool.length && got.length < n) {
-          var x = pool.shift();
-          if (seenSent[x]) continue;
-          seenSent[x] = 1;
-          got.push(x);
+      var pool = rest(sents, eLead);
+      var sec = [];
+      var cuts = [Math.ceil(pool.length * 0.4), Math.ceil(pool.length * 0.7)];
+      sec.push(pool.slice(0, cuts[0]));
+      sec.push(pool.slice(cuts[0], cuts[1]));
+      sec.push(pool.slice(cuts[1]));
+
+      var heads = bili
+        ? ['一、' + t1 + '这次到底变了什么', '二、真正的分水岭是' + (t2 || '成本'), '三、普通人该关心什么']
+        : ['一、' + t1 + '到底发生了什么', '二、真正的变量在' + (t2 || '别处'), '三、接下来盯什么'];
+      heads.forEach(function (h, i) {
+        var g = sec[i] || [];
+        if (!g.length) return;
+        o.push('## ' + h);
+        var txt = deLead(say(g.slice(0, 5)));
+        if (i === 1 && a.nums.length && /\d/.test(txt)) txt = txt.replace(/。$/, '') + '，这个数字是理解整件事的钥匙。';
+        if (txt) o.push(txt);
+        if (!bili && txt && txt.length < 130) {
+          o.push([
+            '表面看是' + t1 + '，往下追一层，是' + (t2 || '供给端') + '在重新排位。',
+            '换句话说，' + (t2 || '成本') + '决定了这轮变化能走多远。',
+            '接下来要看的不是口号，而是' + (t2 || '落地') + '能不能跟上。'
+          ][i]);
         }
-        return got;
-      };
-      var s1 = takeN(pool.length >= 3 ? 1 : 2);
-      var s2 = takeN(pool.length >= 2 ? 1 : 2);
-      var s3 = takeN(9);
-      /* 中心句如果是外部观点，放在最后一节，别抢在事实前面定调 */
-      if (center && center !== eLead && isOpinion(center) && !seenSent[center]) {
-        s3.push(center);
-        seenSent[center] = 1;
-      }
-      [
-        ['一、先说发生了什么', s1],
-        ['二、为什么会走到这一步', s2],
-        ['三、接下来看什么', s3]
-      ].forEach(function (b) {
-        if (!b[1].length) return;
-        o.push('## ' + b[0]);
-        o.push(say(b[1]));
       });
-      o.push('## 写在最后');
-      o.push(closingLine(t1, t2, seed));
+      if (bili) {
+        o.push('## 省流');
+        o.push(stripPunct(center) + '。短期看' + (t2 || '成本') + '，长期看这件事能不能复制到更多场景。');
+        o.push('评论区聊聊，你更在意哪一点？');
+      } else {
+        o.push('## 最后说一句');
+        o.push(endLine(a, t1, t2));
+      }
       return varyOpeners(o.filter(Boolean)).join('\n\n');
     }
 
+    /* ---------------- 小红书：钩子 + 三条 + 感受 ---------------- */
     if (plan.mode === 'note') {
       var n = [];
-      if (center) seenSent[center] = 1;
-      var hook = a.nums.length
-        ? '先看一个数字：' + a.nums[0] + '。' + stripPunct(center) + '。'
-        : stripPunct(center) + '。';
-      n.push(hook);
-      var bl = take(4);
-      if (bl.length) {
-        n.push(bl.map(function (x) {
-          return '· ' + stripPunct(transform(x, ctx)).replace(/[。；]$/, '');
-        }).join('\n'));
-      }
-      var noteTail = a.quotes.length ? '原话是「' + a.quotes[0].slice(0, 40) + '」，这句比转述更值得看。' : '';
-      if (noteTail) n.push(noteTail);
-      var takes = [
-        '我的看法：这件事值得跟一段时间，别只看第一天的热闹。',
-        '我的看法：先别急着站队，把上面的数字看完再判断。',
-        '我的看法：真正的变化通常不在发布当天，而在接下来几个月的落地。'
-      ];
-      n.push(takes[seed % takes.length]);
-      var tags = ['#' + t1, '#' + t2].concat(catTags.map(function (t) { return '#' + t; }));
-      n.push(tags.join(' '));
+      var head = String(center).split(/[，,]/)[0];
+      if (head.length > 24) head = head.slice(0, 22);
+      var numHook = a.nums.length && String(center).indexOf(a.nums[0]) < 0 ? a.nums[0] : '';
+      if (numHook && head.replace(/\s/g, '').indexOf(numHook) > -1) numHook = '';
+      var hookSrc = (numHook ? numHook + '，' : '') + stripPunct(head) + '。';
+      if (!/[。！？]$/.test(hookSrc)) hookSrc += '';
+      n.push(hookSrc.replace(/。+$/, '。'));
+      var pts = [];
+      var cand = rest(sents, center).slice().sort(function (x, y) {
+        return (/\d/.test(y) ? 1 : 0) - (/\d/.test(x) ? 1 : 0);
+      });
+      cand.forEach(function (x) {
+        if (pts.length >= 3) return;
+        if (isOpinion(x)) return;
+        if (!/\d|[一二三四五六七八九]|元|倍|小时|分钟|克|%/.test(x) && x.length < 18) return;
+        pts.push(x);
+      });
+      if (pts.length < 2) pts = pts.concat(cand.slice(0, 3 - pts.length));
+      pts.slice(0, 3).forEach(function (x) {
+        n.push('· ' + briefOf(deLead(transform(x, ctx)), 34).replace(/[。；]$/, '') + '。');
+      });
+      var feel = a.tone === 'negative'
+        ? '说真的，' + t1 + '这波热闹背后，先扛不住的往往是最底下的那批人。'
+        : a.tone === 'positive'
+          ? '说真的，' + t1 + '这波下来，普通人的选择确实变多了。'
+          : '说真的，我更关心的不是热闹，是' + (t2 || t1) + '能不能落到日常。';
+      n.push(feel + '你们那边是什么情况？');
+      var tags = ['#' + t1, '#' + t2].concat(catTags).filter(Boolean).slice(0, Math.max(3, plat.tags || 3));
+      n.push(tags.map(function (t) { return '#' + String(t).replace(/^#/, ''); }).join(' '));
       return varyOpeners(n).join('\n\n');
     }
 
+    /* ---------------- 抖音口播：一句一个信息 ---------------- */
     if (plan.mode === 'script') {
       var v = [];
-      v.push('（0—3 秒）' + questionOf(center, t1));
-      var lines = [];
-      var chunks = take(6);
-      chunks.forEach(function (x) {
-        transform(x, ctx).split(/，/).forEach(function (part) {
-          var q = part.replace(/[。！？；]$/, '').trim();
-          if (q.length >= 6) lines.push(q + '。');
-        });
-      });
-      /* 口播一句不超过 18 字，长句手动断开 */
-      var short = [];
-      lines.forEach(function (l) {
-        if (l.length <= 20) short.push(l);
-        else {
-          var cut = l.slice(0, 18).replace(/[，、]$/, '') + '。';
-          short.push(cut);
-          short.push(l.slice(18));
+      v.push('（0—3 秒）' + (a.nums.length ? a.nums[0] + '，这就是现在的' + t1 + '。' : questionOf(center, t1)));
+      var list = rest(sents, center).filter(function (x) { return !isOpinion(x); });
+      var merged = [];
+      list.forEach(function (x) {
+        var t = transform(x, ctx).replace(/^(从[^，]{2,14}看|更关键的是|问题来了|你发现没有|实际看下来|换句话说|再往下说|但这里有个前提)[，,]/, '');
+        if (merged.length && /(表示|指出|称|说|认为|介绍|透露|强调|预计)$/.test(stripPunct(merged[merged.length - 1]))) {
+          merged[merged.length - 1] = stripPunct(merged[merged.length - 1]) + '，' + t;
+        } else {
+          merged.push(t);
         }
       });
-      short.slice(0, 8).forEach(function (l) { v.push(l); });
-      v.push('（转折）' + (a.nums.length ? '注意这个数字，' + a.nums[0] + '。' : '真正的变化不在一时的热闹里。'));
-      v.push('（结尾）' + t1 + '这件事，你怎么看？评论区聊聊。');
-      return varyOpeners(v).join('\n');
+      merged.slice(0, 7).forEach(function (t) {
+        var q = stripPunct(t);
+        /* 口播一句一口气：34 字以内整句念完；超了只在逗号处断，
+           没有逗号就整句保留。以前按字数硬切，会切出「…千。」「元附近」。 */
+        while (q.length > 34) {
+          var cut = -1;
+          for (var i = 16; i <= 30; i++) { if (/[，；]/.test(q.charAt(i))) { cut = i; break; } }
+          if (cut < 0) {
+            /* 没有逗号：退到 30 字，再往回让开虚词，别切出「…的。」 */
+            cut = 30;
+            while (cut > 20 && /[的了和与在是把被对为就也还都很更将已]/.test(q.charAt(cut - 1))) cut -= 1;
+          }
+          if (cut < 1) break;
+          v.push(q.slice(0, cut).replace(/[，；]$/, '') + '。');
+          q = q.slice(cut).replace(/^[，；]/, '');
+        }
+        if (q.length >= 4) v.push(q + '。');
+      });
+      v.push('（转折）' + (a.tone === 'negative' ? '但代价也得说清楚。' : '但真正的变化不在这。'));
+      v.push('（结尾）' + endLine(a, t1, t2, 'ask'));
+      return v.slice(0, 18).join('\n');
     }
 
+    /* ---------------- 知乎：结论 + 三条论据 + 边界 ---------------- */
     if (plan.mode === 'answer') {
       var z = [];
-      if (center) written.push(center);
       z.push('先说结论：' + stripPunct(center) + '。');
-      var zs = take(2);
-      if (zs.length) z.push(say(zs));
-      var pts = take(3);
-      pts.forEach(function (x, i) {
-        z.push(['第一，', '第二，', '第三，'][i] + stripPunct(transform(x, ctx)) + '。');
+      var zs = rest(sents, center).filter(function (x) { return !isOpinion(x); });
+      var heads = ['第一，', '第二，', '第三，'];
+      zs.slice(0, 3).forEach(function (x, i) {
+        z.push(heads[i] + stripPunct(transform(x, ctx)) + '。');
       });
-      if (a.nums.length > 1) z.push('补充一个容易被忽略的细节：' + a.nums.slice(0, 3).join('、') + ' 这几个数字之间是有关系的，不能单独看。');
-      z.push('以上判断基于目前公开的信息；如果后续出现新的口径，结论需要重新评估。');
+      if (a.nums.length > 1) {
+        z.push('把' + a.nums.slice(0, 3).join('、') + '放在一起看，方向是一致的，单独拎一个数字容易误判。');
+      }
+      z.push('这件事之所以值得讨论，不是因为' + t1 + '本身有多新，而是它把' + (t2 || '成本') + '的问题摆到了台面上。');
+      z.push('对普通人来说，短期影响在价格和选择，中期影响在' + (t2 || '体验') + '。');
+      z.push('以上判断基于目前公开的信息。如果后续口径变化，结论需要重估。');
       return varyOpeners(z).join('\n\n');
     }
 
-    /* comment：评论区的发言，先给态度，再给依据，最后收一句 */
+    /* ---------------- 酷安：结论 + 优点 + 槽点 + 谁该买 ----------------
+       酷友最烦「参数复读 + 通篇夸」。所以优点必须落到场景，
+       槽点必须说代价，最后一定要给「买不买」的明确态度。 */
+    if (plan.mode === 'review') {
+      var rv = [];
+      var rpool = rest(sents, center).filter(function (x) { return !isOpinion(x); });
+      var pc = splitPC(rpool);
+      var withNum = function (x) { return /\d/.test(x); };
+      rv.push('先说结论：' + briefOf(center, 32) + '。' + (a.tone === 'negative'
+        ? '东西不是不能买，是现在这个节点买不划算。'
+        : '方向是对的，但别指望一步到位。'));
+      var pros = uniqList(pc.pos.filter(withNum).concat(pc.pos)).slice(0, 3);
+      if (pros.length < 2) {
+        pros = pros.concat(uniqList(pc.mid).filter(function (x) {
+          return !/(代价|问题|增加|增多|延长|压缩|下降|压力)/.test(x);
+        })).slice(0, 2);
+      }
+      if (pros.length) {
+        rv.push('值得肯定的地方：');
+        pros.forEach(function (x, i) {
+          rv.push((i + 1) + '. ' + briefOf(deLead(transform(x, ctx)), 42) + '。');
+        });
+      }
+      var cons = uniqList(pc.neg).slice(0, 2);
+      rv.push('槽点也摆出来：');
+      if (cons.length) {
+        cons.forEach(function (x) {
+          rv.push('· ' + briefOf(deLead(transform(x, ctx)), 42) + '。');
+        });
+      } else {
+        rv.push('· 原文没给长期使用的数据，稳定性还得打个问号。');
+        rv.push('· 价格是不是长期价、售后跟不跟得上，这两点也没交代。');
+      }
+      var isGoods = /(元|款|机型|配置|续航|性能|芯片|镜头|屏幕|克)/.test(center + sents.join(''));
+      rv.push(isGoods
+        ? '谁该买：本来就在等' + t1 + '降价的，可以再等一轮；刚需现在就用的，挑口碑稳的那款，别冲首发。'
+        : '谁该关注：如果你是' + t1 + '的从业者或常客，这轮变化值得盯紧；只是围观的话，先看' + (t2 || '价格') + '会不会真的松动。');
+      rv.push(isGoods ? '以上基于公开信息，真机体验还得等第一批用户反馈。' : '以上基于公开信息，实际效果还得看落地。');
+      return varyOpeners(rv.filter(Boolean)).join('\n\n');
+    }
+
+    /* ---------------- 网易小蜜蜂：评分 + 锐评 + 观察 + 抛问题 ----------------
+       这是个生活社区，不是媒体。先给态度和分数，再摆两三条具体观察，
+       最后把话头递给别人，评论区才接得下去。 */
+    if (plan.mode === 'buzz') {
+      var bz = [];
+      var score = 6 + (a.tone === 'positive' ? 1 : 0) + (a.nums.length ? 1 : 0) + (a.tone === 'negative' ? -1 : 0);
+      score = Math.max(4, Math.min(9, score));
+      bz.push('我先打个分：' + score + '/10。');
+      bz.push(a.tone === 'negative'
+        ? '态度摆在这：热闹是他们的，代价最后还是要普通人来付。'
+        : a.tone === 'positive'
+          ? '态度摆在这：这次不是画饼，普通人确实能捞到点实在的。'
+          : '态度摆在这：先别急着站队，把几件事看清楚再说。');
+      var obs = uniqList(rest(sents, center).filter(function (x) { return !isOpinion(x); }))
+        .sort(function (x, y) { return (/\d/.test(y) ? 1 : 0) - (/\d/.test(x) ? 1 : 0); })
+        .slice(0, 3);
+      if (obs.length) {
+        bz.push('几个具体观察：');
+        obs.forEach(function (x) {
+          bz.push('· ' + briefOf(deLead(transform(x, ctx)), 38) + '。');
+        });
+      }
+      var badPool = splitPC(rest(sents, center).filter(function (x) { return obs.indexOf(x) < 0; })).neg;
+      var bad = badPool[0];
+      bz.push('最想吐槽的一点：' + (bad
+        ? briefOf(transform(bad, ctx), 34).replace(LEAD_CONN, '') + '，这条在宣传里基本不会提。'
+        : '通篇都在讲好处，可最关键的那个问题一直没人回答。'));
+      bz.push('你们会给这事打几分？评论区聊聊。');
+      var bzTags = ['#' + t1, '#今日话题'].filter(Boolean).slice(0, Math.max(2, plat.tags || 2));
+      bz.push(bzTags.join(' '));
+      return varyOpeners(bz).join('\n\n');
+    }
+
+    /* ---------------- 微博 / 评论：一段话说清态度 ---------------- */
     var c = [];
-    if (center) { seenSent[center] = 1; written.push(center); }
-    var stance = a.tone === 'negative' ? '这件事没那么简单，' : (a.tone === 'positive' ? '这次的变化是真变化，' : '先把事实捋清楚，');
+    var stance = a.tone === 'negative' ? '这事没那么简单，' : (a.tone === 'positive' ? '这次是真变化，' : '先把事实摆清楚，');
     c.push(stance + stripPunct(center) + '。');
-    var fresh = a.nums.filter(function (n) { return String(center).indexOf(n) < 0; });
-    if (fresh.length) c.push('一个数字就能说明问题：' + fresh.slice(0, 2).join('、') + '。');
-    if (a.quotes.length) c.push('原话是「' + a.quotes[0].slice(0, 46) + '」，比转述更可信。');
-    var extra = take(1);
+    var fresh = a.nums.filter(function (x) { return String(center).indexOf(x) < 0; });
+    if (fresh.length) c.push('一个数字就够说明问题：' + fresh.slice(0, 2).join('、') + '。');
+    if (a.quotes.length) c.push('原话是「' + a.quotes[0].slice(0, 46) + '」，比转述可信。');
+    var extra = dedupe(rest(sents, center).filter(function (x) {
+      return x !== sents[0] && similarity(x, center) < 0.45;
+    })).slice(0, 1);
     if (extra.length) c.push(stripPunct(transform(extra[0], ctx)) + '。');
-    c.push(a.tone === 'negative' ? '所以别急着叫好，先看代价谁来承担。' : '所以别急着下结论，先看下一步怎么落地。');
+    c.push(a.tone === 'negative' ? '所以别急着叫好，先看代价谁承担。' : '所以别急着下结论，先看下一步怎么落地。');
     var ctext = c.join('');
-    if (style === 'weibo') ctext += '\n\n#' + t1 + '# #' + t2 + '#';
+    if (style === 'weibo' || plan.mode === 'weibo') ctext += '\n\n#' + t1 + '# #' + (t2 || t1) + '#';
     return ctext;
   }
 
@@ -848,18 +1322,26 @@ window.WJEngine = (function () {
       seed: seed
     };
 
-    var kws = keywords(input, 5);
+    var kws = keywords(input, 6);
+    /* 标题主语优先，避免把「供应链」「AI」当成文章主角 */
+    var ent = entityOf((opts && opts.sourceTitle) || sents[0] || '');
+    if (ent) {
+      kws = [ent].concat(kws.filter(function (k) {
+        return k !== ent && k.indexOf(ent) < 0 && ent.indexOf(k) < 0;
+      }));
+    }
     var core = trimCore(sents[0]);
     ctx.analysis = analyze(input, sents, kws);
     ctx.plan = planFor(ctx.analysis, opts, style);
     var body = humanize(buildBody(style, sents, kws, ctx, opts));
-    var titles = buildTitles(style, kws, core, input, sents).filter(function (t, i, arr) {
+    var titles = buildTitles(style, kws, core, input, sents, opts.platform).filter(function (t, i, arr) {
       return t && arr.indexOf(t) === i;
     });
     if (opts && opts.sourceTitle) {
       var st = String(opts.sourceTitle).replace(/\s*[|｜]\s*.*$/, '').trim();
+      /* 原标题只作备选，不再顶掉平台专用标题 */
       if (st.length >= 6 && st.length <= 34 && titles.indexOf(st) === -1) {
-        titles = [st].concat(titles).slice(0, 4);
+        titles = titles.slice(0, 3).concat([st]);
       }
     }
     var summarySrc = sents.slice(0, 2).join('');
@@ -1436,6 +1918,9 @@ window.WJEngine = (function () {
     splitSentences: splitSentences,
     keywords: keywords,
     similarity: similarity,
-    hashStr: hashStr
+    hashStr: hashStr,
+    platformBrief: platformBrief,
+    platformHint: platformHint,
+    platformCheck: platformCheck
   };
 })();

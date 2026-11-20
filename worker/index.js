@@ -29,18 +29,24 @@ const UA_DESKTOP =
 const NOISE =
   /^(登录|注册|下载客户端|扫码|打开APP|广告|版权所有|免责声明|责任编辑|点击查看|上一篇|下一篇|相关阅读|热门推荐|分享到|阅读原文|收藏|播放列表|正在播放|热播榜|视频加载中)/;
 
+const ENT = {
+  nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'",
+  ldquo: '\u201c', rdquo: '\u201d', lsquo: '\u2018', rsquo: '\u2019',
+  mdash: '\u2014', ndash: '\u2013', hellip: '\u2026', middot: '\u00b7',
+  bull: '\u2022', times: '\u00d7', divide: '\u00f7', copy: '\u00a9', reg: '\u00ae',
+  trade: '\u2122', emsp: '\u2003', ensp: '\u2002', thinsp: '\u2009',
+  rarr: '\u2192', larr: '\u2190', harr: '\u2194', laquo: '\u00ab', raquo: '\u00bb',
+  deg: '\u00b0', plusmn: '\u00b1', frac12: '\u00bd', sup2: '\u00b2', sup3: '\u00b3'
+};
+
 function decode(s) {
   return String(s)
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&ldquo;/g, '\u201c')
-    .replace(/&rdquo;/g, '\u201d')
-    .replace(/&mdash;/g, '\u2014')
-    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)));
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
+    .replace(/&([a-z][a-z0-9]{1,9});/gi, (m, n) => {
+      const v = ENT[n.toLowerCase()];
+      return v === undefined ? m : v;
+    });
 }
 
 function stripTags(html) {

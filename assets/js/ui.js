@@ -378,7 +378,9 @@ window.WJUI = (function () {
       '<span class="sec-sub">影响段落长度与语气</span></div>';
     h += '<div class="hscroll">' + D.PLATFORMS.map(function (p) {
       return '<button class="chip' + (c.platform === p.key ? ' on' : '') + '" data-act="platform" data-platform="' + p.key + '">' + esc(p.name) + '</button>';
-    }).join('') + '</div></div>';
+    }).join('') + '</div>';
+    h += '<div class="sec-sub" style="margin-top:8px;line-height:1.6">' +
+      esc(window.WJEngine.platformHint(c.platform)) + '</div></div>';
 
     /* 高级 */
     h += '<div class="sec"><button class="row" data-act="toggle-adv" style="border-radius:var(--r-m);border:1px solid var(--line);background:var(--surface)">' +
@@ -537,6 +539,9 @@ window.WJUI = (function () {
 
     h += '<div style="display:flex;align-items:center;gap:8px;margin-top:18px">' +
       '<span class="badge ai">AI 生成</span><span class="sec-sub">' + esc(r.styleName) + ' · ' + esc(r.platformName) + ' · ' + esc(r.modelName || '本机引擎') + '</span></div>';
+    if (r.selfCheck) {
+      h += '<div class="sec-sub" style="margin-top:6px">' + esc(r.selfCheck) + '</div>';
+    }
 
     h += '<button class="btn btn-soft btn-block mt-s" data-act="result-comments">' +
       ic('message', 15) + ' 读者会怎么评 · 生成 3 条</button>';

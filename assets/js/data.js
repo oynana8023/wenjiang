@@ -44,12 +44,16 @@ window.WJData = (function () {
   ];
 
   var PLATFORMS = [
-    { key: 'toutiao', name: '今日头条', limit: 2000 },
-    { key: 'baijia', name: '百家号', limit: 2500 },
-    { key: 'wechat', name: '公众号', limit: 3000 },
-    { key: 'xhs', name: '小红书', limit: 1000 },
-    { key: 'douyin', name: '抖音口播', limit: 900 },
-    { key: 'zhihu', name: '知乎', limit: 3000 }
+    { key: 'toutiao', name: '今日头条', limit: 2000, tone: '信息流 · 结论先行' },
+    { key: 'baijia', name: '百家号', limit: 2500, tone: '搜索 · 来龙去脉' },
+    { key: 'wechat', name: '公众号', limit: 3000, tone: '订阅 · 长文判断' },
+    { key: 'xhs', name: '小红书', limit: 1000, tone: '种草 · 钩子分点' },
+    { key: 'douyin', name: '抖音口播', limit: 900, tone: '口播 · 短句' },
+    { key: 'zhihu', name: '知乎', limit: 3000, tone: '问答 · 论证' },
+    { key: 'coolapk', name: '酷安', limit: 2000, tone: '玩机 · 真实体验' },
+    { key: 'bee', name: '网易小蜜蜂', limit: 1200, tone: '校园 · 锐评打分' },
+    { key: 'bili', name: 'B站专栏', limit: 4000, tone: '年轻 · 有梗有料' },
+    { key: 'weibo', name: '微博', limit: 2000, tone: '热点 · 一段态度' }
   ];
 
   var STRENGTHS = [
@@ -187,12 +191,15 @@ window.WJData = (function () {
   ];
 
   var CONNECT = {
-    news: ['值得注意的是，', '从目前披露的信息看，', '更关键的是，', '数据印证了这一点：'],
+    news: ['更关键的是，', '从已披露的信息看，', '再往前一步，', '数字也能说明问题：'],
     wechat: ['说到底，', '换句话说，', '这背后其实是一个老问题：', '更值得追问的是，'],
     xhs: ['说真的，', '最直观的感受是，', '我特意留意了一下，', '另外还有个细节：'],
     video: ['问题来了，', '你发现没有，', '更现实的一点是，', '但这里有个前提：'],
     zhihu: ['进一步说，', '这里的逻辑是：', '需要补充的是，', '反过来说，'],
-    weibo: ['说白了，', '值得注意的是，', '问题在于，', '更微妙的是，']
+    weibo: ['说白了，', '问题在于，', '更微妙的是，'],
+    coolapk: ['实际看下来，', '但有一点得说清楚：', '另外一个细节是，', '这里要泼盆冷水：'],
+    bee: ['最想吐槽的是，', '还有个小细节，', '说句公道话，', '不过话说回来，'],
+    bili: ['再往下说，', '这里补充一个背景：', '有意思的是，', '但别急着下结论，']
   };
 
   /* 领域词表：用于关键词抽取与标题生成 */
