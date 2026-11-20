@@ -944,7 +944,7 @@ window.WJLive = (function () {
     { re: /ernie|文心/i, name: '文心', good: '中文资讯与营销文案，合规表达稳' },
     { re: /hunyuan|混元/i, name: '混元', good: '中文通用写作，风格中性' },
     { re: /llama/i, name: 'Llama 系', good: '开源通用能力，英文优于中文' },
-    { re: /mistral|mixtral/i, name: 'Mistral', good: '轻量快速，适合短文案' },
+    { re: /mistral|mixtral/i, name: 'Mistral', good: '开源系，英文稳，中文一般' },
     { re: /grok/i, name: 'Grok', good: '观点锐利，适合短评与社媒语气' },
     { re: /minimax|abab/i, name: 'MiniMax', good: '中文对话与脚本，口语感强' },
     { re: /step/i, name: 'Step', good: '中文多模态，图文理解可用' },
