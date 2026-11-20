@@ -1353,8 +1353,11 @@
 
     var detail = d ? '<div class="sec-sub" style="margin-top:10px;word-break:break-all;line-height:1.8;white-space:pre-line">' + esc(d) + '</div>' : '';
 
+    var msg = String((err && err.message) || '');
+    var lead = (msg && msg !== '这个链接没取到正文') ? msg : '服务器连上了，但这一页没把正文交出来。';
+
     openSheet(
-      '<p>' + esc((err && err.message) || '解析失败') + '</p>' +
+      '<p>' + esc(lead) + '</p>' +
       '<div class="note mt-s">' + U.ic('info', 14) + '<div>' + why + '</div></div>' + detail,
       {
         title: '这个链接没取到正文',

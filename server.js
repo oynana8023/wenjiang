@@ -724,7 +724,7 @@ async function parseUrl(url, hintTitle) {
       const out = extract(html);
       if (out.text.length >= need && usable(out.text, need)) return out;
       if (JUNK_RE.test(out.text.slice(0, 120))) lastErr = isWx ? '这篇公众号文章打不开（链接可能已失效或被删除）' : '站点返回的是拦截页，不是正文';
-      else lastErr = '正文只有 ' + out.text.length + ' 字';
+      else lastErr = out.text.length ? ('这一页只返回了 ' + out.text.length + ' 字，凑不成稿') : '这一页没返回正文';
     } catch (e) {
       lastErr = e.name === 'AbortError' ? '抓取超时' : e.message;
     }
@@ -1102,7 +1102,7 @@ const server = http.createServer(async (req, res) => {
 
   if (u.pathname.startsWith('/api/')) {
     try {
-      if (u.pathname === '/api/health') return send(res, 200, { ok: true, version: '3.1.0', runtime: 'node' });
+      if (u.pathname === '/api/health') return send(res, 200, { ok: true, version: '3.2.0', runtime: 'node' });
       if (u.pathname === '/api/hot') {
         const d = await getHot(u.searchParams.get('src') || 'all');
         return send(res, 200, d);

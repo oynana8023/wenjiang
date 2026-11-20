@@ -437,7 +437,7 @@ async function parseUrl(raw, hintTitle) {
         return value;
       }
       if (JUNK_RE.test(out.text.slice(0, 120))) lastErr = isWx ? '这篇公众号文章打不开（链接可能已失效或被删除）' : '站点返回的是拦截页，不是正文';
-      else lastErr = '正文只有 ' + out.text.length + ' 字';
+      else lastErr = out.text.length ? ('这一页只返回了 ' + out.text.length + ' 字，凑不成稿') : '这一页没返回正文';
     } catch (e) {
       lastErr = e && e.name === 'AbortError' ? '抓取超时' : (e && e.message) || '抓取失败';
     }
