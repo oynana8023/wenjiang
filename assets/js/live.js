@@ -145,13 +145,24 @@ window.WJLive = (function () {
     probeCache = {};
   }
 
-  async function callBase(base, url, minLen, ms) {
-    var d = await getJSON(apiUrl(base, '/api/parse', { url: url }), ms || 22000);
+  async function callBase(base, url, minLen, ms, title) {
+    var d = await getJSON(apiUrl(base, '/api/parse', { url: url, title: title || '' }), ms || 22000);
     if (!d) throw new Error('返回为空');
-    if (!d.ok) throw new Error(d.error || '解析失败');
+    if (!d.ok) {
+      var e = new Error(d.error || '解析失败');
+      e.code = d.code || '';
+      throw e;
+    }
     var text = String(d.text || '');
     if (text.length < minLen) throw new Error('正文只有 ' + text.length + ' 字');
-    return { title: d.title || '', text: text.slice(0, 12000), chars: text.length };
+    return {
+      title: d.title || '',
+      text: text.slice(0, 12000),
+      chars: text.length,
+      via: d.via || '',
+      note: d.note || '',
+      related: d.related || null
+    };
   }
 
   /* 多地址并行竞速：谁先拿到合格正文就用谁，其余自动丢弃 */
@@ -177,8 +188,8 @@ window.WJLive = (function () {
     });
   }
 
-  function raceParse(bases, url, minLen) {
-    return raceCall(bases, function (b) { return callBase(b, url, minLen); });
+  function raceParse(bases, url, minLen, title) {
+    return raceCall(bases, function (b) { return callBase(b, url, minLen, 22000, title); });
   }
 
   /* ---------------- 元信息：分类 / 发布时间 / 头图 ---------------- */
@@ -275,7 +286,24 @@ window.WJLive = (function () {
     var tk = timeout(ms || 7000);
     try {
       var r = await fetch(url, Object.assign({ signal: tk.signal, cache: 'no-store' }, opts || {}));
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (!r.ok) {
+        /* 关键：非 2xx 时也要把响应体读出来。旧版直接抛 "HTTP 502"，
+           把服务端写明的「正文只有 0 字 / HTTP 403」全丢了，于是界面误报「服务离线」。 */
+        var body = '';
+        try { body = await r.text(); } catch (e2) { /* ignore */ }
+        var msg = 'HTTP ' + r.status, code = '';
+        try {
+          var j = JSON.parse(body);
+          if (j && j.error) msg = String(j.error);
+          if (j && j.code) code = String(j.code);
+        } catch (e3) {
+          if (body && body.length < 160 && body.charAt(0) !== '<') msg = body.trim();
+        }
+        var err = new Error(msg);
+        err.status = r.status;
+        err.code = code;
+        throw err;
+      }
       return await r.json();
     } finally {
       tk.done();
@@ -463,7 +491,7 @@ window.WJLive = (function () {
             resolve({ data: r, task: t });
           })
           .catch(function (err) {
-            errs.push(t.label + '：' + errMsg(err));
+            errs.push(t.label + '：' + (err && err.status >= 500 ? 'HTTP ' + err.status + ' ' : '') + errMsg(err));
             if (--left === 0 && !done) {
               done = true; clearTimeout(timer);
               var e = new Error('所有通道都没成功');
@@ -558,9 +586,10 @@ window.WJLive = (function () {
     try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
   }
 
-  async function parseLink(raw, onStep) {
+  async function parseLink(raw, onStep, hintTitle) {
     var url = pickUrl(raw);
     if (!url) throw new Error('没有识别到以 http 开头的链接');
+    var titleHint = String(hintTitle || '').trim();
 
     var cacheKey = 'wj.parse.' + url;
     try {
@@ -577,6 +606,9 @@ window.WJLive = (function () {
         text: r.text,
         chars: r.chars || (r.text || '').length,
         via: via,
+        net: r.via || '',
+        note: r.note || '',
+        related: r.related || null,
         at: Date.now()
       };
       try { localStorage.setItem(cacheKey, JSON.stringify(out)); } catch (e) { /* ignore */ }
@@ -586,10 +618,10 @@ window.WJLive = (function () {
     /* 服务端失败一次就记下来：502 多半是实例刚重启，隔 600ms 再试一次通常就好了 */
     function viaServer(base, label) {
       return function () {
-        return callBase(base, url, minLen, 18000).catch(function (e) {
-          if (!/HTTP 50[234]/.test(String(e && e.message))) throw e;
+        return callBase(base, url, minLen, 18000, titleHint).catch(function (e) {
+          if (!(e && e.status >= 500)) throw e;
           return new Promise(function (r) { setTimeout(r, 600); })
-            .then(function () { return callBase(base, url, minLen, 15000); });
+            .then(function () { return callBase(base, url, minLen, 15000, titleHint); });
         }).then(function (r) { return { data: r, label: label }; });
       };
     }
@@ -599,7 +631,7 @@ window.WJLive = (function () {
     var same = await hasServer();
     if (same) {
       tasks.push({ label: '站内服务', via: 'server', run: function () {
-        return callBase('', url, minLen, 18000).then(function (r) { return r; });
+        return callBase('', url, minLen, 18000, titleHint).then(function (r) { return r; });
       } });
     }
 
@@ -651,7 +683,7 @@ window.WJLive = (function () {
         /* 第二轮起只跑服务端通道：公共代理刚才已经证明不通，没必要再等 */
         return await attempt(round === 0 ? tasks : serverOnly);
       } catch (e) {
-        var lost = /HTTP 50[234]/.test(String((e && e.detail) || ''));
+        var lost = /HTTP 5\d\d/.test(String((e && e.detail) || ''));
         if (lost && round < waits.length && serverOnly.length) {
           if (onStep) onStep('解析服务正在唤醒，稍等重试', 1, 1);
           await new Promise(function (r) { setTimeout(r, waits[round]); });

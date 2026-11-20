@@ -14,7 +14,7 @@
  * 部署方式见 README「三分钟上线自己的解析服务」。
  */
 
-const VERSION = '3.0.0';
+const VERSION = '3.1.0';
 const MAX_BYTES = 12 * 1024 * 1024;
 const TEXT_LIMIT = 12000;
 const TIMEOUT = 13000;
@@ -27,7 +27,7 @@ const UA_DESKTOP =
 /* ---------------- 正文抽取 ---------------- */
 
 const NOISE =
-  /^(登录|注册|下载客户端|扫码|打开APP|广告|版权所有|免责声明|责任编辑|点击查看|上一篇|下一篇|相关阅读|热门推荐|分享到|阅读原文)/;
+  /^(登录|注册|下载客户端|扫码|打开APP|广告|版权所有|免责声明|责任编辑|点击查看|上一篇|下一篇|相关阅读|热门推荐|分享到|阅读原文|收藏|播放列表|正在播放|热播榜|视频加载中)/;
 
 function decode(s) {
   return String(s)
@@ -177,7 +177,121 @@ async function grab(target, ua) {
   }
 }
 
-async function parseUrl(raw) {
+function guessTitle(url) {
+  try {
+    const t = new URL(url);
+    if (/weibo\.(com|cn)$/i.test(t.hostname)) {
+      return String(t.searchParams.get('q') || '').replace(/^#+|#+$/g, '').trim();
+    }
+    if (/douyin\.com$/i.test(t.hostname)) {
+      const m = t.pathname.match(/\/search\/(.+)$/);
+      if (m) return decodeURIComponent(m[1]).trim();
+    }
+  } catch (e) { /* ignore */ }
+  return '';
+}
+
+async function weiboPosts(title, limit) {
+  const t = String(title || '').replace(/^#+|#+$/g, '').replace(/\s+/g, ' ').trim();
+  if (!t) return null;
+  const cid = '100103type=1&t=10&q=#' + t + '#';
+  const j = await wbJson('/api/container/getIndex?containerid=' + encodeURIComponent(cid) + '&page_type=searchall');
+  const rows = [];
+  for (const c of (j.data && j.data.cards) || []) {
+    const mb = c && c.card_type === 9 && c.mblog;
+    if (!mb) continue;
+    const txt = tidyText(stripTags(String(mb.text || '')));
+    if (txt.length < 20) continue;
+    rows.push(((mb.user && mb.user.screen_name) ? mb.user.screen_name + '：' : '') + txt);
+    if (rows.length >= (limit || 6)) break;
+  }
+  if (!rows.length) return null;
+  const text = ('微博话题「' + t + '」下正在讨论的原文（按搜索结果顺序）\n\n' + rows.join('\n\n')).slice(0, TEXT_LIMIT);
+  return { title: '#' + t + '#', text, chars: text.length, via: 'weibo', note: '话题页由脚本动态渲染，这里取的是该话题下微博正文' };
+}
+
+const NEWS_RE = /<h3[^>]*class="[^"]*c-title[^"]*"[^>]*>[\s\S]{0,600}?<a[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+
+function newsQueries(title) {
+  const base = String(title || '').replace(/[#【】\[\]「」“”"'!?！？,，、|/：:]/g, ' ').replace(/\s+/g, ' ').trim();
+  const out = [];
+  if (base) out.push(base);
+  const segs = base.split(' ').filter((x) => x.length >= 2);
+  if (segs.length > 1) out.push(segs.slice(0, 2).join(' '));
+  [12, 8, 5].forEach((n) => { if (base.length > n) out.push(base.slice(0, n)); });
+  return [...new Set(out)].filter(Boolean);
+}
+
+const BING_RE = /<li class="b_algo"[\s\S]{0,1500}?<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+
+function skipHost(u) {
+  try {
+    const h = new URL(u).hostname;
+    if (/^baike\.baidu\.com$/i.test(h)) return true;
+    return /(^|\.)(douyin|bilibili|youtube|zhihu|weibo)\./i.test(h);
+  } catch (e) {
+    return true;
+  }
+}
+
+async function bingSearch(title, limit) {
+  const { html } = await grab(new URL('https://cn.bing.com/search?q=' + encodeURIComponent(title) + '&setlang=zh-CN'), UA_DESKTOP);
+  const out = [];
+  BING_RE.lastIndex = 0;
+  let m;
+  while ((m = BING_RE.exec(html)) && out.length < (limit || 6)) {
+    const link = m[1].replace(/&amp;/g, '&');
+    const t2 = tidyText(stripTags(m[2]));
+    if (!link || !t2 || skipHost(link)) continue;
+    if (out.some((x) => x.url === link)) continue;
+    out.push({ url: link, title: t2.slice(0, 80) });
+  }
+  return out;
+}
+
+async function baiduNews(title, limit) {
+  const { html } = await grab(new URL('https://www.baidu.com/s?tn=news&word=' + encodeURIComponent(title)), UA_MOBILE);
+  const out = [];
+  NEWS_RE.lastIndex = 0;
+  let m;
+  while ((m = NEWS_RE.exec(html)) && out.length < (limit || 6)) {
+    const link = m[1].replace(/&amp;/g, '&');
+    const t2 = tidyText(stripTags(m[2]));
+    if (!link || !t2 || /baidu\.com\/link/.test(link) || skipHost(link)) continue;
+    if (out.some((x) => x.url === link)) continue;
+    out.push({ url: link, title: t2.slice(0, 80) });
+  }
+  return out;
+}
+
+async function relatedParse(title) {
+  for (const q of newsQueries(title).slice(0, 3)) {
+    let news = [];
+    try { news = await bingSearch(q, 6); } catch (e) { news = []; }
+    if (!news.length) {
+      try { news = await baiduNews(q, 6); } catch (e) { news = []; }
+    }
+    for (const n of news.slice(0, 3)) {
+      if (skipHost(n.url)) continue;
+      try {
+        const { html } = await grab(new URL(n.url), UA_MOBILE);
+        const out = extract(html);
+        if (out.text.length < 180) continue;
+        return {
+          title: out.title || n.title,
+          text: out.text.slice(0, TEXT_LIMIT),
+          chars: out.text.length,
+          via: 'related',
+          related: n,
+          note: '原页面抓不到正文，这里是对同一事件的报道'
+        };
+      } catch (e) { /* next */ }
+    }
+  }
+  return null;
+}
+
+async function parseUrl(raw, hintTitle) {
   let target;
   try {
     target = new URL(raw);
@@ -211,6 +325,19 @@ async function parseUrl(raw) {
     } catch (e) {
       lastErr = e && e.name === 'AbortError' ? '抓取超时' : (e && e.message) || '抓取失败';
     }
+  }
+  const title = String(hintTitle || '').trim() || guessTitle(raw);
+  if (title && /weibo\.(com|cn)$/i.test(target.hostname)) {
+    try {
+      const w = await weiboPosts(title);
+      if (w) return w;
+    } catch (e) { /* 继续兜底 */ }
+  }
+  if (title) {
+    try {
+      const rel = await relatedParse(title);
+      if (rel) return rel;
+    } catch (e) { /* 继续兜底 */ }
   }
   throw new Error(lastErr || '解析失败');
 }
@@ -689,18 +816,26 @@ export default {
     }
 
     if (url.pathname === '/api/parse') {
-      const target = url.searchParams.get('url');
+      const target = readTarget(url);
       if (!target) return json({ ok: false, error: '缺少 url 参数' }, 400);
       try {
-        const out = await parseUrl(target);
-        return json({ ok: true, title: out.title, text: out.text, chars: out.chars, via: 'worker' });
+        const out = await parseUrl(target, url.searchParams.get('title') || '');
+        return json({
+          ok: true,
+          title: out.title,
+          text: out.text,
+          chars: out.chars,
+          via: out.via || 'direct',
+          note: out.note || '',
+          related: out.related || null
+        });
       } catch (e) {
-        return json({ ok: false, error: (e && e.message) || '解析失败' }, 200);
+        return json({ ok: false, error: (e && e.message) || '解析失败', code: 'PARSE_FAIL' }, 200);
       }
     }
 
     if (url.pathname === '/api/meta') {
-      const target = url.searchParams.get('url');
+      const target = readTarget(url);
       if (!target) return json({ ok: false, error: '缺少 url 参数' }, 400);
       try {
         const meta = await metaFor(target, url.searchParams.get('src') || '');

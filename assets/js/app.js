@@ -556,7 +556,7 @@
         state.genNote = '正在取正文 · ' + label + '（' + i + '/' + n + '）';
         var el = document.getElementById('genNote');
         if (el) el.textContent = state.genNote;
-      });
+      }, c.sourceTitle || '');
       if (r.title) state.compose.sourceTitle = r.title;
       state.compose.sourceUrl = c.link1.trim();
       return r.text;
@@ -1331,14 +1331,15 @@
 
   function openParseFail(err) {
     var d = String((err && err.detail) || '');
-    var offline = /HTTP 50[234]|连不上|timeout|超时/i.test(d);
+    /* 只有真的 5xx / 连不上才算「服务不在线」；内容抓不到是业务失败，服务本身是好的 */
+    var offline = /HTTP 5\d\d|连不上|Failed to fetch|NetworkError/i.test(d);
     lastFail = err && err.url ? { url: err.url, title: err.title || '' } : null;
 
     var why = offline
-      ? '解析服务这会在重启或暂时连不上（免费沙盒实例每隔一阵会重启一次），公共代理在手机网络上基本不通。' +
-        '可以直接点下面的<b>再试一次</b>；要长期稳定，去<b>我的 → 解析服务</b>按说明部署自己的 Worker，地址填进去就一劳永逸。'
-      : '常见原因：公众号对非微信环境的抓取有限制、正文由脚本动态渲染、或者站点对抓取有风控。' +
-        '可以点<b>再试一次</b>，或到<b>我的 → 解析服务</b>点一次「只检测不保存」看哪条通道在线。';
+      ? '解析服务这一次没响应（免费沙盒实例每隔一阵会重启，重启的十几秒里就会这样）。' +
+        '点下面的<b>再试一次</b>通常就恢复了；要长期稳定，去<b>我的 → 解析服务</b>按说明部署自己的 Worker。'
+      : '服务是在线的，是这一页本身拿不到正文：微博话题页、抖音搜索页由脚本动态渲染，知乎等站点有抓取风控，' +
+        '服务器拿到的常常是空壳或被 403。可以直接点<b>用浏览器打开</b>看原文，或换成文章页链接再解析。';
 
     var detail = d ? '<div class="sec-sub" style="margin-top:10px;word-break:break-all;line-height:1.8;white-space:pre-line">' + esc(d) + '</div>' : '';
 
@@ -1362,14 +1363,15 @@
   async function parseAndGo(url, title) {
     toast('正在取正文…');
     try {
-      var pr = await L.parseLink(url, function (label) { toast('解析中 · ' + label); });
+      var pr = await L.parseLink(url, function (label) { toast('解析中 · ' + label); }, title);
       state.compose.mode = 'text';
       state.compose.text1 = pr.text;
       state.compose.sourceTitle = pr.title || title || '';
       state.compose.sourceUrl = url;
+      state.compose.sourceNote = pr.note || '';
       state.result = null;
       go('compose', { nav: 'push' });
-      toast('已取到 ' + pr.text.length + ' 字正文');
+      toast((pr.note ? pr.note + ' · ' : '') + '已取到 ' + pr.text.length + ' 字');
     } catch (e) {
       openParseFail(e);
     }

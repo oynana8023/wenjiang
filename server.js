@@ -85,7 +85,7 @@ async function getHot(src) {
 
 /* ---------------- 正文抽取 ---------------- */
 
-const NOISE = /^(登录|注册|下载客户端|扫码|打开APP|广告|版权所有|免责声明|责任编辑|点击查看|上一篇|下一篇|相关阅读|热门推荐)/;
+const NOISE = /^(登录|注册|下载客户端|扫码|打开APP|广告|版权所有|免责声明|责任编辑|点击查看|上一篇|下一篇|相关阅读|热门推荐|收藏|播放列表|正在播放|热播榜|来源\s*[:：]|视频加载中|超清|标清|倍速)/;
 
 function decode(s) {
   return String(s)
@@ -433,7 +433,141 @@ async function grabHtml(target, ua) {
   }
 }
 
-async function parseUrl(url) {
+/* 从榜单链接里反推标题：微博 s.weibo.com/weibo?q=#话题#、抖音 /search/关键词 */
+function guessTitle(url) {
+  try {
+    const t = new URL(url);
+    if (/weibo\.(com|cn)$/i.test(t.hostname)) {
+      return String(t.searchParams.get('q') || '').replace(/^#+|#+$/g, '').replace(/\s+/g, ' ').trim();
+    }
+    if (/douyin\.com$/i.test(t.hostname)) {
+      const m = t.pathname.match(/\/search\/(.+)$/);
+      if (m) return decodeURIComponent(m[1]).replace(/\s+/g, ' ').trim();
+    }
+    if (/toutiao\.com$/i.test(t.hostname) && t.searchParams.get('title')) {
+      return String(t.searchParams.get('title')).trim();
+    }
+  } catch (e) { /* ignore */ }
+  return '';
+}
+
+/* 微博话题页、抖音搜索页是 JS 渲染的空壳，直抓只能拿到 0 字。
+   退一步取该话题下真实博文正文（和头图走的是同一条 m.weibo.cn 通道）。 */
+async function weiboPosts(title, limit) {
+  const t = String(title || '').replace(/^#+|#+$/g, '').replace(/\s+/g, ' ').trim();
+  if (!t) return null;
+  const cid = '100103type=1&t=10&q=#' + t + '#';
+  const j = await wbJson('/api/container/getIndex?containerid=' + encodeURIComponent(cid) + '&page_type=searchall');
+  const rows = [];
+  for (const c of (j.data && j.data.cards) || []) {
+    const mb = c && c.card_type === 9 && c.mblog;
+    if (!mb) continue;
+    const txt = tidyText(stripTags(String(mb.text || '')));
+    if (txt.length < 20) continue;
+    const who = (mb.user && mb.user.screen_name) || '';
+    rows.push((who ? who + '：' : '') + txt);
+    if (rows.length >= (limit || 6)) break;
+  }
+  if (!rows.length) return null;
+  const text = ('微博话题「' + t + '」下正在讨论的原文（按搜索结果顺序）\n\n' + rows.join('\n\n')).slice(0, 12000);
+  return {
+    title: '#' + t + '#',
+    text,
+    chars: text.length,
+    via: 'weibo',
+    note: '话题页由脚本动态渲染，这里取的是该话题下微博正文'
+  };
+}
+
+/* 同题报道：知乎/抖音/头条这类站点对抓取有风控时，用标题去百度资讯搜真实报道，
+   抓其中正文最完整的一篇。只做「同一件事」的报道，不改写、不编造。 */
+const NEWS_RE = /<h3[^>]*class="[^"]*c-title[^"]*"[^>]*>[\s\S]{0,600}?<a[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+
+async function baiduNews(title, limit) {
+  const html = await grabHtml(new URL('https://www.baidu.com/s?tn=news&word=' + encodeURIComponent(title)), UA_MOBILE);
+  const out = [];
+  NEWS_RE.lastIndex = 0;
+  let m;
+  while ((m = NEWS_RE.exec(html)) && out.length < (limit || 6)) {
+    const link = m[1].replace(/&amp;/g, '&');
+    const t2 = tidyText(stripTags(m[2]));
+    if (!link || !t2 || /baidu\.com\/link/.test(link)) continue;
+    if (out.some((x) => x.url === link)) continue;
+    out.push({ url: link, title: t2.slice(0, 80) });
+  }
+  return out;
+}
+
+function newsQueries(title) {
+  const base = String(title || '')
+    .replace(/[#【】\[\]「」“”"'!?！？,，、|/：:]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const out = [];
+  if (base) out.push(base);
+  const segs = base.split(' ').filter((x) => x.length >= 2);
+  if (segs.length > 1) out.push(segs.slice(0, 2).join(' '));
+  [12, 10, 8, 6, 5].forEach((n) => {
+    if (base.length > n) out.push(base.slice(0, n));
+  });
+  return [...new Set(out)].filter(Boolean);
+}
+
+const BING_RE = /<li class="b_algo"[\s\S]{0,1500}?<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+function skipHost(u) {
+  try {
+    const h = new URL(u).hostname;
+    if (/^baike\.baidu\.com$/i.test(h)) return true;
+    return /(^|\.)(douyin|bilibili|youtube|zhihu|weibo)\./i.test(h);
+  } catch (e) {
+    return true;
+  }
+}
+
+async function bingSearch(title, limit) {
+  const html = await grabHtml(new URL('https://cn.bing.com/search?q=' + encodeURIComponent(title) + '&setlang=zh-CN'), UA_DESKTOP);
+  const out = [];
+  BING_RE.lastIndex = 0;
+  let m;
+  while ((m = BING_RE.exec(html)) && out.length < (limit || 6)) {
+    const link = m[1].replace(/&amp;/g, '&');
+    const t2 = tidyText(stripTags(m[2]));
+    if (!link || !t2) continue;
+    if (skipHost(link)) continue;
+    if (out.some((x) => x.url === link)) continue;
+    out.push({ url: link, title: t2.slice(0, 80) });
+  }
+  return out;
+}
+
+async function relatedParse(title) {
+  for (const q of newsQueries(title).slice(0, 3)) {
+    let news = [];
+    try { news = await bingSearch(q, 6); } catch (e) { news = []; }
+    if (!news.length) {
+      try { news = await baiduNews(q, 6); } catch (e) { news = []; }
+    }
+    for (const n of news.slice(0, 3)) {
+      if (skipHost(n.url)) continue;
+      try {
+        const html = await grabHtml(new URL(n.url), UA_MOBILE);
+        const out = extract(html);
+        if (out.text.length < 180) continue;
+        return {
+          title: out.title || n.title,
+          text: out.text.slice(0, 12000),
+          chars: out.text.length,
+          via: 'related',
+          related: n,
+          note: '原页面抓不到正文，这里是对同一事件的报道'
+        };
+      } catch (e) { /* 换下一篇 */ }
+    }
+  }
+  return null;
+}
+
+async function parseUrl(url, hintTitle) {
   let target;
   try {
     target = new URL(url);
@@ -466,7 +600,25 @@ async function parseUrl(url) {
       lastErr = e.name === 'AbortError' ? '抓取超时' : e.message;
     }
   }
-  throw new Error(lastErr || '解析失败');
+  /* 直抓失败：话题/搜索页走平台原文，其他站点找同题报道 */
+  const title = String(hintTitle || '').trim() || guessTitle(url);
+  if (title && /weibo\.(com|cn)$/i.test(target.hostname)) {
+    try {
+      const w = await weiboPosts(title);
+      if (w) return w;
+    } catch (e) { /* 继续兜底 */ }
+  }
+  if (title) {
+    try {
+      const rel = await relatedParse(title);
+      if (rel) return rel;
+    } catch (e) { /* 继续兜底 */ }
+  }
+
+  const err = new Error(lastErr || '解析失败');
+  err.code = 'NO_TEXT';
+  err.title = title;
+  throw err;
 }
 
 async function metaFor(url) {
@@ -751,8 +903,20 @@ async function proxyImage(target) {
 
 /* ---------------- 服务 ---------------- */
 
-function send(res, code, obj) {
-  const body = JSON.stringify(obj);
+/* url= 明文；u= base64url（个别网关会拦查询串里的 http:// 字面量，留一条备用通道） */
+function readTarget(u) {
+  const plain = u.searchParams.get('url');
+  if (plain) return plain;
+  const b = u.searchParams.get('u') || '';
+  if (!b) return '';
+  try {
+    return Buffer.from(b.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+  } catch (e) {
+    return '';
+  }
+}
+
+function send(res, code, obj) {  const body = JSON.stringify(obj);
   res.writeHead(code, {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
@@ -781,22 +945,46 @@ const server = http.createServer(async (req, res) => {
 
   if (u.pathname.startsWith('/api/')) {
     try {
-      if (u.pathname === '/api/health') return send(res, 200, { ok: true, version: '2.0.0', runtime: 'node' });
+      if (u.pathname === '/api/health') return send(res, 200, { ok: true, version: '3.1.0', runtime: 'node' });
       if (u.pathname === '/api/hot') {
         const d = await getHot(u.searchParams.get('src') || 'all');
         return send(res, 200, d);
       }
       if (u.pathname === '/api/parse') {
-        const url = u.searchParams.get('url');
+        const url = readTarget(u);
         if (!url) return send(res, 400, { ok: false, error: '缺少 url' });
-        const out = await parseUrl(url);
-        return send(res, 200, { ok: true, title: out.title, text: out.text.slice(0, 12000), chars: out.text.length });
+        const title = u.searchParams.get('title') || '';
+        /* 业务失败也回 200：让前端能看到「正文只有 0 字 / HTTP 403」这种真实原因，
+           而不是被当成网关 502 显示「服务离线」。5xx 只留给真正的服务异常。 */
+        try {
+          const out = await parseUrl(url, title);
+          return send(res, 200, {
+            ok: true,
+            title: out.title,
+            text: out.text.slice(0, 12000),
+            chars: out.text.length,
+            via: out.via || 'direct',
+            note: out.note || '',
+            related: out.related || null
+          });
+        } catch (e) {
+          return send(res, 200, {
+            ok: false,
+            error: e.message || '解析失败',
+            code: e.code || 'PARSE_FAIL',
+            title: e.title || title || ''
+          });
+        }
       }
       if (u.pathname === '/api/meta') {
-        const url = u.searchParams.get('url');
+        const url = readTarget(u);
         if (!url) return send(res, 400, { ok: false, error: '缺少 url' });
-        const meta = await metaFor(url);
-        return send(res, 200, Object.assign({ ok: true }, meta));
+        try {
+          const meta = await metaFor(url);
+          return send(res, 200, Object.assign({ ok: true }, meta));
+        } catch (e) {
+          return send(res, 200, { ok: false, error: e.message || '取不到页面信息', code: 'META_FAIL' });
+        }
       }
       if (u.pathname === '/api/img') {
         const target = u.searchParams.get('u') || '';
@@ -813,7 +1001,8 @@ const server = http.createServer(async (req, res) => {
       }
       return send(res, 404, { ok: false, error: '接口不存在' });
     } catch (e) {
-      return send(res, 502, { ok: false, error: e.message || '服务异常' });
+      console.error('[api]', u.pathname, e && e.message);
+      return send(res, 500, { ok: false, error: e.message || '服务异常', code: 'INTERNAL' });
     }
   }
 
