@@ -970,74 +970,242 @@ window.WJEngine = (function () {
 
 
   /* ---------------- 配图提示词 ----------------
-     没有出图模型时，给出可直接粘贴到即梦 / 豆包 / MJ 的提示词。
-     结构：主体 → 场景 → 构图 → 光线 → 色彩 → 风格 → 画质 → 负面 */
-  var VIS_STYLE = {
-    news: ['纪实质感摄影', '自然光、现场感、克制的中性色', '中景偏广，信息完整'],
-    wechat: ['编辑类插画，几何色块拼接', '侧逆光，层次分明', '三分法，留出标题空间'],
-    xhs: ['明亮生活感摄影，浅景深', '柔和日光，暖白基调', '俯拍或平视，桌面构图'],
-    video: ['电影感画面，浅景深', '戏剧性侧光，暗部压深', '宽画幅，主体偏一侧'],
-    zhihu: ['极简信息图风格，扁平几何', '均匀柔光，无强阴影', '居中对称，留白充足'],
-    weibo: ['高对比海报感，粗颗粒', '硬光，明暗对比强烈', '低角度，主体突出']
+     一条铁律：提示词只写「看得见的东西」——具体的物体、材质、场景、光线。
+     事件词（发布/涨价/裁员）、观点词（影响/趋势/热议）、型号编码一律不写进画面，
+     因为它们不可绘制。模型拿到「某某价格公布」只能瞎猜，最后给一张
+     与稿子无关的「科技感」图——这就是提示词与成图不符的根因。
+
+     做法：① 把稿子归到一个可视类目（手机/汽车/芯片/咖啡…），
+           ② 用该类目的固定视觉描述打底（一定画得出来），
+           ③ 用稿子里的颜色、天气、场景做微调，
+           ④ 事件只用来换场景（发布会 / 空工位 / 夜景写字楼），不当作主体。 */
+
+  /* 类目 → [中文主体, 英文主体, 中文场景, 英文场景, 自检关键词] */
+  var VIS_CAT = {
+    phone: ['一部深色旗舰手机，直立放置，背面多摄模组与金属中框反光',
+      'a flagship smartphone standing upright, triple camera module and brushed metal frame catching the light',
+      '深色影棚的哑光展台', 'a matte pedestal in a dark studio', '手机'],
+    car: ['一辆深灰色纯电轿车，车身四分之三侧面，漆面映出天空',
+      'a dark grey electric sedan in three-quarter view, paint reflecting the sky',
+      '空旷柏油路面与远处厂房', 'an empty asphalt road with a distant industrial building', '汽车'],
+    chip: ['一枚方形芯片放在黑色防静电垫上，金属引脚与电路走线清晰',
+      'a square silicon chip on a black anti-static mat, metal pins and circuit traces in sharp focus',
+      '无尘车间的冷白灯下', 'under cool white light in a clean room', '芯片'],
+    robot: ['一台人形机器人上半身，金属关节与线束外露，手臂自然下垂',
+      'the upper body of a humanoid robot, exposed metal joints and cable harness, arms hanging naturally',
+      '工厂流水线旁，背景是传送带', 'beside a factory assembly line with a conveyor in the background', '机器人'],
+    ai: ['一排服务器机柜，蓝色指示灯连成带状光',
+      'a row of server racks with blue indicator lights forming a band of glow',
+      '数据中心冷通道，地面有反光', 'a data centre cold aisle with reflective flooring', '服务器'],
+    laptop: ['一台打开的轻薄笔记本，屏幕亮着空白文档，铝制机身',
+      'an open ultrabook with a blank document glowing on screen, aluminium chassis',
+      '木质桌面，旁边一杯水', 'a wooden desk with a glass of water beside it', '笔记本电脑'],
+    glass: ['一副黑框智能眼镜，镜腿上有微型摄像模组，镜片映出微光',
+      'a pair of black-framed smart glasses with a tiny camera module on the temple, faint reflections on the lenses',
+      '浅灰背景的极简台面', 'a minimal light grey surface', '眼镜'],
+    gadget: ['一副无线耳机与充电盒，磨砂塑料表面，耳机斜放',
+      'wireless earbuds beside an open charging case, matte plastic surfaces',
+      '浅灰背景的极简台面', 'a minimal light grey surface', '耳机'],
+    food: ['一杯拉花咖啡放在木质吧台上，旁边是咖啡手柄与粉碗',
+      'a latte with poured art on a wooden counter, portafilter and basket beside it',
+      '咖啡馆吧台，背景虚化', 'a cafe counter with a blurred background', '咖啡'],
+    health: ['一只打开的药盒与一副听诊器，白色台面',
+      'an opened pill box and a stethoscope on a white surface',
+      '干净的诊室，柔和顶光', 'a clean clinic room under soft overhead light', '药品'],
+    school: ['一张课桌，摊开的书、铅笔与写满字的草稿纸',
+      'a school desk with an open book, pencils and a scribbled draft',
+      '教室窗边，午后光斜进来', 'beside a classroom window with afternoon light', '书本'],
+    finance: ['一块显示折线的屏幕（画面轻微虚化），前景一支金属笔',
+      'a screen showing a blurred line chart, a metal pen in the foreground',
+      '夜晚写字楼室内，窗外城市灯', 'inside an office at night with city lights outside', '屏幕'],
+    stage: ['空舞台，聚光灯在地面打出光斑，背景是深色幕布',
+      'an empty stage with a spotlight pool on the floor and a dark backdrop',
+      '剧场内，观众席虚化', 'inside a theatre with blurred seating', '舞台'],
+    office: ['开放式办公区，几张桌子、显示器与绿植',
+      'an open-plan office with desks, monitors and a green plant',
+      '落地窗边，白天自然光', 'beside floor-to-ceiling windows in daylight', '办公桌'],
+    travel: ['清晨的站台，铁轨向远处延伸，一只行李箱立在旁边',
+      'a station platform at dawn, tracks running into the distance, a suitcase standing nearby',
+      '薄雾中的月台', 'a misty platform', '站台'],
+    pet: ['一只猫坐在木地板上，旁边是食盆与毛绒玩具',
+      'a cat sitting on a wooden floor beside a food bowl and a plush toy',
+      '居家客厅，午后阳光', 'a living room in afternoon sun', '猫'],
+    beauty: ['一排护肤品瓶身，玻璃与磨砂材质，滴管斜放',
+      'a row of skincare bottles in glass and frosted finishes, a dropper laid diagonally',
+      '浅色石台面，柔光', 'a pale stone surface under soft light', '瓶子'],
+    fitness: ['跑道上的一双跑鞋与一块计时器，鞋带松散',
+      'running shoes and a stopwatch on a track, laces loose',
+      '清晨操场，薄雾与低角度阳光', 'a track at dawn with mist and low sun', '跑鞋'],
+    farm: ['一片稻田近景，稻穗低垂，远处停着农机',
+      'a close view of a rice field with heavy ears of grain, a farm machine in the distance',
+      '田间土路，傍晚金光', 'a dirt path through fields in golden evening light', '稻田'],
+    factory: ['车间里的机械臂与传送带，金属件整齐堆叠',
+      'a robotic arm and conveyor inside a workshop, metal parts stacked neatly',
+      '工厂内部，顶部条形灯', 'inside a factory under linear ceiling lights', '机械臂'],
+    weather: ['雨后的城市街道，积水映出招牌的光',
+      'a city street after rain, puddles reflecting sign lights',
+      '湿沥青路面，一把伞', 'wet asphalt with a single umbrella', '街道'],
+    kid: ['儿童房里散落的积木与翻开的绘本',
+      'wooden blocks and an open picture book scattered in a child room',
+      '居家室内，暖色台灯', 'indoors under a warm table lamp', '积木'],
+    home: ['客厅一角，沙发、毯子与一盏落地灯',
+      'a corner of a living room with a sofa, a throw blanket and a floor lamp',
+      '傍晚的室内暖光', 'indoors in warm evening light', '客厅'],
+    place: ['一张办公桌，摊开的笔记本、笔与一杯咖啡',
+      'a desk with an open notebook, a pen and a cup of coffee',
+      '编辑部桌面，侧窗自然光', 'an editorial desk with side window light', '桌面']
   };
 
-  var VIS_SCENE = {
-    科技: '冷调实验室与精密器件，金属与玻璃反光',
-    财经: '城市写字楼与交易屏幕，玻璃幕墙折射',
-    职场: '开放式办公空间，桌面与屏幕的秩序感',
-    生活: '居家或街区日常，有生活痕迹的细节',
-    健康: '干净的室内与自然植物，柔和空气感',
-    汽车: '车间与路面，金属漆面与地面反光',
-    教育: '书桌、纸张与屏幕，暖色台灯',
-    娱乐: '剧场或片场氛围，暗背景与聚光灯'
+  /* 只用来判定类目，品牌名不进画面描述（否则模型会去画 logo、拼错字） */
+  var VIS_ROUTE = [
+    [/华为|荣耀|小米|红米|OPPO|vivo|一加|realme|魅族|努比亚|三星|iPhone|苹果|手机|折叠屏|新机|旗舰机|机型/i, 'phone'],
+    [/特斯拉|比亚迪|蔚来|小鹏|理想|问界|极氪|零跑|车型|电动车|新能源车|续航|充电桩|智驾|汽车/i, 'car'],
+    [/芯片|晶圆|光刻|制程|算力|GPU|CPU|英伟达|台积电|半导体|存储颗粒/i, 'chip'],
+    [/人形机器人|机械臂|具身智能|宇树|波士顿动力|机器人/i, 'robot'],
+    [/眼镜|AR\b|VR\b|头显|智能镜/i, 'glass'],
+    [/耳机|音箱|相机|手表|手环|无人机|投影|充电宝/i, 'gadget'],
+    [/笔记本|电脑|MacBook|平板|iPad|显示器|键盘|主机/i, 'laptop'],
+    [/大模型|人工智能|智能体|GPT|DeepSeek|提示词|算法|AI\b/i, 'ai'],
+    [/咖啡|奶茶|餐厅|火锅|烘焙|面包|外卖|小吃|菜单|拿铁/i, 'food'],
+    [/医院|医生|体检|疫苗|药品|睡眠|健康|疾病|手术|门诊/i, 'health'],
+    [/学校|高考|考研|学生|课堂|老师|作业|开学|教育|毕业/i, 'school'],
+    [/房价|楼市|股|基金|银行|利率|通胀|经济|消费|财报|营收|利润|融资|市值/i, 'finance'],
+    [/电影|电视剧|综艺|演唱会|明星|演员|歌手|票房|舞台|巡演/i, 'stage'],
+    [/办公|工位|职场|加班|会议|写字楼|远程|裁员|招聘|面试/i, 'office'],
+    [/旅游|景区|酒店|机票|高铁|机场|出行|露营|citywalk|自驾/i, 'travel'],
+    [/宠物|猫|狗|养宠/i, 'pet'],
+    [/美妆|护肤|口红|香水|面膜|精华/i, 'beauty'],
+    [/健身|跑步|马拉松|瑜伽|减肥|运动|骑行/i, 'fitness'],
+    [/农田|农业|粮食|蔬菜|水果|养殖|稻田|果园/i, 'farm'],
+    [/快递|物流|仓库|货车|供应链|工厂|产线|制造|车间/i, 'factory'],
+    [/暴雨|台风|高温|寒潮|天气|地震|洪水|降雪/i, 'weather'],
+    [/宝宝|孩子|育儿|母婴|幼儿园|小学/i, 'kid'],
+    [/装修|租房|买房|客厅|家居|家电/i, 'home']
+  ];
+
+  /* 事件只换场景，不当主体 */
+  var VIS_EVENT = [
+    { re: /发布|公布|官宣|亮相|上线|开售|首销|预售/, cn: '新品发布舞台，背后是一块虚化的大屏', en: 'a launch stage with a large blurred LED wall behind' },
+    { re: /涨价|降价|价格|多少钱|定价|收费|元一杯|客单价/, only: ['food', 'beauty', 'home', 'gadget', 'glass'], cn: '旁边立着一块空白的小价签', en: 'a small blank price card standing nearby' },
+    { re: /裁员|离职|招聘|入职|面试|跳槽|毕业季/, only: ['office', 'place', 'finance', 'laptop'], cn: '空荡的办公区，几张空工位', en: 'a quiet office with several empty desks' },
+    { re: /融资|上市|股价|财报|营收|利润|市值|IPO/i, only: ['finance', 'office', 'place'], cn: '夜晚的写字楼与城市灯光', en: 'an office tower at night among city lights' },
+    { re: /比赛|夺冠|冠军|赛季|决赛|奥运|世界杯/, cn: '灯光打开的体育场', en: 'a floodlit stadium' }
+  ];
+
+  var VIS_PALETTE = {
+    tech: ['冷灰与深蓝，少量青绿高光', 'cool grey and deep blue with a hint of teal highlight'],
+    life: ['米白与木色，低饱和暖调', 'off-white and wood tones, low-saturation warmth'],
+    biz: ['石墨黑与暖金，克制的高光', 'graphite black and warm gold with restrained highlights'],
+    nature: ['雾青与土黄，自然低饱和', 'misty teal and earth yellow, naturally desaturated'],
+    clean: ['雾白与浅木，干净通透', 'misty white and pale wood, clean and airy']
   };
+  var VIS_GROUP = {
+    phone: 'tech', chip: 'tech', robot: 'tech', ai: 'tech', laptop: 'tech', gadget: 'tech', glass: 'tech', factory: 'tech',
+    food: 'life', pet: 'life', beauty: 'life', kid: 'life', home: 'life',
+    finance: 'biz', office: 'biz', stage: 'biz',
+    farm: 'nature', weather: 'nature', travel: 'nature', fitness: 'nature',
+    health: 'clean', school: 'clean'
+  };
+
+  var VIS_LOOK = {
+    news: ['纪实质感摄影', 'documentary photography', '自然光，现场感', 'natural light, on-location feel'],
+    wechat: ['克制的编辑类摄影', 'restrained editorial photography', '侧逆光，层次分明', 'side backlight with clear layering'],
+    xhs: ['明亮生活感摄影', 'bright lifestyle photography', '柔和窗光，暖白基调', 'soft window light, warm white base'],
+    video: ['电影感静帧', 'cinematic still', '戏剧性侧光，暗部压深', 'dramatic side light, deep shadows'],
+    zhihu: ['极简产品摄影', 'minimal product photography', '均匀柔光，无强阴影', 'even soft light, no harsh shadow'],
+    weibo: ['高对比海报质感', 'high-contrast poster look', '硬光，明暗对比强', 'hard light with strong contrast']
+  };
+
+  /* 三个画幅：尺寸直接给厂商，别让它自己裁 */
+  var VIS_FRAME = [
+    { name: '封面 · 竖版', ratio: '3:4', size: '768x1024', cn: '主体位于画面下三分之二，上方留出干净空间', en: 'subject in the lower two thirds, clean empty space above', lens: '85mm 镜头，f/2.0，浅景深', lensEn: '85mm lens, f/2.0, shallow depth of field' },
+    { name: '头图 · 横版', ratio: '16:9', size: '1024x576', cn: '主体偏左，右侧留白', en: 'subject offset to the left with clean space on the right', lens: '35mm 镜头，f/2.8', lensEn: '35mm lens, f/2.8' },
+    { name: '特写 · 方图', ratio: '1:1', size: '1024x1024', cn: '贴近主体的材质特写', en: 'close-up on the material and texture of the subject', lens: '100mm 微距，f/4', lensEn: '100mm macro, f/4' }
+  ];
+
+  var VIS_COLOR = [
+    [/深空蓝|藏蓝|克莱因蓝|蓝色/, '深蓝', 'deep blue'],
+    [/曜石黑|哑光黑|黑色/, '哑光黑', 'matte black'],
+    [/钛|银色|金属灰/, '钛银', 'titanium silver'],
+    [/奶白|白色|雪白/, '象牙白', 'ivory white'],
+    [/香槟金|金色/, '香槟金', 'champagne gold'],
+    [/墨绿|森林绿|绿色/, '墨绿', 'deep green'],
+    [/正红|大红|红色/, '正红', 'deep red'],
+    [/紫色|暮紫/, '暮紫', 'violet'],
+    [/透明|玻璃|水晶/, '通透玻璃', 'clear glass']
+  ];
+
+  function visCatOf(t) {
+    for (var i = 0; i < VIS_ROUTE.length; i++) {
+      if (VIS_ROUTE[i][0].test(t)) return VIS_ROUTE[i][1];
+    }
+    return 'place';
+  }
 
   function visuals(text, opts) {
     opts = opts || {};
     var plain = stripMd(String(text || ''));
-    var kws = keywords(plain, 8).filter(function (w) { return w.length >= 2; });
-    var cat = '';
-    var t = (opts.title || '') + plain.slice(0, 400);
-    if (/汽车|车型|续航|充电|车企/.test(t)) cat = '汽车';
-    else if (/健康|睡眠|医院|医生|体检|疾病/.test(t)) cat = '健康';
-    else if (/教育|高考|学校|学生|考研/.test(t)) cat = '教育';
-    else if (/电影|剧|综艺|明星|演唱会|游戏/.test(t)) cat = '娱乐';
-    else if (/职场|招聘|裁员|加班|打工/.test(t)) cat = '职场';
-    else if (/股|房价|经济|消费|营收|利润|融资/.test(t)) cat = '财经';
-    else if (/AI|芯片|机器人|模型|算力|手机/.test(t)) cat = '科技';
-    else cat = '生活';
+    var title = String(opts.title || '').replace(/[｜|]/g, ' ').trim();
+    var scan = title + ' ' + plain.slice(0, 600);
 
-    var st = VIS_STYLE[opts.style] || VIS_STYLE.news;
-    var scene = VIS_SCENE[cat] || VIS_SCENE['生活'];
-    var subj = opts.title ? String(opts.title).replace(/[｜|]/g, ' ').slice(0, 22) : (kws[0] || '主题');
-    var k2 = kws[1] || kws[0] || '';
-    var k3 = kws[2] || '';
-    var palette = cat === '科技' ? '深空蓝与金属灰，少量荧光绿点缀'
-      : cat === '财经' ? '石墨黑与暖金，克制高光'
-        : cat === '生活' ? '米白与木色，低饱和绿'
-          : cat === '健康' ? '雾白与浅青，干净通透'
-            : '中性灰与单一点缀色';
+    var cat = visCatOf(scan);
+    var cc = VIS_CAT[cat] || VIS_CAT.place;
 
-    function mk(name, ratio, extra) {
+    /* 颜色只在标题里找，正文颜色词多是比喻，容易带偏 */
+    var color = null;
+    for (var ci = 0; ci < VIS_COLOR.length; ci++) {
+      if (VIS_COLOR[ci][0].test(title)) { color = { cn: VIS_COLOR[ci][1], en: VIS_COLOR[ci][2] }; break; }
+    }
+
+    /* 事件换场景；没命中就用类目自带场景 */
+    var setCn = cc[2], setEn = cc[3];
+    for (var ei = 0; ei < VIS_EVENT.length; ei++) {
+      var ev = VIS_EVENT[ei];
+      if (!ev.re.test(scan)) continue;
+      if (ev.only && ev.only.indexOf(cat) < 0) continue;
+      setCn = ev.cn; setEn = ev.en; break;
+    }
+
+    var look = VIS_LOOK[opts.style] || VIS_LOOK.news;
+    var pal = VIS_PALETTE[VIS_GROUP[cat] || 'life'];
+    var subCn = cc[0] + (color ? '，' + color.cn + '配色' : '');
+    var subEn = cc[1] + (color ? ', ' + color.en + ' finish' : '');
+
+    /* 一句人话摘要，放在提示词上方，用户一眼能判断「画的是不是这个」 */
+    var brief = '画的是：' + cc[0].split('，')[0] + (color ? '（' + color.cn + '）' : '') + ' · ' + setCn;
+
+    function build(frame, simple) {
+      var light = simple ? '均匀柔光，背景是干净的纯色' : look[2];
+      var lightEn = simple ? 'even soft light on a clean seamless backdrop' : look[3];
+      var promptCn = '画面主体：' + subCn + '。' +
+        '场景：' + (simple ? '纯净的浅灰背景，没有多余陈设' : setCn) + '。' +
+        '构图：' + frame.cn + '。' +
+        '光线：' + light + '。' +
+        '色彩：' + pal[0] + '。' +
+        '风格：' + look[0] + '，真实材质，不卡通、不插画。' +
+        '镜头：' + frame.lens + '。' +
+        '画质：高清，细节真实，轻微胶片颗粒。' +
+        '不要：任何文字、字母、数字、水印、logo、拼接图、分屏、畸形结构、过度饱和。';
+      var prompt = subEn + ', ' + (simple ? 'on a clean seamless light grey backdrop, no extra props' : setEn) + ', ' +
+        frame.en + ', ' + lightEn + ', ' + pal[1] + ', ' + look[1] + ', photorealistic materials, not cartoon, not illustration, ' +
+        frame.lensEn + ', high detail, fine film grain, ' +
+        'no text, no letters, no numbers, no watermark, no logo, no collage, no split screen, no distorted anatomy, no oversaturation';
       return {
-        name: name,
-        ratio: ratio,
-        prompt: '画面主体：' + subj + (k2 ? '，与「' + k2 + '」相关的具体物件' : '') + '。' +
-          '场景：' + scene + (k3 ? '，背景出现「' + k3 + '」的线索' : '') + '。' +
-          '构图：' + st[2] + (extra ? '，' + extra : '') + '。' +
-          '光线：' + st[1] + '。' +
-          '色彩：' + palette + '。' +
-          '风格：' + st[0] + '，真实质感，不卡通。' +
-          '画质：高清，细节丰富，浅颗粒，8k。' +
-          '避免：任何文字、字母、水印、logo、畸形结构、过度饱和。'
+        name: frame.name,
+        ratio: frame.ratio,
+        size: frame.size,
+        subject: brief,
+        expect: cc[4],
+        prompt: prompt,
+        promptCn: promptCn,
+        alt: simple ? null : {
+          prompt: subEn + ', on a clean seamless light grey backdrop, no extra props, centered, ' + lightEn + ', ' + pal[1] + ', product photography, high detail, no text, no letters, no watermark, no logo',
+          promptCn: '画面主体：' + subCn + '。场景：纯净的浅灰背景，没有多余陈设。构图：居中。光线：均匀柔光。色彩：' + pal[0] + '。风格：产品摄影。不要：任何文字、字母、水印、logo。'
+        }
       };
     }
 
-    return [
-      mk('封面 · 竖版', '3:4', '上方留出 1/3 干净空间放标题'),
-      mk('头图 · 横版', '16:9', '主体偏左，右侧留白'),
-      mk('配图 · 方图', '1:1', '贴近主体特写，突出材质')
-    ];
+    return VIS_FRAME.map(function (f) { return build(f, false); });
   }
 
   return {

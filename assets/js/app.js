@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI;
 
-  var VERSION = 'v2.6.0';
+  var VERSION = 'v2.7.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -46,6 +46,8 @@
     genStep: 0,
     genNote: '',
     imgLoading: false,
+    imgFrame: 0,
+    imgVariant: 0,
     busy: false
   };
 
@@ -105,8 +107,31 @@
     if (!s.activeId || !ps.some(function (p) { return p.id === s.activeId; })) {
       s.activeId = ps.length ? ps[0].id : '';
     }
-    /* 老的字段留空，避免两套配置打架 */
+    /* 老配置里可能把识图模型（glm-4v-flash 一类）选成了出图模型，
+       那是永远出不来图的。这里静默纠正，并在下一次出图时给出说明。 */
+    migrateImageModels();
     s.base = ''; s.key = ''; s.model = ''; s.imageModel = '';
+  }
+
+  var IMG_VISION_RE = /(vision|-vl\b|4v\b|4o\b|glm-4v|omni|internvl|pixtral)/i;
+
+  function migrateImageModels() {
+    var ps = providers(), fixed = 0;
+    ps.forEach(function (p) {
+      if (!p.imageModel || !IMG_VISION_RE.test(p.imageModel)) return;
+      var cand = (p.models || []).filter(function (m) {
+        return m.kind === 'image' && !IMG_VISION_RE.test(m.id) &&
+          m.status !== 'missing' && m.status !== 'paid' && m.status !== 'auth';
+      })[0];
+      var was = p.imageModel;
+      p.imageModel = cand ? cand.id : '';
+      p.imgNote = cand
+        ? '原来选的 ' + was + ' 是识图模型，出不了图，已换成 ' + cand.id
+        : '原来选的 ' + was + ' 是识图模型，出不了图，已清空';
+      fixed++;
+    });
+    if (fixed) save();
+    return fixed;
   }
 
   function hostName(base) {
@@ -1202,6 +1227,7 @@
       '<div class="pv-host">' + esc(hostName(p.base) || '未填地址') + '</div>' +
       '</div>' +
       '<div class="pv-meta">' + esc(provSummary(p)) + '</div>' +
+      (p.imgNote ? '<div class="pv-note">' + esc(p.imgNote) + '</div>' : '') +
       '<div class="pv-acts">' +
       (isActive ? '' : '<button data-act="provider-default" data-id="' + p.id + '">设为默认</button>') +
       '<button data-act="provider-edit" data-id="' + p.id + '">编辑</button>' +
@@ -1311,7 +1337,7 @@
       '<button data-act="add-model">添加并测试</button></div>';
     html += '<div class="note mt-s">' + U.ic('info', 14) +
       '<div>「可用」不是看名字猜的：每次都会让模型真的写一句 20 字左右的中文，写不成句、要充值、没权限、无此模型的一律剔除。' +
-      '所以标了可用，拿去生成就一定出得来内容。出图模型只做存在性探测，不会真的生成图片扣钱。</div></div>';
+      '所以标了可用，拿去生成就一定出得来内容。出图模型会真的画一张 1024 的小图来验，画得出来才标可用；识图模型（glm-4v、qwen-vl 这类）不会出现在出图候选里。</div></div>';
 
     openSheet(html, {
       title: draft.isNew ? '添加服务商' : '编辑服务商',
@@ -1389,6 +1415,8 @@
 
   function modelRow(m) {
     var isImg = m.kind === 'image';
+    /* 识图模型混在出图页会误导人：给个标记、点不了 */
+    var cannotDraw = isImg && /(vision|-vl\b|4v\b|4o\b|glm-4v)/i.test(m.id);
     var on = isImg ? m.id === draft.imageModel : m.id === draft.model;
     var tags = (m.tags || []).map(function (t) {
       var label = { vision: '看图', image: '出图', reason: '推理', fast: '快', heavy: '大', free: '免费' }[t] || t;
@@ -1401,6 +1429,9 @@
       '<span class="md">' + esc(note) + (tags ? ' ' + tags : '') + '</span></span>';
     if (draft.tab === 'other') {
       return '<div class="model off">' + body + '</div>';
+    }
+    if (cannotDraw) {
+      return '<div class="model off">' + body + '<span class="tg">识图</span></div>';
     }
     var act = isImg ? 'pick-image-model' : 'pick-model';
     var btn = '<button class="model' + (on ? ' on' : '') + '" data-act="' + act + '" data-id="' + esc(m.id) + '">' +
@@ -1568,8 +1599,8 @@
     }
     draft.probing = false;
 
-    /* 出图模型顺手探一下前三个（不真出图） */
-    var imgs = draft.models.filter(function (m) { return m.kind === 'image' && !m.status; }).slice(0, 3);
+    /* 出图模型真画一张小图来验：只 200 不返图的以前也标「可用」，那是假的 */
+    var imgs = draft.models.filter(function (m) { return m.kind === 'image' && !m.status; }).slice(0, 2);
     for (var i = 0; i < imgs.length; i++) {
       var r = await L.probeImage({ base: draft.base, key: draft.key }, imgs[i].id);
       imgs[i].status = r.status;
@@ -2314,10 +2345,18 @@
         genImage();
         break;
 
+      case 'use-frame':
+        state.imgFrame = Number(t.dataset.i) || 0;
+        state.imgVariant = 0;
+        genImage();
+        break;
+
       case 'copy-prompt': {
         var vs = E.visuals(state.result.body, { title: state.result.title, style: state.result.styleKey });
         var p = vs[Number(t.dataset.i)];
-        if (p) copy(p.prompt + '\n\n比例：' + p.ratio);
+        if (!p) break;
+        /* 中文给即梦/豆包，英文给 MJ / SD 这类只吃英文的 */
+        copy((t.dataset.lang === 'en' ? p.prompt : p.promptCn) + '\n\n比例：' + p.ratio);
         break;
       }
 
@@ -2423,6 +2462,8 @@
         if (wk && wk.data) {
           state.result = wk.data;
           state.resultTab = 'body';
+          state.imgFrame = 0;
+          state.imgVariant = 0;
           go('result', { nav: 'push' });
         }
         break;
@@ -2653,13 +2694,22 @@
         }
         break;
 
-      case 'pick-image-model':
-        if (draft) {
-          draft.imageModel = t.dataset.id || '';
+      case 'pick-image-model': {
+        if (!draft) break;
+        var wid = t.dataset.id || '';
+        /* 识图模型（glm-4v / qwen-vl 之类）选了也出不了图，当场拦下并给出替代 */
+        if (wid && /(vision|-vl\b|4v\b|4o\b|glm-4v|omni)/i.test(wid)) {
+          var alt2 = L.bestImage(draft.models);
+          toast(wid + ' 是识图模型，不能出图' + (alt2 ? '；已换 ' + alt2.id : ''), 3600);
+          draft.imageModel = alt2 ? alt2.id : '';
           renderModelArea();
-          toast(draft.imageModel ? '出图用 ' + draft.imageModel : '已清空出图模型');
+          break;
         }
+        draft.imageModel = wid;
+        renderModelArea();
+        toast(draft.imageModel ? '出图用 ' + draft.imageModel : '已清空出图模型');
         break;
+      }
 
       case 'test-model':
         if (!draft) return;
@@ -2818,32 +2868,100 @@
 
   /* ---------------- 配图 ---------------- */
 
+  /* 找一台能看图的模型做自检：出图模型不会判断自己对不对，只有识图模型能 */
+  function visionChain() {
+    var out = [];
+    providers().forEach(function (p) {
+      if (!p.base || !p.key) return;
+      if (p.model && /(vision|-vl\b|4v\b|4o\b|omni|glm-4v|qwen-vl|gemini)/i.test(p.model)) {
+        out.push({ base: p.base, key: p.key, model: p.model });
+        return;
+      }
+      (p.models || []).forEach(function (m) {
+        if (m.kind === 'image' || m.kind === 'other') return;
+        if ((m.tags || []).indexOf('vision') < 0) return;
+        if (m.status && m.status !== 'ok') return;
+        out.push({ base: p.base, key: p.key, model: m.id });
+      });
+    });
+    return out.slice(0, 2);
+  }
+
+  /* 问一句「图里有没有这个东西」。返回 true / false / null（判断不了） */
+  async function imageMatches(vis, url, expect) {
+    for (var i = 0; i < vis.length; i++) {
+      try {
+        var a = await L.visionAsk(vis[i], url,
+          '只做一件事：判断这张图里最突出的东西是不是「' + expect + '」。只回答一个字：是，或 否。');
+        if (!a) continue;
+        if (/否|不是|没有|看不出|\bno\b/i.test(a)) return false;
+        if (/是|\byes\b|有/i.test(a)) return true;
+      } catch (e) { /* 这台看不了图，换下一台 */ }
+    }
+    return null;
+  }
+
   async function genImage() {
     var r = state.result;
     if (!r) return;
-    var chain = providerChain('image');
+    var rawChain = providerChain('image');
+    var chain = rawChain.filter(function (p) { return !IMG_VISION_RE.test(p.imageModel || ''); });
     if (!chain.length) {
-      toast('没有配置出图模型，直接用下面的提示词更快', 3000);
       if (state.resultTab !== 'images') { state.resultTab = 'images'; render('same'); }
+      toast(rawChain.length
+        ? '现在配的 ' + rawChain[0].imageModel + ' 是识图模型，出不了图；去「我的 → 出图模型」换一个'
+        : '没有可用的出图模型，先用下面的提示词去即梦/豆包出图', 4000);
       return;
     }
     var vs = E.visuals(r.body, { title: r.title, style: r.styleKey });
     if (!vs.length) return;
+    var f = vs[state.imgFrame] || vs[0];
+    /* 偶数轮用完整场景，奇数轮换成纯净背景——两种视觉差得开，用户能挑 */
+    var useAlt = state.imgVariant % 2 === 1 && f.alt;
+    var prompt = useAlt ? f.alt.prompt : f.prompt;
+    var promptCn = useAlt ? f.alt.promptCn : f.promptCn;
+
     state.imgLoading = true;
     state.resultTab = 'images';
     render('same');
+
+    var vis = visionChain();
+    var got = null, verdict = null, redrew = false;
     try {
-      var res = await L.genImageChain(chain, vs[0].prompt, '1024x1024');
-      r.images = (r.images || []).concat([res.url]);
-      r.imageBy = res.provider.name || res.model;
+      var res = await L.genImageChain(chain, prompt, f.size);
+      got = res;
+
+      /* 自检：画错了就换更简单的构图重画一次，还不对就如实标出来，不装作没问题 */
+      if (vis.length && f.expect) {
+        verdict = await imageMatches(vis, res.url, f.expect);
+        if (verdict === false && f.alt) {
+          try {
+            var res2 = await L.genImageChain(chain, f.alt.prompt, f.size);
+            var v2 = await imageMatches(vis, res2.url, f.expect);
+            if (v2 !== false) { got = res2; verdict = true; redrew = true; promptCn = f.alt.promptCn; }
+          } catch (e2) { /* 重画失败就用第一张 */ }
+        }
+      }
+
+      r.images = [got.url].concat(r.images || []).slice(0, 3);
+      r.imageBy = got.provider.name || got.model;
+      r.imageMeta = {
+        frame: f.name, ratio: f.ratio,
+        prompt: prompt, promptCn: promptCn,
+        check: verdict === true ? 'pass' : verdict === false ? 'fail' : 'skip',
+        redrew: redrew, at: Date.now()
+      };
       var w = state.works.filter(function (x) { return x.id === r.id; })[0];
-      if (w) w.data.images = r.images;
+      if (w) { w.data.images = r.images; w.data.imageMeta = r.imageMeta; }
       save();
-      toast('已用 ' + (r.imageBy || '出图模型') + ' 生成', 2600);
+      if (verdict === false) toast('这张没画到「' + f.expect + '」，可再生成一组', 3200);
+      else if (redrew) toast('第一张跑偏了，已自动重画一张', 2800);
+      else toast('已用 ' + (r.imageBy || '出图模型') + ' 生成', 2400);
     } catch (e) {
-      toast('出图失败：' + (e.message || '') + '，已保留提示词', 3000);
+      toast('出图失败：' + (e.message || '') + '，提示词已保留', 3200);
     }
     state.imgLoading = false;
+    state.imgVariant++;
     render('same');
   }
 

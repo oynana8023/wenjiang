@@ -1001,7 +1001,11 @@ window.WJLive = (function () {
 
   /* 明显不是「文字对话」的模型，先在列表里剔掉，省得测几百个 */
   var JUNK_RE = /(embed|rerank|bge[-_]|gte[-_]|moderation|guard|safety|detector|whisper|\btts\b|text-to-speech|speech|asr\b|transcribe|realtime|veo\b|sora\b|kling|ocr\b|nvclip|\bclip\b|reward|classifier|pii\b|deberta|minilm|arctic|nemoretriever|gliner|parler|\bbark\b|music|stable-audio|upscal|inpaint|controlnet|\bvae\b|tagger|sam2|depth|segment|translate|riva|calibration|synthetic|diffusion-xl-base)/i;
-  var IMG_RE = /(dall-e|gpt-image|image|flux|seedream|kolors|cogview|sd-?xl|sd3|imagen|wanx|t2i|stable-diffusion|midjourney|paint|t2i)/i;
+  var IMG_RE = /(dall-e|gpt-image|image|flux|seedream|kolors|cogview|sd-?xl|sd3|imagen|wanx|t2i|stable-diffusion|midjourney|paint)/i;
+  /* 识图模型（vision / VL / 4v / omni）只能读图，不能出图。
+     以前只看名字里有没有 image，导致 glm-4v-flash 这种识图模型被当成出图模型，
+     点生成必然失败——先把它们挡在门外。 */
+  var VISION_RE = /(vision|-vl\b|vl-|v\d|4v\b|4o\b|omni|multimodal|internvl|pixtral|llava|minicpm-v|step-1v|glm-4v|qwen-vl|grok-vision|nemotron.*vl)/i;
 
   /* 厂商 /models 偶尔漏掉的免费型号，先摆进来，标成「待验证」，
      点一次测试就知道真伪，不会凭空当成可用。 */
@@ -1023,7 +1027,8 @@ window.WJLive = (function () {
     var kind = 'chat';
 
     if (JUNK_RE.test(s)) kind = 'other';
-    if (meta.outImage || IMG_RE.test(s)) { kind = 'image'; tags.push('image'); }
+    var isVision = VISION_RE.test(s);
+    if (!isVision && (meta.outImage || IMG_RE.test(s))) { kind = 'image'; tags.push('image'); }
 
     if (/(vision|vl\b|-v\b|4o|4\.1|omni|claude-3|claude-4|claude-sonnet|claude-opus|gemini|glm-4v|qwen-vl|pixtral|internvl|step-1v|grok-vision|nemotron.*vl|super-vl)/.test(s)) tags.push('vision');
     if (/(^|[-_/])(o1|o3|o4|o5)|r1\b|reasoner|thinking|qwq|reason/.test(s)) tags.push('reason');
@@ -1148,7 +1153,8 @@ window.WJLive = (function () {
   function bestImage(models) {
     var best = null, bs = -1e9;
     (models || []).forEach(function (m) {
-      if (m.kind !== 'image' || m.status === 'missing' || m.status === 'paid') return;
+      if (m.kind !== 'image' || m.status === 'missing' || m.status === 'paid' || m.status === 'auth' || m.status === 'error') return;
+      if (VISION_RE.test(String(m.id).toLowerCase())) return;
       var s = rankOf(m) + (m.status === 'ok' ? 100 : 0);
       if (s > bs) { bs = s; best = m; }
     });
@@ -1256,19 +1262,47 @@ window.WJLive = (function () {
 
   /* 出图模型：发一个空 prompt，模型存在会回「prompt 不能为空」，不存在才会回 model not found。
      这样既能判断有没有权限，又不会真的生成图片扣钱。 */
+  /* 真出一张小图才算「可用」：接口收下 200 但返回空图的情况太常见了 */
   async function probeImage(cfg, model) {
     var base = normBase(cfg.base);
+    if (VISION_RE.test(String(model).toLowerCase())) {
+      return { status: 'missing', why: '这是识图模型，不能出图' };
+    }
+    var t0 = Date.now();
     try {
-      await llmJSON(base, '/images/generations', {
-        key: cfg.key,
-        ms: 25000,
-        body: { model: model, prompt: '', n: 1 }
-      });
-      return { status: 'ok', why: '接口接受该模型' };
+      var url = await genImage({ base: base, key: cfg.key, model: model }, 'a single red apple on a white table, product photo', '1024x1024');
+      if (!url || !/^(https?:|data:image)/.test(url)) throw new Error('返回里没有图片地址');
+      return { status: 'ok', why: '实测出图成功 · ' + ((Date.now() - t0) / 1000).toFixed(1) + 's' };
     } catch (e) {
       var w = whyFail(e.status, e.message);
-      return { status: w === 'missing' || w === 'paid' || w === 'auth' ? w : 'ok', why: String(e.message || '').slice(0, 120) };
+      return { status: w === 'missing' || w === 'paid' || w === 'auth' ? w : 'error', why: String(e.message || '出图失败').slice(0, 120) };
     }
+  }
+
+  /* 用识图模型核对「图里到底有没有这个东西」。没有就重画，这是唯一能自动
+     发现「提示词与成图不符」的办法，纯靠文本侧猜是猜不出来的。 */
+  async function visionAsk(cfg, imageUrl, question) {
+    var base = normBase(cfg.base);
+    var d = await llmJSON(base, '/chat/completions', {
+      key: cfg.key,
+      ms: 35000,
+      body: {
+        model: cfg.model,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: question },
+            { type: 'image_url', image_url: { url: imageUrl } }
+          ]
+        }],
+        max_tokens: 60,
+        temperature: 0
+      }
+    });
+    var txt = d && d.choices && d.choices[0] && (d.choices[0].message || {}).content;
+    if (!txt) return '';
+    if (Array.isArray(txt)) txt = txt.map(function (p) { return p && p.text || ''; }).join(' ');
+    return String(txt).trim();
   }
 
   async function testModel(cfg, model) {
@@ -1316,6 +1350,7 @@ window.WJLive = (function () {
     var errs = [];
     for (var i = 0; i < list.length; i++) {
       var p = list[i];
+      if (!p.imageModel || VISION_RE.test(String(p.imageModel).toLowerCase())) continue;
       try {
         var url = await genImage({ base: p.base, key: p.key, model: p.imageModel }, prompt, size);
         return { url: url, provider: p, model: p.imageModel };
@@ -1323,7 +1358,7 @@ window.WJLive = (function () {
         errs.push((p.name || p.base) + '：' + ((e && e.message) || '出图失败'));
       }
     }
-    var err = new Error('没有能出图的服务商');
+    var err = new Error(errs.length ? '没有能出图的服务商' : '配置的模型都是识图模型，出不了图');
     err.detail = errs.join('\n');
     throw err;
   }
@@ -1364,16 +1399,19 @@ window.WJLive = (function () {
 
   async function genImage(cfg, prompt, size) {
     var base = normBase(cfg.base);
-    var d = await llmJSON(base, '/images/generations', {
-      key: cfg.key,
-      ms: 120000,
-      body: {
-        model: cfg.model,
-        prompt: prompt,
-        n: 1,
-        size: size || '1024x1024'
-      }
-    });
+    var body = { model: cfg.model, prompt: prompt, n: 1, size: size || '1024x1024' };
+    var d;
+    try {
+      d = await llmJSON(base, '/images/generations', { key: cfg.key, ms: 150000, body: body });
+    } catch (e) {
+      /* 有的厂商不认 size 或 n，去掉再试一次，别因为一个可选参数判死 */
+      if (e.status === 400) {
+        d = await llmJSON(base, '/images/generations', {
+          key: cfg.key, ms: 150000,
+          body: { model: cfg.model, prompt: prompt }
+        });
+      } else { throw e; }
+    }
     var it = d && d.data && (Array.isArray(d.data) ? d.data[0] : d.data);
     if (!it) {
       var alt = d && (d.images && d.images[0]);
@@ -1444,6 +1482,7 @@ window.WJLive = (function () {
     chatChain: chatChain,
     genImageChain: genImageChain,
     genImage: genImage,
+    visionAsk: visionAsk,
     annotate: annotate,
     normBase: normBase
   };

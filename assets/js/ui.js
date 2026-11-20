@@ -518,7 +518,7 @@ window.WJUI = (function () {
     var lvl = r.score >= 60 ? ['较大', 'live'] : r.score >= 45 ? ['中等', 'plain'] : ['偏小', 'sample'];
     h += '<div class="score-meta"><div class="t">改写幅度' +
       '<span class="badge ' + lvl[1] + '">' + lvl[0] + '</span></div>' +
-      '<div class="d">' + r.score + '% 的文字与原文不重合；另有 ' + (r.sim || 0) + '% 是连续 12 字以上的重合片段。' +
+      '<div class="d">' + (r.score || 0) + '% 的文字与原文不重合；另有 ' + (r.sim || 0) + '% 是连续 12 字以上的重合片段。' +
       '本机统计，与平台判定无关。</div></div></div>';
 
     if ((!r.modelName || r.modelName === '本机引擎') && r.words > 600) {
@@ -533,7 +533,7 @@ window.WJUI = (function () {
     h += '<div class="metrics">' +
       '<div class="metric"><div class="k">字数</div><div class="v">' + r.words + '</div></div>' +
       '<div class="metric"><div class="k">重合率</div><div class="v">' + (r.sim || 0) + '<small>%</small></div></div>' +
-      '<div class="metric"><div class="k">重复句</div><div class="v">' + r.dupes + '</div></div></div>';
+      '<div class="metric"><div class="k">重复句</div><div class="v">' + (r.dupes || 0) + '</div></div></div>';
 
     h += '<div style="display:flex;align-items:center;gap:8px;margin-top:18px">' +
       '<span class="badge ai">AI 生成</span><span class="sec-sub">' + esc(r.styleName) + ' · ' + esc(r.platformName) + ' · ' + esc(r.modelName || '本机引擎') + '</span></div>';
@@ -584,7 +584,11 @@ window.WJUI = (function () {
   function images(state) {
     var r = state.result;
     var s = state.settings;
-    var imgProv = (s.providers || []).filter(function (p) { return p.imageModel && p.base && p.key; });
+    var imgProv = (s.providers || []).filter(function (p) {
+      if (!p.imageModel || !p.base || !p.key) return false;
+      /* 识图模型不能出图，别把它算进「可用」里 */
+      return !/(vision|-vl\b|4v\b|4o\b|glm-4v)/i.test(p.imageModel);
+    });
     var h = '<div class="sec-head mt-m"><div class="h2" style="font-size:15px">配图</div>' +
       '<span class="sec-sub">' + (imgProv.length ? imgProv.length + ' 个出图模型可用' : '未配置出图模型') + '</span></div>';
 
@@ -613,12 +617,26 @@ window.WJUI = (function () {
         '<div>这篇原文没有可用的配图（或站点把图片交给了脚本加载），所以走下面的提示词方案。</div></div>';
     }
 
+    /* 已生成：图 + 依据，让用户一眼看出「这张是按哪句话画的」 */
     if (r.images && r.images.length) {
+      var m = r.imageMeta || {};
+      var chk = m.check === 'pass' ? '<span class="chk ok">已核对画面</span>'
+        : m.check === 'fail' ? '<span class="chk bad">没画准，建议重生成</span>'
+          : (m.check === 'skip' ? '<span class="chk">未配备识图模型，无法自检</span>' : '');
       h += '<div class="sec-head mt-m" style="margin-bottom:8px"><div class="h2" style="font-size:13px">已生成</div>' +
         '<span class="sec-sub">' + esc(r.imageBy || '出图模型') + '</span></div>';
-      h += '<div class="imgrid">' + r.images.map(function (src) {
-        return '<div class="im"><img src="' + esc(src) + '" alt=""></div>';
+      if (m.frame) {
+        h += '<div class="immeta">依据「' + esc(m.frame) + '」· ' + esc(m.ratio || '') +
+          (m.redrew ? ' · 已自动重画' : '') + '</div>';
+      }
+      h += '<div class="imgrid gen">' + r.images.map(function (src, i) {
+        return '<div class="im"><img src="' + esc(src) + '" alt="">' +
+          (i === 0 && chk ? '<div class="imchk">' + chk + '</div>' : '') + '</div>';
       }).join('') + '</div>';
+      if (m.promptCn) {
+        h += '<details class="pdet mt-s"><summary>这张图用的提示词</summary>' +
+          '<div class="pt">' + esc(m.promptCn) + '</div></details>';
+      }
       h += '<div class="dock-row mt-s"><button class="btn btn-soft btn-block" data-act="gen-image">' +
         ic('image', 15) + ' 再生成一组</button></div>';
       return h;
@@ -627,20 +645,28 @@ window.WJUI = (function () {
     if (state.imgLoading) {
       h += '<div class="imgrid"><div class="im" style="display:grid;place-items:center"><div class="sk" style="width:60%;height:8px"></div></div>' +
         '<div class="im" style="display:grid;place-items:center"><div class="sk" style="width:60%;height:8px"></div></div></div>';
+      h += '<div class="immeta center">正在按「' + esc((window.WJEngine.visuals(r.body, { title: r.title, style: r.styleKey })[state.imgFrame || 0] || {}).name || '封面') +
+        '」出图' + (imgProv.length > 1 ? '，失败会自动换下一家' : '') + '…</div>';
       return h;
     }
 
     h += '<div class="note mt-m">' + ic('wand', 14) +
       '<div>' + (imgProv.length
-        ? '没有合适的原图时，用已配置的出图模型生成一张；也可以直接复制下面的提示词去即梦、豆包、MJ。'
-        : '没有可用的出图模型。<b>下面是为这篇稿子写好的提示词</b>，复制到即梦、豆包、Midjourney 都能用。') + '</div></div>';
+        ? '提示词只写看得见的东西——物体、场景、光线，不写事件和观点，模型才画得准。点「用这张生成」直接出图。'
+        : '没有可用的出图模型。<b>下面的提示词已经按这篇稿子写好了</b>，复制到即梦、豆包、Midjourney 都能用。') + '</div></div>';
 
     var vs = window.WJEngine.visuals(r.body, { title: r.title, style: r.styleKey });
     h += '<div class="mt-m">' + vs.map(function (v, i) {
-      return '<div class="pcard"><div class="ph"><b>' + esc(v.name) + '</b>' +
-        '<span class="tg">' + esc(v.ratio) + '</span>' +
-        '<button class="mini-btn" data-act="copy-prompt" data-i="' + i + '">' + ic('copy', 12) + ' 复制</button></div>' +
-        '<div class="pt">' + esc(v.prompt) + '</div></div>';
+      return '<div class="pcard">' +
+        '<div class="ph"><b>' + esc(v.name) + '</b>' +
+        '<span class="tg">' + esc(v.ratio) + '</span></div>' +
+        '<div class="psub">' + esc(v.subject) + '</div>' +
+        '<details class="pdet"><summary>完整提示词</summary><div class="pt">' + esc(v.promptCn) + '</div></details>' +
+        '<div class="pact">' +
+        '<button class="mini-btn" data-act="copy-prompt" data-i="' + i + '">' + ic('copy', 12) + ' 中文</button>' +
+        '<button class="mini-btn" data-act="copy-prompt" data-i="' + i + '" data-lang="en">EN</button>' +
+        (imgProv.length ? '<button class="mini-btn solid" data-act="use-frame" data-i="' + i + '">' + ic('image', 12) + ' 用这张生成</button>' : '') +
+        '</div></div>';
     }).join('') + '</div>';
 
     h += '<div class="dock-row mt-s">' +
@@ -713,7 +739,13 @@ window.WJUI = (function () {
     var chatOn = null;
     for (var ci = 0; ci < ps.length; ci++) { if (ps[ci].model) { chatOn = ps[ci]; break; } }
     var imgN = 0;
-    for (var ii = 0; ii < ps.length; ii++) { if (ps[ii].imageModel) imgN++; }
+    var imgFix = '';
+    for (var ii = 0; ii < ps.length; ii++) {
+      var pv = ps[ii];
+      /* 识图模型不能出图，不该计入「可出图」 */
+      if (pv.imageModel && !/(vision|-vl\b|4v\b|4o\b|glm-4v|omni)/i.test(pv.imageModel)) imgN++;
+      if (pv.imgNote) imgFix = pv.imgNote;
+    }
     var chatName = chatOn ? (chatOn.model + (chatOn.name ? ' · ' + chatOn.name : '')) : '';
     h += '<div class="sec"><div class="sec-head"><div class="h2" style="font-size:15px">生成引擎</div>' +
       '<span class="sec-sub">' + (chatOn ? '已接入 ' + ps.length + ' 家 · 走你的额度' : '未配置') + '</span></div>';
@@ -722,7 +754,7 @@ window.WJUI = (function () {
       '<span class="rt"><b>大模型配置</b><small>' + esc(chatName || '未选择模型，使用本机规则引擎') + '</small></span>' +
       '<span class="chev">' + ic('right', 15) + '</span></button>';
     h += '<button class="row" data-act="open-image-model"><span class="ri">' + ic('image', 15) + '</span>' +
-      '<span class="rt"><b>出图模型</b><small>' + esc(imgN ? imgN + ' 个模型可出图' : '未配置，只用提示词方案') + '</small></span>' +
+      '<span class="rt"><b>出图模型</b><small>' + esc(imgN ? imgN + ' 个模型可出图' : (imgFix ? '原配置是识图模型，需要重选' : '未配置，只用提示词方案')) + '</small></span>' +
       '<span class="chev">' + ic('right', 15) + '</span></button>';
     h += '</div></div>';
 
