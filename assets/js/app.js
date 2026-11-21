@@ -1377,14 +1377,14 @@
       if (!document.getElementById('topicBox')) return;
       if (topicCache.data && topicCache.data.via === 'live') return;
       topicRetry = 1;
-      L.topic(srcId, tid, title, 20, { budget: 14000 }).then(function (t2) {
+      L.topic(srcId, tid, title, 20, { budget: 12000 }).then(function (t2) {
         if (!t2 || t2.via !== 'live' || !t2.items || !t2.items.length) return;
         var b4 = document.getElementById('topicBox');
         if (!b4) return;
         topicCache = { src: srcId, title: title, id: id, data: t2 };
         b4.innerHTML = topicBoxHtml(t2, all);
       }).catch(function () { /* ignore */ });
-    }, 2500);
+    }, 1500);
   }
 
   /* 额度 */

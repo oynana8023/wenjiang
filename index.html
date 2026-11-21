@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- 文匠 AI · 单文件构建 2026-11-21T16:40:28.745Z · 源文件见 src/ 与 assets/ -->
+<!-- 文匠 AI · 单文件构建 2026-11-21T16:49:29.241Z · 源文件见 src/ 与 assets/ -->
 <html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="UTF-8">
@@ -6688,11 +6688,35 @@ window.WJLive = (function () {
   function hostOf(u) {
     try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
   }
+  /* 连不上过一次的解析服务，8 分钟内先不排队等它：国内直连 workers.dev 常常必超时，
+     每次失败都花 14 秒等一个注定不通的地址，是最伤的体验。 */
+  function baseDeadMap() {
+    try {
+      var m = JSON.parse(localStorage.getItem('wj.base.dead') || '{}');
+      return (m && typeof m === 'object') ? m : {};
+    } catch (e) { return {}; }
+  }
+
+  function isBaseDead(b) {
+    var t = baseDeadMap()[hostOf(b) || b];
+    return !!(t && Date.now() - t < 8 * 60000);
+  }
+
+  function markBaseDead(b, dead) {
+    try {
+      var m = baseDeadMap();
+      var k = hostOf(b) || b;
+      if (dead) m[k] = Date.now();
+      else delete m[k];
+      localStorage.setItem('wj.base.dead', JSON.stringify(m));
+    } catch (e) { /* ignore */ }
+  }
+
 
   /* 话题下的帖子清单（二级页面）。
-     两条路：配了解析服务就实时读；没配就读 data/topics.json —— 那份文件由
-     GitHub Action 每 15 分钟在服务器上抓一次（浏览器抓不了，微博/头条都不给
-     CORS 头），同目录读取没有跨域问题，所以「点开就有内容」不依赖任何配置。 */
+     三条路，按可靠性排：① 配好的解析服务（数据最全）；② 公共通道——头条直连
+     头图 + 帖子流过代理，微博过 RSSHub 镜像；③ 本机上次实时 / 仓库缓存兜底。
+     三跳都是现取的，所以标题能写「实时」；只有第 ③ 条才标「缓存 + 时间」。 */
   var TP_SNAP = 'data/hot.json';
   var tpMem = null;
 
@@ -7692,7 +7716,7 @@ window.WJLive = (function () {
   async function topic(src, id, title, n, opts) {
     src = src || 'weibo';
     var budget = (opts && opts.budget) || 12000;
-    var bases = parseBases();
+    var bases = parseBases().filter(function (b) { return !isBaseDead(b); });
     if (await hasServer()) bases = [''].concat(bases);
 
     var deadline = Date.now() + budget;
@@ -7704,8 +7728,12 @@ window.WJLive = (function () {
         run: function () {
           return getJSON(apiUrl(b, '/api/topic', { src: src, id: id || '', title: title || '', n: n || 12 }), 14000)
             .then(function (d) {
-              if (d && d.ok) return { items: d.items || [], header: d.header || null };
+              if (d && d.ok) { markBaseDead(b, false); return { items: d.items || [], header: d.header || null }; }
               throw new Error((d && d.error) || '没有返回内容');
+            }, function (e) {
+              /* 只有网络层失败才算「这个地址不通」；业务失败说明服务是活的 */
+              if (e && !e.status) markBaseDead(b, true);
+              throw e;
             });
         }
       };
@@ -12176,14 +12204,14 @@ window.WJCreate = (function () {
       if (!document.getElementById('topicBox')) return;
       if (topicCache.data && topicCache.data.via === 'live') return;
       topicRetry = 1;
-      L.topic(srcId, tid, title, 20, { budget: 14000 }).then(function (t2) {
+      L.topic(srcId, tid, title, 20, { budget: 12000 }).then(function (t2) {
         if (!t2 || t2.via !== 'live' || !t2.items || !t2.items.length) return;
         var b4 = document.getElementById('topicBox');
         if (!b4) return;
         topicCache = { src: srcId, title: title, id: id, data: t2 };
         b4.innerHTML = topicBoxHtml(t2, all);
       }).catch(function () { /* ignore */ });
-    }, 2500);
+    }, 1500);
   }
 
   /* 额度 */
