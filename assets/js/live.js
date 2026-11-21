@@ -1194,7 +1194,7 @@ window.WJLive = (function () {
   async function ttTopicLive(id, n) {
     var headUrl = 'https://api.toutiaoapi.com/api/trending/topic/' + id + '/?rank=';
     var feedUrl = 'https://api.toutiaoapi.com/api/feed/topic_innerflow/v1/?query_id=' + id +
-      '&offset=0&count=16&aid=13&category=topic_innerflow&ttfrom=amos_land_normal' +
+      '&offset=0&count=10&aid=13&category=topic_innerflow&ttfrom=amos_land_normal' +
       '&stream_api_version=88&client_extra_params=' + encodeURIComponent('{"is_webview":"1"}');
 
     var headP = getJSON(headUrl, 6000).catch(function () { return null; });
