@@ -76,6 +76,12 @@ window.WJUI = (function () {
     return String(Math.round(n));
   }
 
+  function fmtClock(ts) {
+    var d = new Date(ts || Date.now());
+    var pad = function (n) { return ('0' + n).slice(-2); };
+    return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  }
+
   function fmtTime(ts) {
     var d = new Date(ts || Date.now());
     var hh = ('0' + d.getHours()).slice(-2);
@@ -144,7 +150,7 @@ window.WJUI = (function () {
   function liveBadge(src) {
     if (!src || !src.ok) return '<span class="badge plain">未连接</span>';
     if (src.via === 'live') return '<span class="badge live"><i class="dot" style="width:4px;height:4px;box-shadow:none"></i>实时</span>';
-    return '<span class="badge sample">快照</span>';
+    return '<span class="badge sample">缓存</span>';
   }
 
   function rankRow(item, i, srcId) {
@@ -240,7 +246,7 @@ window.WJUI = (function () {
     }
 
     h += '<div class="note mt-l">' + ic('shield', 14) +
-      '<div>热榜来自公开接口，<b>带「实时 / 快照」标签</b>与抓取时间。时政类条目不进入榜单' +
+      '<div>热榜每 60 秒自动刷新，<b>每一条都是接口此刻返回的值</b>；全部通道都挂掉时才会用缓存，并标明时间。时政类条目不进入榜单' +
       (src && src.blocked ? '（本页已过滤 <b>' + src.blocked + '</b> 条）' : '') +
       '，站内没有编造的新闻。</div></div>';
 
@@ -266,9 +272,12 @@ window.WJUI = (function () {
           esc(s.name) + '<span class="c">' + (st && st.items ? st.items.length : '·') + '</span></button>';
       }).join('') + '</div>';
 
+    var isLive = src && src.via === 'live';
     h += '<div style="display:flex;align-items:center;gap:10px;margin:16px 0 6px">' +
       liveBadge(src) +
-      '<span class="sec-sub">' + (src && src.at ? fmtTime(src.at) + ' 抓取 · ' + ago(src.at) : '—') + '</span>' +
+      '<span class="sec-sub">' + (src && src.at
+        ? (isLive ? '更新于 ' + fmtClock(src.at) + ' · 每分钟自动刷新' : '缓存于 ' + fmtTime(src.at) + ' · ' + ago(src.at))
+        : '正在连接') + '</span>' +
       '<div class="spacer"></div>' +
       '<button class="mini-btn" data-act="hot-reload">' + ic('refresh', 13) + ' 刷新</button></div>';
 
@@ -276,9 +285,9 @@ window.WJUI = (function () {
       h += '<div class="panel" style="padding:16px">' + new Array(6).fill('<div class="sk" style="margin-bottom:14px"></div>').join('') + '</div>';
     } else if (list.length) {
       h += '<div class="rank-list">' + list.map(function (it, i) { return rankRow(it, i, active); }).join('') + '</div>';
-      if (src && src.via === 'snapshot') {
+      if (src && src.via !== 'live') {
         h += '<div class="note warn mt-m">' + ic('clock', 14) +
-          '<div>这是<b>定时快照</b>，不是此刻实时值。生成时间 ' + fmtTime(src.at) + '，GitHub Action 每 15 分钟刷新一次。</div></div>';
+          '<div>实时接口这会儿没通（' + (src.error || '被限流') + '），下面是 <b>' + fmtTime(src.at) + '</b> 的缓存。点「刷新」再要一次实时值。</div></div>';
       }
     } else {
       h += emptyState('alert', '没抓到数据', '换个源试试，或稍后刷新。接口偶尔会限流。',

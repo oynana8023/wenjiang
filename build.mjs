@@ -27,8 +27,12 @@ try {
 } catch (e) {
   console.warn('! data/hot.json 缺失，离线模式将没有热榜快照');
 }
+/* 话题快照（每条约 500 字正文）不再内联：热榜和头条二级页现在都是实时的，
+   微博二级页要缓存时按需读 data/hot.json 就行，没必要让每次打开都背 180KB */
+if (snap && snap.topics) delete snap.topics;
+
 const snapTag =
-  '<!-- 内置热榜快照：由 scripts/fetch-hot.mjs 真实抓取后写入，只作为网络不通时的兜底，页面会标注「快照」与抓取时间 -->\n' +
+  '<!-- 内置兜底缓存：只在这一屏所有实时接口都失败时才会用到，页面会标「缓存」+ 时间 -->\n' +
   '<script>window.__WJ_SNAP__ = ' + esc(JSON.stringify(snap)) + ';</script>';
 
 /* ---------- JS ---------- */

@@ -1,6 +1,6 @@
 /* ============================================================
    文匠 AI — 实时数据层
-   1) 热榜：同源后端 > 公共聚合接口 > 仓库快照（GitHub Action 定时生成）
+   1) 热榜：同源后端 > 平台公开接口（全实时，多通道竞速）> 缓存兜底
    2) 链接解析：同源后端 > 阅读器代理链 > 直接抓取
    3) 模型：OpenAI 兼容 /models，带能力标注
    4) 出图：/images/generations，不支持则降级为提示词
@@ -16,7 +16,7 @@ window.WJLive = (function () {
      解析时并行探活、谁先返回用谁，一条挂了不影响另一条。
 
      注意：不要再内置任何「云端默认实例」。之前那个地址是开发环境的临时域名，
-     下线后所有没配过地址的用户都会卡在 12 秒超时上——解析用不了，热榜也拖到只能读快照。
+     下线后所有没配过地址的用户都会卡在 12 秒超时上——解析用不了，热榜也拖到只能读缓存。
      现在没配置就是没配置，界面直说，让用户去部署自己的 Worker。 */
   var CLOUD_DEFAULT = '';
   var CLOUD_CODE = '';
@@ -346,19 +346,33 @@ window.WJLive = (function () {
     return serverProbe;
   }
 
-  /* ---------------- 热榜 ---------------- */
+  /* ---------------- 热榜（全实时） ----------------
+
+     静态托管没有后端，热榜只能靠浏览器直连各平台的公开接口。下面这些接口都带
+     CORS 头、都不需要 Key，实测可直连，不需要任何代理：
+
+       60s         微博 / 知乎 / 抖音 / 头条 / 百度 / IT之家
+       codelife    微博 / 知乎 / 抖音 / 头条 / B站（备用通道）
+       少数派       官方 API
+       36氪        gateway.36kr.com 热榜
+       极客公园     官方 RSS
+
+     同一个源的两三条通道同时发车，谁先给出条目用谁；单条 7 秒硬超时，
+     一条挂了不拖累另一条。GitHub Action 的快照只在所有通道都失败时兜底，
+     标成「缓存」并带上抓取时间，绝不冒充此刻的榜单。
+  */
 
   function normItem(x) {
     if (!x) return null;
-    var title = x.title || x.Title || x.word || x.name || x.query || '';
+    var title = x.title || x.Title || x.word || x.name || x.query || x.widgetTitle || '';
     title = String(title).trim();
     if (!title) return null;
-    var hot = x.hot || x.hotValue || x.HotValue || x.hot_score || x.score || x.heat || 0;
+    var hot = x.hot || x.hot_value || x.hotValue || x.HotValue || x.score || x.hot_score || x.heat || 0;
     var n = Number(String(hot).replace(/[^\d.]/g, ''));
     return {
       title: title,
       hot: isFinite(n) ? n : 0,
-      url: x.url || x.mobileUrl || x.Url || x.link || '',
+      url: x.url || x.mobileUrl || x.link || x.Url || '',
       desc: x.desc || x.description || ''
     };
   }
@@ -367,15 +381,7 @@ window.WJLive = (function () {
 
   var lastBlocked = 0;
 
-  function normList(payload) {
-    if (!payload) return [];
-    var arr =
-      (Array.isArray(payload) && payload) ||
-      (payload.data && Array.isArray(payload.data) && payload.data) ||
-      (payload.data && Array.isArray(payload.data.list) && payload.data.list) ||
-      (Array.isArray(payload.items) && payload.items) ||
-      (payload.result && Array.isArray(payload.result) && payload.result) ||
-      [];
+  function normArr(arr) {
     lastBlocked = 0;
     var out = [];
     for (var i = 0; i < arr.length; i++) {
@@ -387,32 +393,39 @@ window.WJLive = (function () {
     return out;
   }
 
-  /* 静态托管没有后端，公共聚合接口就成了唯一活路。
-     单一接口（imsyy）2026 年 11 月起长期挂掉，只剩快照，所以这里做多源竞速：
-     同一个榜单先问 60s，再问 codelife，最后才试老接口；谁先给出条目用谁。
-     60s / codelife 都返回 CORS 头，浏览器可直连，不需要任何代理。 */
+  function normList(payload) {
+    if (!payload) return [];
+    var arr =
+      (Array.isArray(payload) && payload) ||
+      (payload.data && Array.isArray(payload.data) && payload.data) ||
+      (payload.data && Array.isArray(payload.data.list) && payload.data.list) ||
+      (Array.isArray(payload.items) && payload.items) ||
+      (payload.result && Array.isArray(payload.result) && payload.result) ||
+      [];
+    return normArr(arr);
+  }
+
   var HOT60 = 'https://60s.viki.moe/v2/';
   var CODELIFE = 'https://api.codelife.cc/api/top/list?lang=cn';
   var HOT_ROUTE = {
     weibo: [{ k: '60s', p: 'weibo' }, { k: 'codelife', p: 'KqndgxeLl9' }, { k: 'imsyy' }],
     zhihu: [{ k: '60s', p: 'zhihu' }, { k: 'codelife', p: 'mproPpoq6O' }, { k: 'imsyy' }],
     douyin: [{ k: '60s', p: 'douyin' }, { k: 'codelife', p: 'WnBe01o371' }, { k: 'imsyy' }],
-    bilibili: [{ k: 'codelife', p: 'Jb0vmloB1G' }, { k: '60s', p: 'bili' }, { k: 'imsyy' }],
-    sspai: [{ k: 'sspai' }, { k: 'imsyy' }],
     toutiao: [{ k: '60s', p: 'toutiao' }, { k: 'codelife', p: 'nIFi0r9b6N' }, { k: 'imsyy' }],
-    baidu: [{ k: '60s', p: 'baidu' }, { k: 'imsyy' }],
-    '36kr': [{ k: 'imsyy' }],
-    ithome: [{ k: 'imsyy' }],
-    geekpark: [{ k: 'imsyy' }]
+    baidu: [{ k: '60s', p: 'baidu/hot' }, { k: 'imsyy' }],
+    bilibili: [{ k: 'codelife', p: 'Jb0vmloB1G' }, { k: 'imsyy' }],
+    sspai: [{ k: 'sspai' }, { k: 'imsyy' }],
+    '36kr': [{ k: '36kr' }, { k: 'imsyy' }],
+    ithome: [{ k: '60s', p: 'it-news/rank' }, { k: 'imsyy' }],
+    geekpark: [{ k: 'geekpark' }, { k: 'imsyy' }]
   };
 
-  async function hot60(id) {
-    var d = await getJSON(HOT60 + id, 4500);
-    return normList(d);
+  async function hot60(p) {
+    return normList(await getJSON(HOT60 + p, 7000));
   }
 
   async function hotCodelife(id) {
-    var d = await getJSON(CODELIFE, 4500, {
+    var d = await getJSON(CODELIFE, 7000, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: id, page: 1, size: 50 })
@@ -421,11 +434,54 @@ window.WJLive = (function () {
   }
 
   async function hotSspai() {
-    var d = await getJSON('https://sspai.com/api/v1/article/index/page/get?limit=30&offset=0&sort=recommend', 4500);
+    var d = await getJSON('https://sspai.com/api/v1/article/index/page/get?limit=30&offset=0&sort=recommend', 7000);
     var arr = (d && d.data) || [];
-    return normList(arr.map(function (x) {
+    return normArr(arr.map(function (x) {
       return { title: x.title, url: x.id ? 'https://sspai.com/post/' + x.id : '', hot: x.like_count || 0, desc: x.summary || '' };
     }));
+  }
+
+  /* 36氪：官网热榜走 gateway，返回带 CORS，标题在 templateMaterial.widgetTitle */
+  async function hot36() {
+    var d = await getJSON('https://gateway.36kr.com/api/mis/nav/home/nav/rank/hot', 7000, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ partner_id: 'wap', param: { siteId: 1, platformId: 2 }, timestamp: Date.now() })
+    });
+    var arr = (d && d.data && d.data.hotRankList) || [];
+    return normArr(arr.map(function (x) {
+      var m = x.templateMaterial || {};
+      return { title: m.widgetTitle, url: m.itemId ? 'https://36kr.com/p/' + m.itemId : '' };
+    }));
+  }
+
+  /* 极客公园：官方 RSS 带 CORS，浏览器可直接读 */
+  async function hotGeek() {
+    var xml = await getText('https://www.geekpark.net/rss', 7000);
+    var doc;
+    try { doc = new DOMParser().parseFromString(xml, 'text/xml'); } catch (e) { return []; }
+    if (!doc) return [];
+    var nodes = doc.querySelectorAll('item');
+    var arr = [];
+    for (var i = 0; i < nodes.length; i++) {
+      var t = (nodes[i].querySelector('title') || {}).textContent || '';
+      var l = (nodes[i].querySelector('link') || {}).textContent || '';
+      if (t.trim()) arr.push({ title: t.trim(), url: l.trim() });
+    }
+    return normArr(arr);
+  }
+
+  async function hotImsyy(id) {
+    return normList(await getJSON(AGG + '/' + id, 6000));
+  }
+
+  function runProv(r, id) {
+    if (r.k === '60s') return hot60(r.p);
+    if (r.k === 'codelife') return hotCodelife(r.p);
+    if (r.k === 'sspai') return hotSspai();
+    if (r.k === '36kr') return hot36();
+    if (r.k === 'geekpark') return hotGeek();
+    return hotImsyy(id);
   }
 
   /* 解析服务和热榜共用一份「不通」记录：地址填错时不要每个源都等一遍超时 */
@@ -438,49 +494,87 @@ window.WJLive = (function () {
     return !!(t && Date.now() - t < 8 * 60000);
   }
 
+  /* 多通道竞速：谁先拿到非空榜单就用谁，别排队等超时 */
+  function raceList(tasks, budget) {
+    return new Promise(function (resolve, reject) {
+      var left = tasks.length, done = false, errs = [];
+      if (!left) return reject(new Error('这个源没有可用通道'));
+      var timer = setTimeout(function () {
+        if (done) return;
+        done = true;
+        var e = new Error('通道都没响应');
+        e.detail = errs.join('；');
+        reject(e);
+      }, budget || 7000);
+
+      tasks.forEach(function (t) {
+        Promise.resolve()
+          .then(function () { return t.run(); })
+          .then(function (list) {
+            if (!list || !list.length) throw new Error('返回空榜单');
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            resolve({ list: list, prov: t.label });
+          })
+          .catch(function (err) {
+            errs.push(t.label + '：' + errMsg(err));
+            if (--left === 0 && !done) {
+              done = true;
+              clearTimeout(timer);
+              var e = new Error('实时通道都没成功');
+              e.detail = errs.join('；');
+              reject(e);
+            }
+          });
+      });
+    });
+  }
+
   async function fetchSource(id) {
     if (await hasServer()) {
       var d = await getJSON(withShare('/api/hot?src=' + encodeURIComponent(id)), 9000);
       if (d && d.ok) return normList(d);
       throw new Error((d && d.error) || '抓取失败');
     }
-    /* 静态托管时，借解析服务那台机器上的 /api/hot 拿实时榜单
-       （它抓的是官方接口，不依赖 GitHub 定时任务是否准点）。
-       只给 6 秒：地址填错时不能把整页拖住。 */
+    /* 自己配了解析服务：先问它一句（它抓的是官方接口，还能顺手带封面）。
+       只给 4 秒，不行就立刻转公共接口，不能让一页热榜陪着等。 */
     var bases = parseBases().filter(function (b) { return !isDeadBase(b); });
     if (bases.length) {
       try {
-        var cd = await getJSON(apiUrl(bases[0], '/api/hot', { src: id }), 5000);
+        var cd = await getJSON(apiUrl(bases[0], '/api/hot', { src: id }), 4000);
         if (cd && cd.ok && Array.isArray(cd.items) && cd.items.length) return normList(cd.items);
-      } catch (e) { /* 换公共接口 */ }
+      } catch (e) { /* 转公共接口 */ }
     }
-    var route = HOT_ROUTE[id] || [{ k: 'imsyy' }];
-    var lastErr = '';
-    var started = Date.now();
-    for (var i = 0; i < route.length; i++) {
-      /* 一条源最多等 7 秒：接口挂了就赶紧读快照，别让整页陪着等 */
-      if (i && Date.now() - started > 7000) break;
-      var r = route[i];
-      try {
-        var list = [];
-        if (r.k === '60s') list = await hot60(r.p);
-        else if (r.k === 'codelife') list = await hotCodelife(r.p);
-        else if (r.k === 'sspai') list = await hotSspai();
-        else list = normList(await getJSON(AGG + '/' + id, 4500));
-        if (list.length) return list;
-        lastErr = r.k + ' 没有返回条目';
-      } catch (e) {
-        lastErr = r.k + '：' + errMsg(e);
-      }
+    var route = HOT_ROUTE[id] || [];
+    if (!route.length) throw new Error('这个源没有配置实时通道');
+    /* 聚合镜像（imsyy）2026 年 11 月起长期挂掉，别让它跟着一起发请求浪费时间：
+       先只跑平台自己的接口，全挂了才回头试它一次。 */
+    var fast = route.filter(function (r) { return r.k !== 'imsyy'; });
+    var slow = route.filter(function (r) { return r.k === 'imsyy'; });
+    var got = null;
+    if (fast.length) {
+      got = await raceList(fast.map(function (r) {
+        return { label: r.k, run: function () { return runProv(r, id); } };
+      }), 7000).catch(function (e) { if (!slow.length) throw e; return null; });
     }
-    throw new Error(lastErr || '接口没有返回条目');
+    if (!got && slow.length) {
+      got = await raceList(slow.map(function (r) {
+        return { label: '聚合镜像', run: function () { return runProv(r, id); } };
+      }), 5000);
+    }
+    if (!got) throw new Error('实时通道都没返回');
+    return got.list;
   }
 
-  /* 快照：先读同目录 data/hot.json（部署后由 Action 定时更新），
-     读不到就用构建时内联进 HTML 的那一份（双击本地文件也能看到真实榜单） */
+  /* 快照：只有所有实时通道都失败才读它，读的是同目录 data/hot.json。
+     内存缓存 45 秒，换热榜源来回点不会反复打接口。 */
+  var hotMem = {};
+  var HOT_TTL = 45 * 1000;
+
   var snapMem = null;
   async function fetchSnapshot() {
-    if (snapMem && Date.now() - snapMem.at < 3 * 60000) return snapMem.data;
+    if (snapMem && Date.now() - snapMem.at < 5 * 60000) return snapMem.data;
     try {
       var d = await getJSON(withShare(SNAPSHOT + '?t=' + Math.floor(Date.now() / 60000)), 6000);
       if (d && d.sources) {
@@ -491,16 +585,19 @@ window.WJLive = (function () {
     return window.__WJ_SNAP__ || null;
   }
 
-  /* 拉单个源：先接口，失败回退快照，并标注来源 */
-  async function source(id) {
-    var snap = null;
+  /* 拉单个源：实时优先；全挂才用缓存，并如实标注 */
+  async function source(id, force) {
+    var c = hotMem[id];
+    if (!force && c && Date.now() - c.at < HOT_TTL && c.items && c.items.length) {
+      return { ok: true, items: c.items.slice(0, 50), blocked: c.blocked || 0, via: 'live', at: c.at, prov: c.prov, memo: true };
+    }
     try {
       var list = await fetchSource(id);
+      hotMem[id] = { at: Date.now(), items: list, blocked: lastBlocked };
       return { ok: true, items: list.slice(0, 50), blocked: lastBlocked, via: 'live', at: Date.now() };
     } catch (e) {
-      try {
-        snap = await fetchSnapshot();
-      } catch (e2) { /* ignore */ }
+      var snap = null;
+      try { snap = await fetchSnapshot(); } catch (e2) { /* ignore */ }
       var s = snap && snap.sources && snap.sources[id];
       if (s && s.items && s.items.length) {
         var items = normList(s.items).slice(0, 50);
@@ -508,23 +605,30 @@ window.WJLive = (function () {
           ok: true,
           items: items,
           blocked: lastBlocked,
-          via: 'snapshot',
-          at: new Date(snap.updatedAt).getTime()
+          via: 'cache',
+          at: new Date(snap.updatedAt).getTime(),
+          error: errMsg(e)
         };
       }
-      return { ok: false, items: [], via: 'none', error: e.message || '抓取失败' };
+      return { ok: false, items: [], via: 'none', error: errMsg(e) };
     }
   }
 
-  async function hot(sourceId, onEach) {
+  async function hot(sourceId, onEach, force) {
     var ids = sourceId === 'all' ? SOURCES.map(function (s) { return s.id; }) : [sourceId];
     var out = {};
     for (var i = 0; i < ids.length; i++) {
-      var r = await source(ids[i]);
+      var r = await source(ids[i], force);
       out[ids[i]] = r;
       if (onEach) onEach(ids[i], r);
     }
     return out;
+  }
+
+  /* 手动刷新时把内存缓存清掉，确保拿到的是这一刻的值 */
+  function clearHotMemo(id) {
+    if (id) delete hotMem[id];
+    else hotMem = {};
   }
 
   /* ---------------- 链接解析 ---------------- */
@@ -776,25 +880,267 @@ window.WJLive = (function () {
     return loose ? all[loose] : null;
   }
 
-  async function topic(src, id, title, n) {
-    var bases = parseBases();
-    /* 自己就跑在解析服务上（本地 node / 自建实例）：同源接口优先，别绕公网 */
-    if (await hasServer()) bases = [''].concat(bases);
-    var liveErr = null;
-    for (var i = 0; i < bases.length; i += 1) {
-      try {
-        var d = await getJSON(apiUrl(bases[i], '/api/topic', { src: src || 'weibo', id: id || '', title: title || '', n: n || 12 }), 20000);
-        if (d && d.ok) return { items: d.items || [], header: d.header || null, via: 'live', at: Date.now() };
-        if (d && d.error) liveErr = new Error(d.error);
-      } catch (e) { liveErr = e; }
+  /* ---------------- 二级页：话题下的帖子 ----------------
+
+     微博、头条的话题接口都不给 CORS 头，浏览器直连一定失败。所以分三层：
+
+     1. 配了解析服务（Cloudflare Worker / 自建 VPS）→ 服务端实时抓，最完整；
+     2. 头条还有一条「公共线路」：官方 topic_innerflow 接口本身不需要登录，
+        只是缺 CORS，套一层公共代理就能实时读到，实测可用；
+     3. 都没有才用仓库里的缓存（Action 生成），标成「缓存」+ 时间。
+
+     微博没有第 2 条路：它的搜索接口要访客 Cookie，浏览器既拿不到也带不上，
+     这部分只能靠解析服务，UI 里会直说。 */
+
+  function ttParse(flow, head) {
+    var items = [];
+    var data = (flow && flow.data) || [];
+    for (var k = 0; k < data.length; k++) {
+      var c = data[k] && data[k].content;
+      if (typeof c === 'string') {
+        try { c = JSON.parse(c); } catch (e) { c = null; }
+      }
+      if (!c) continue;
+      var text = plainText(c.content || c.abstract || '');
+      var title = plainText(c.title || '');
+      if (!text && !title) continue;
+      var imgs = [];
+      var cl = c.detail_cover_list || [];
+      for (var j = 0; j < cl.length; j++) {
+        var u = (cl[j] && (cl[j].url || (cl[j].url_list && cl[j].url_list[0] && cl[j].url_list[0].url))) || '';
+        if (u) imgs.push(String(u).replace(/^http:/, 'https:'));
+      }
+      var gid = String(c.group_id || ((c.schema || '').match(/group_id=(\d+)/) || [])[1] || '');
+      items.push({
+        id: gid,
+        url: gid ? 'https://www.toutiao.com/w/' + gid + '/' : '',
+        author: (c.user && c.user.name) || plainText(c.source || ''),
+        avatar: ((c.user && c.user.avatar_url) || '').replace(/^http:/, 'https:'),
+        title: title,
+        text: (text || title).slice(0, 500),
+        images: imgs.slice(0, 6),
+        at: c.create_time ? new Date(c.create_time * 1000).toISOString() : '',
+        likes: c.digg_count || 0,
+        comments: c.comment_count || 0,
+        reposts: c.share_count || 0
+      });
+      if (items.length >= 20) break;
     }
+    var banner = head && head.banner_urls && head.banner_urls[0] ? String(head.banner_urls[0]).replace(/^http:/, 'https:') : '';
+    return {
+      items: items,
+      header: {
+        title: (head && head.topic_title) || '',
+        banner: banner,
+        readCount: (head && head.read_count) || 0,
+        talkCount: (head && head.talk_count) || 0
+      }
+    };
+  }
+
+  function plainText(s) {
+    return String(s || '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#\d+;/g, '')
+      .replace(/\u200b/g, '')
+      .trim();
+  }
+
+  /* 任意结果竞速：和 raceList 一样，只是返回值可以是对象 */
+  function raceAny(tasks, budget) {
+    return new Promise(function (resolve, reject) {
+      var left = tasks.length, done = false, errs = [];
+      if (!left) return reject(new Error('没有可用的取数通道'));
+      var timer = setTimeout(function () {
+        if (done) return;
+        done = true;
+        var e = new Error('取数通道都没响应');
+        e.detail = errs.join('；');
+        reject(e);
+      }, budget || 10000);
+      tasks.forEach(function (t) {
+        Promise.resolve()
+          .then(function () { return t.run(); })
+          .then(function (v) {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            resolve({ value: v, prov: t.label });
+          })
+          .catch(function (err) {
+            errs.push(t.label + '：' + errMsg(err));
+            if (--left === 0 && !done) {
+              done = true;
+              clearTimeout(timer);
+              var e = new Error('取数通道都没成功');
+              e.detail = errs.join('；');
+              reject(e);
+            }
+          });
+      });
+    });
+  }
+
+  /* 头条话题：官方接口 + 公共代理。
+     头图/阅读量的接口本身带 CORS，浏览器能直连；
+     帖子流（topic_innerflow）只要请求里带 Origin 就 403，所以必须过一层代理。
+     代理会限流，所以记一下哪条上次通过了，下次先用它。 */
+  var JSON_PROXY = [
+    { id: 'allorigins', wrap: function (u) { return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u); } },
+    { id: 'codetabs', wrap: function (u) { return 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u); } },
+    { id: 'corslol', wrap: function (u) { return 'https://api.cors.lol/?url=' + encodeURIComponent(u); } },
+    { id: 'cors_eu', wrap: function (u) { return 'https://cors.eu.org/' + u; } },
+    { id: 'isomorphic', wrap: function (u) { return 'https://cors.isomorphic-git.org/' + u; } }
+  ];
+
+  function proxyOrder() {
+    var last = '';
+    try { last = localStorage.getItem('wj.proxy.good') || ''; } catch (e) { /* ignore */ }
+    var arr = JSON_PROXY.slice();
+    arr.sort(function (a, b) { return (b.id === last ? 1 : 0) - (a.id === last ? 1 : 0); });
+    return arr;
+  }
+
+  function markProxy(id, ok) {
+    try {
+      if (ok) localStorage.setItem('wj.proxy.good', id);
+      else if (localStorage.getItem('wj.proxy.good') === id) localStorage.removeItem('wj.proxy.good');
+    } catch (e) { /* ignore */ }
+  }
+
+  async function ttTopicLive(id, n) {
+    var headUrl = 'https://api.toutiaoapi.com/api/trending/topic/' + id + '/?rank=';
+    var feedUrl = 'https://api.toutiaoapi.com/api/feed/topic_innerflow/v1/?query_id=' + id +
+      '&offset=0&count=16&aid=13&category=topic_innerflow&ttfrom=amos_land_normal' +
+      '&stream_api_version=88&client_extra_params=' + encodeURIComponent('{"is_webview":"1"}');
+
+    /* 头图这条能直连，先发出去，和帖子流并行 */
+    var headP = getJSON(headUrl, 6000).catch(function () { return null; });
+
+    var tasks = proxyOrder().map(function (px) {
+      return {
+        label: px.id,
+        run: function () {
+          return getJSON(px.wrap(feedUrl), 18000).then(function (d) {
+            markProxy(px.id, true);
+            return d;
+          }, function (e) {
+            markProxy(px.id, false);
+            throw e;
+          });
+        }
+      };
+    });
+    var feed = (await raceAny(tasks, 20000)).value;
+    var out = ttParse(feed, await headP);
+    if (!out.items.length && !out.header.banner) throw new Error('这个话题暂时没有内容');
+    out.items = out.items.slice(0, n || 20);
+    return out;
+  }
+
+  /* 本机最近一次「实时成功」的话题内容：再点同一个话题时先给这一份，
+     比仓库里的定时快照新得多，也不会因为这会儿代理限流就退回旧内容。 */
+  function localTopicKey(src, id, title) {
+    return 'wj.tp.' + src + '.' + String(id || title || '').replace(/[#\s]/g, '').slice(0, 40);
+  }
+
+  function saveLocalTopic(k, items, header) {
+    try {
+      localStorage.setItem(k, JSON.stringify({ at: Date.now(), items: items, header: header }));
+      var keys = [];
+      for (var i = 0; i < localStorage.length; i++) {
+        var kk = localStorage.key(i);
+        if (kk && kk.indexOf('wj.tp.') === 0) keys.push(kk);
+      }
+      if (keys.length > 24) {
+        keys.slice(0, keys.length - 24).forEach(function (x) { try { localStorage.removeItem(x); } catch (e) { /* ignore */ } });
+      }
+    } catch (e) { /* 配额满了就算了 */ }
+  }
+
+  function readLocalTopic(k) {
+    try {
+      var o = JSON.parse(localStorage.getItem(k) || 'null');
+      if (o && o.at && Date.now() - o.at < 30 * 60000 && o.items && o.items.length) return o;
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+
+  /* 只看本地：本机上次实时 + 仓库缓存，不发任何实时请求。
+     用来点开话题时先把内容铺上，实时结果回来再换。 */
+  async function topicCached(src, id, title, n) {
+    src = src || 'weibo';
+    var mine = readLocalTopic(localTopicKey(src, id, title));
+    if (mine) return { items: mine.items.slice(0, n || 12), header: mine.header || null, via: 'cache', at: mine.at, from: '本机上次实时' };
     var snap = await topicSnapshot();
     var hit = pickTopic(snap, src, title, id);
     if (hit && ((hit.items && hit.items.length) || hit.banner)) {
       return {
         items: (hit.items || []).slice(0, n || 12),
         header: { title: hit.title || title, banner: hit.banner || '', readCount: hit.readCount || 0, talkCount: hit.talkCount || 0 },
-        via: 'snapshot',
+        via: 'cache',
+        at: hit.at || (snap.updatedAt ? new Date(snap.updatedAt).getTime() : 0),
+        from: '仓库缓存'
+      };
+    }
+    return null;
+  }
+
+  async function topic(src, id, title, n, opts) {
+    src = src || 'weibo';
+    var budget = (opts && opts.budget) || 12000;
+    var bases = parseBases();
+    if (await hasServer()) bases = [''].concat(bases);
+
+    var tasks = bases.map(function (b) {
+      return {
+        label: '解析服务',
+        run: function () {
+          return getJSON(apiUrl(b, '/api/topic', { src: src, id: id || '', title: title || '', n: n || 12 }), 14000)
+            .then(function (d) {
+              if (d && d.ok) return { items: d.items || [], header: d.header || null };
+              throw new Error((d && d.error) || '没有返回内容');
+            });
+        }
+      };
+    });
+
+    /* 头条有公共线路，不配任何东西也能拿到此刻的帖子 */
+    if (src === 'toutiao' && id) {
+      tasks.push({ label: '头条实时', run: function () { return ttTopicLive(id, n); } });
+    }
+
+    var liveErr = null;
+    var lk = localTopicKey(src, id, title);
+    if (tasks.length) {
+      try {
+        var got = await raceAny(tasks, budget);
+        var live = { items: got.value.items || [], header: got.value.header || null };
+        if (live.items.length) saveLocalTopic(lk, live.items, live.header);
+        return { items: live.items, header: live.header, via: 'live', at: Date.now(), from: got.prov };
+      } catch (e) {
+        liveErr = e;
+      }
+    }
+
+    var mine = readLocalTopic(lk);
+    if (mine) {
+      return { items: mine.items.slice(0, n || 12), header: mine.header || null, via: 'cache', at: mine.at, from: '本机上次实时' };
+    }
+
+    var snap = await topicSnapshot();
+    var hit = pickTopic(snap, src, title, id);
+    if (hit && ((hit.items && hit.items.length) || hit.banner)) {
+      return {
+        items: (hit.items || []).slice(0, n || 12),
+        header: { title: hit.title || title, banner: hit.banner || '', readCount: hit.readCount || 0, talkCount: hit.talkCount || 0 },
+        via: 'cache',
         at: hit.at || (snap.updatedAt ? new Date(snap.updatedAt).getTime() : 0)
       };
     }
@@ -1712,6 +2058,9 @@ window.WJLive = (function () {
     hasServer: hasServer,
     posts: posts,
     topic: topic,
+    topicCached: topicCached,
+    clearHotMemo: clearHotMemo,
+    ttTopicLive: ttTopicLive,
     topicId: topicId,
     topicSnapshot: topicSnapshot,
     warmTopics: warmTopics,

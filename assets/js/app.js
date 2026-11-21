@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI, C = window.WJCreate;
 
-  var VERSION = 'v2.14.0';
+  var VERSION = 'v2.15.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -516,7 +516,7 @@
 
   /* ---------------- 热榜 ---------------- */
 
-  async function loadHot(srcId) {
+  async function loadHot(srcId, force) {
     var id = srcId || state.hot.active;
     var existed = state.hot.bySrc[id] && state.hot.bySrc[id].items && state.hot.bySrc[id].items.length;
     /* 已经有数据就别切成骨架屏，否则列表高度塌了，滚动位置会被夹回去 */
@@ -524,7 +524,7 @@
     if (state.route === 'home' || state.route === 'rank') render('same');
     var r;
     try {
-      r = await L.hot(srcId || state.hot.active);
+      r = await L.hot(srcId || state.hot.active, null, !!force);
     } catch (e) {
       r = {};
       r[srcId || state.hot.active] = { ok: false, items: [], error: e.message };
@@ -557,29 +557,16 @@
     renderTimer = setTimeout(function () { render('same'); }, 160);
   }
 
-  /* 先用构建时内联的快照铺一层：首屏 0 等待就有榜单，网络回来再逐源换成实时。
-     以前是空着骨架等第一个接口返回，慢网下要盯着三秒空白。 */
-  function seedHotFromSnapshot() {
-    var snap = window.__WJ_SNAP__;
-    if (!snap || !snap.sources) return;
-    var at = Date.parse(snap.updatedAt) || Date.now();
-    L.SOURCES.forEach(function (s) {
-      var x = snap.sources[s.id];
-      if (!x || !x.ok || !x.items || !x.items.length) return;
-      if (state.hot.bySrc[s.id] && state.hot.bySrc[s.id].items.length) return;
-      state.hot.bySrc[s.id] = { ok: true, items: x.items.slice(0, 50), via: 'snapshot', at: at, blocked: 0 };
-    });
-    recalcHot();
-  }
-
   async function loadAllHot() {
     state.hot.loading = true;
     softRender();
     var ids = L.SOURCES.map(function (s) { return s.id; });
-    await Promise.all(ids.map(async function (id) {
+    await Promise.all(ids.map(async function (id, idx) {
       var cur = state.hot.bySrc[id];
-      /* 只有实时数据才跳过；快照铺的底要换成实时的 */
+      /* 已经拿到实时数据的源不重复拉；缓存兜底的源要再试一次实时 */
       if (cur && cur.via === 'live' && cur.items && cur.items.length) return;
+      /* 错开一点点：十个源同时打公开接口，容易被判成刷接口 */
+      await new Promise(function (ok) { setTimeout(ok, idx * 90); });
       try {
         var r = await L.hot(id);
         if (r && r[id]) state.hot.bySrc[id] = r[id];
@@ -1169,8 +1156,12 @@
        - 微博热搜给的是 s.weibo.com 的话题页，下面是一堆博文；
        - 头条热榜给的是 /trending/{id}/，下面是一堆微头条。
        这两种都要二级页；只有真正的文章页才去抓正文。 */
-    var tid = srcId === 'toutiao' ? L.topicId(url) : '';
-    var isTopic = (srcId === 'weibo' && isSearch) || (srcId === 'toutiao' && !!tid);
+    var tid = srcId === 'toutiao' ? (L.topicId(url) || (/^\d{8,}$/.test(String(it.id || '')) ? String(it.id) : '')) : '';
+    /* 微博热搜 = 话题；头条 /trending/{id} = 话题。这两种才走二级页，其余是文章 */
+    var isTopic = srcId === 'weibo' || (srcId === 'toutiao' && !!tid);
+    var topicUrl = url || (srcId === 'weibo'
+      ? 'https://s.weibo.com/weibo?q=' + encodeURIComponent('#' + it.title + '#')
+      : (tid ? 'https://www.toutiao.com/trending/' + tid + '/' : ''));
     var isBaidu = /(^|\.)baidu\.com$/.test(host);
     var canMeta = !!url && !isTopic && (!isSearch || isBaidu);
 
@@ -1207,7 +1198,7 @@
     var foot = '';
     if (isTopic) {
       foot += '<div class="row2">' +
-        '<button class="btn btn-soft" data-act="open-url" data-url="' + esc(url) + '">' + U.ic('external', 15) + ' 打开话题页</button>' +
+        '<button class="btn btn-soft" data-act="open-url" data-url="' + esc(topicUrl) + '">' + U.ic('external', 15) + ' 打开话题页</button>' +
         '<button class="btn btn-soft" data-act="copy" data-text="' + esc(it.title) + '">' + U.ic('copy', 15) + ' 复制标题</button>' +
         '</div>';
       foot += '<button class="btn btn-soft btn-block" data-act="hot-write" data-src="' + srcId + '" data-i="' + i + '">' +
@@ -1232,9 +1223,10 @@
       foot += '<button class="btn btn-ghost btn-block" data-act="copy" data-text="' + esc(it.title) + '">复制标题</button>';
     }
 
-    lastTopic = { src: srcId, title: it.title, id: tid, url: url };
+    topicRetry = 0;
+    lastTopic = { src: srcId, title: it.title, id: tid, url: topicUrl };
     openSheet(html, { title: '这条热榜', foot: foot });
-    if (isTopic) loadTopic(srcId, it.title, tid, url);
+    if (isTopic) loadTopic(srcId, it.title, tid, topicUrl);
     else if (canMeta) fillHotMeta(url, srcId, it, cat);
   }
 
@@ -1267,9 +1259,9 @@
     var items = t.items || [];
     var show = all ? items.length : 5;
     var rows = items.slice(0, show).map(topicPostHtml).join('');
-    var via = t.via === 'snapshot'
-      ? '快照 · ' + (t.at ? U.fmtTime(new Date(t.at).toISOString()) : '稍早')
-      : '实时';
+    var isCache = t.via !== 'live';
+    var stamp = t.at ? U.fmtTime(new Date(t.at).toISOString()) : '稍早';
+    var via = isCache ? '缓存 · ' + stamp : '实时';
     var head = (t.header && t.header.banner)
       ? '<div class="topic-cover"><img src="' + esc(L.imgUrl(t.header.banner)) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></div>'
       : '';
@@ -1279,9 +1271,18 @@
     var few = items.length === 1
       ? '<div class="sec-sub" style="margin:-4px 0 8px">刚上榜，讨论还不多；点下面「打开话题页」能看到最新跟帖。</div>'
       : '';
+    var warn = isCache
+      ? '<div class="note warn mt-s">' + U.ic('clock', 14) +
+        '<div>上面是 <b>' + stamp + '</b> 那一版，不是此刻的。' +
+        (lastTopic.src === 'weibo'
+          ? '微博搜索接口要访客 Cookie，浏览器带不上，实时只能靠解析服务。'
+          : '公共线路这会儿没通。') +
+        '点下面重试，或到「我的 → 解析服务」配一台（免费）。</div></div>' +
+        '<button class="btn btn-soft btn-block mt-s" data-act="topic-retry">' + U.ic('refresh', 15) + ' 重试实时</button>'
+      : '';
     return head + '<div class="topic-head"><span class="h2" style="font-size:14px">' +
       (items.length ? '大家在这个话题下发的' : '这个话题还没有公开内容') + '</span>' +
-      '<span class="sec-sub">' + (items.length ? items.length + ' 条 · ' + via : via) + '</span></div>' + nums + rows + few +
+      '<span class="sec-sub">' + (items.length ? items.length + ' 条 · ' + via : via) + '</span></div>' + nums + rows + few + warn +
       (!all && items.length > show
         ? '<button class="btn btn-soft btn-block mt-s" data-act="topic-all">查看全部 ' + items.length + ' 条</button>'
         : '');
@@ -1309,27 +1310,57 @@
   }
 
   var topicCache = { src: '', title: '', id: '', data: null };
+  var topicRetry = 0;
   var lastTopic = { src: '', title: '', id: '', url: '' };
 
   async function loadTopic(srcId, title, id, url, all) {
     var box = document.getElementById('topicBox');
     if (!box) return;
-    box.innerHTML = '<div class="topic-head"><span class="h2" style="font-size:14px">正在取话题内容</span>' +
+    var tid = id || L.topicId(url);
+    var sk = '<div class="topic-head"><span class="h2" style="font-size:14px">正在取话题内容</span>' +
       '<span class="sec-sub"><span class="spin"></span> 稍等</span></div>' +
       '<div class="sk" style="height:56px;border-radius:10px;margin-bottom:8px"></div>' +
       '<div class="sk" style="height:56px;border-radius:10px"></div>';
+
+    /* 先把手里有的铺上：本机上次实时、或仓库缓存。头条的帖子流要过公共代理，
+       慢的时候要十几秒，不能让用户对着骨架屏干等。 */
+    var quick = null;
+    if (L.topicCached) {
+      try { quick = await L.topicCached(srcId, tid, title, 20); } catch (e) { quick = null; }
+    }
+    if (quick) {
+      topicCache = { src: srcId, title: title, id: id, data: quick };
+      box.innerHTML = topicBoxHtml(quick, all);
+    } else {
+      box.innerHTML = sk;
+    }
+
     try {
-      var t = topicCache.data && topicCache.src === srcId && topicCache.title === title
+      var cached = topicCache.data && topicCache.src === srcId && topicCache.title === title && topicCache.data.via === 'live'
         ? topicCache.data
-        : await L.topic(srcId, id || L.topicId(url), title, 20);
+        : null;
+      var t = cached || await L.topic(srcId, tid, title, 20, { budget: quick ? 22000 : 12000 });
       topicCache = { src: srcId, title: title, id: id, data: t };
-      box.innerHTML = topicBoxHtml(t, all);
+      var b2 = document.getElementById('topicBox');
+      if (b2) b2.innerHTML = topicBoxHtml(t, all);
     } catch (e) {
       var hint = e && e.code === 'NO_RELAY'
-        ? '这个话题下的内容要从服务器抓（微博、头条都不给浏览器跨域权限）。到「我的 → 解析服务」配一台就行，配好这里会自动变成实时。'
-        : '这次没取到：' + ((e && e.message) || '接口没响应') + '。可以直接打开话题页看，或者用标题自己写。';
-      box.innerHTML = '<div class="note mt-s">' + U.ic('info', 14) + '<div>' + esc(hint) + '</div></div>' +
-        '<button class="btn btn-soft btn-block mt-s" data-act="topic-retry">再试一次</button>';
+        ? '微博的搜索接口要访客 Cookie，浏览器既拿不到也带不上，所以这个话题下的帖子只能由服务器代抓。配一台解析服务（免费，1 分钟）这里就变成实时；头条不需要，它是直连的。'
+        : '这次没取到：' + ((e && e.message) || '接口没响应') + '。公共线路偶尔会限流，稍等再点一次通常就好；也可以直接打开话题页看。';
+      var b3 = document.getElementById('topicBox');
+      if (!b3) return;
+      if (quick) {
+        b3.insertAdjacentHTML('beforeend',
+          '<div class="note warn mt-s">' + U.ic('clock', 14) + '<div>' + esc(hint) + '</div></div>' +
+          '<button class="btn btn-soft btn-block mt-s" data-act="topic-retry">' + U.ic('refresh', 15) + ' 重试实时</button>');
+      } else {
+        b3.innerHTML = '<div class="note mt-s" ' + (e && e.code === 'NO_RELAY' ? 'style="border-color:rgba(255,176,32,.3)"' : '') + '>' +
+          U.ic('info', 14) + '<div>' + esc(hint) + '</div></div>' +
+          (e && e.code === 'NO_RELAY'
+            ? '<button class="btn btn-primary btn-block mt-s" data-act="parse-service">' + U.ic('wand', 15) + ' 配一台解析服务（免费）</button>'
+            : '') +
+          '<button class="btn btn-soft btn-block mt-s" data-act="topic-retry">' + U.ic('refresh', 15) + ' 再试一次</button>';
+      }
     }
   }
 
@@ -1974,7 +2005,7 @@
           '<div>已配置 <b>' + list.length + '</b> 条通道。解析和联网取证都走它。</div></div>'
         : '<div class="note mt-s" style="border-color:rgba(255,176,32,.3)">' + U.ic('alert', 13) +
           '<div><b>还没配自己的解析服务。</b>现在走公共线路，常见文章页有机会取到，遇到强风控站点就会失败；' +
-          '创作板块的联网取证也需要一台自己的服务。<b>热榜的二级页不受影响</b>——那部分由定时快照供内容。</div></div>') +
+          '创作板块的联网取证也需要一台自己的服务。<b>热榜和头条二级页不受影响</b>——热榜直连公开榜单接口，头条话题走公共线路，都是实时的；只有微博话题下的帖子需要这台服务。</div></div>') +
       '<div class="field mt-m"><div class="field-head"><span class="lbl">服务地址</span>' +
       '<span class="sec-sub">一行一个，留空 = 关闭</span></div>' +
       '<textarea data-field="parsebases" rows="4" spellcheck="false" placeholder="https://wenjiang-parse.你的账号.workers.dev">' +
@@ -2278,15 +2309,15 @@
   function openData() {
     var rows = L.SOURCES.map(function (s) {
       var st = state.hot.bySrc[s.id];
-      var tag = !st ? '未加载' : st.ok ? (st.via === 'live' ? '实时' : '快照') : '失败';
+      var tag = !st ? '未加载' : st.ok ? (st.via === 'live' ? '实时' : '缓存') : '失败';
       return '<div class="row"><span class="rt"><b>' + s.name + '</b><small>' + s.nick + '</small></span>' +
         '<span class="rv" style="color:' + (tag === '实时' ? 'var(--acc)' : 'var(--ink-3)') + '">' + tag + '</span></div>';
     }).join('');
     openSheet(
       '<p><b style="color:var(--ink)">三类数据，三种标签：</b></p>' +
       '<div class="rows mt-s">' +
-      '<div class="row"><span class="rt"><b>实时抓取</b><small>浏览器直连 60s / codelife 等公开榜单接口，显示抓取时刻</small></span><span class="badge live">实时</span></div>' +
-      '<div class="row"><span class="rt"><b>定时快照</b><small>GitHub Action 每 15 分钟生成，存在仓库里</small></span><span class="badge sample">快照</span></div>' +
+      '<div class="row"><span class="rt"><b>实时抓取</b><small>浏览器直连 60s / codelife / 36氪 / 少数派等公开接口，每 60 秒刷新，显示抓取时刻</small></span><span class="badge live">实时</span></div>' +
+      '<div class="row"><span class="rt"><b>兜底缓存</b><small>所有实时通道都失败时才用，带抓取时间，不冒充实时</small></span><span class="badge sample">缓存</span></div>' +
       '<div class="row"><span class="rt"><b>内置示例</b><small>我写的样例文章，不是新闻</small></span><span class="badge sample">示例</span></div>' +
       '</div>' +
       '<div class="sec-head mt-l"><div class="h2" style="font-size:13px">当前各源状态</div></div>' +
@@ -3117,8 +3148,9 @@
       }
 
       case 'hot-reload':
-        toast('正在抓取…');
-        loadHot(state.hot.active);
+        if (L.clearHotMemo) L.clearHotMemo();
+        toast('正在抓实时榜单…');
+        loadHot(state.hot.active, true);
         break;
 
       case 'hot-item':
@@ -3977,10 +4009,7 @@
     var hash = location.hash.replace(/^#\/?/, '');
     if (NAV_ROUTES.indexOf(hash) > -1) state.route = hash;
 
-    seedHotFromSnapshot();
     render('root');
-    /* 二级页数据后台预热：不挡首屏，点开话题时直接用 */
-    setTimeout(function () { if (L.warmTopics) L.warmTopics(); }, 1200);
 
     /* 数据：先拉主源，再补齐其它源 */
     (async function () {
@@ -3995,14 +4024,18 @@
     };
     setTimeout(warm, 1500);
 
-    /* 每 5 分钟自动刷新一次热榜 */
+    /* 实时榜：前台每 60 秒刷新当前这一屏，切回来立刻补一次 */
     setInterval(function () {
       if (document.hidden) return;
+      if (state.route !== 'home' && state.route !== 'rank') return;
       loadHot(state.hot.active);
-    }, 5 * 60 * 1000);
+    }, 60 * 1000);
 
     document.addEventListener('visibilitychange', function () {
-      if (!document.hidden) loadHot(state.hot.active);
+      if (document.hidden) return;
+      if (state.route !== 'home' && state.route !== 'rank') return;
+      var act = state.hot.bySrc[state.hot.active];
+      if (!act || !act.at || Date.now() - act.at > 60000) loadHot(state.hot.active);
     });
   }
 
