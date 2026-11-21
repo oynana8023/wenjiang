@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- 文匠 AI · 单文件构建 2026-11-21T13:37:52.669Z · 源文件见 src/ 与 assets/ -->
+<!-- 文匠 AI · 单文件构建 2026-11-21T13:44:29.330Z · 源文件见 src/ 与 assets/ -->
 <html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="UTF-8">
@@ -6450,7 +6450,7 @@ window.WJLive = (function () {
   async function fetchSnapshot() {
     if (snapMem && Date.now() - snapMem.at < 5 * 60000) return snapMem.data;
     try {
-      var d = await getJSON(withShare(SNAPSHOT + '?t=' + Math.floor(Date.now() / 60000)), 6000);
+      var d = await getJSON(withShare(SNAPSHOT), 12000);
       if (d && d.sources) {
         snapMem = { at: Date.now(), data: d };
         return d;
@@ -6694,12 +6694,12 @@ window.WJLive = (function () {
     var d = null;
     /* 话题和热榜在同一份文件里（Action 只提交这一个文件），先读它的 topics 字段 */
     try {
-      var raw = await getJSON(withShare(TP_SNAP + '?t=' + Math.floor(Date.now() / 300000)), 12000);
+      var raw = await getJSON(withShare(TP_SNAP), 15000);
       if (raw && raw.topics) d = raw.topics;
     } catch (e) { /* 本地文件 / 还没生成 */ }
     if (!d || (!d.weibo && !d.toutiao)) {
       try {
-        d = await getJSON(withShare('data/topics.json?t=' + Math.floor(Date.now() / 300000)), 4000);
+        d = await getJSON(withShare('data/topics.json'), 4000);
       } catch (e) { /* 兼容旧文件 */ }
     }
     if (!d || typeof d !== 'object') {
@@ -6729,7 +6729,7 @@ window.WJLive = (function () {
   var tpWarm = null;
   function warmTopics() {
     if (tpWarm) return tpWarm;
-    tpWarm = getJSON(withShare(TP_SNAP + '?t=' + Math.floor(Date.now() / 600000)), 9000)
+    tpWarm = getJSON(withShare(TP_SNAP), 15000)
       .then(function (d) {
         if (d && d.topics) {
           tpMem = { at: Date.now(), data: d.topics };

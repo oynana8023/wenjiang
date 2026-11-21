@@ -27,17 +27,23 @@ self.addEventListener('fetch', (e) => {
   if (url.origin !== location.origin) return;      // 模型接口、外站代理一律直连
   if (url.pathname.indexOf('/api/') === 0) return; // 后端接口不缓存
 
-  const isData = /\/data\/hot\.json$/.test(url.pathname);
+  const isData = /\/data\/(hot|topics)\.json$/.test(url.pathname);
   if (isData) {
-    /* 热榜：先网络，失败用缓存 */
+    /* 兜底数据：先把上次的给出去（手机上 0 等待），同时后台拉新的存起来。
+       它只是「所有实时通道都挂了」时才用的缓存，稍微旧几分钟不影响。 */
     e.respondWith(
-      fetch(req)
-        .then((r) => {
-          const copy = r.clone();
-          caches.open(VERSION).then((c) => c.put(req, copy)).catch(() => {});
-          return r;
-        })
-        .catch(() => caches.match(req).then((m) => m || Response.error()))
+      caches.match(req).then((hit) => {
+        const net = fetch(req)
+          .then((r) => {
+            if (r && r.ok) {
+              const copy = r.clone();
+              caches.open(VERSION).then((c) => c.put(req, copy)).catch(() => {});
+            }
+            return r;
+          })
+          .catch(() => hit || Response.error());
+        return hit || net;
+      })
     );
     return;
   }
