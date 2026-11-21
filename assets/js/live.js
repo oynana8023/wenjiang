@@ -1330,7 +1330,7 @@ window.WJLive = (function () {
       }
       if (!r) {
         try {
-          r = await pxGet(url, { kind: 'xml', ms: 5000, budget: Math.max(3000, Math.min(6500, left - 5000)), ttl: 120000, width: 3 });
+          r = await pxGet(url, { kind: 'xml', ms: Math.min(9000, left), budget: Math.max(3000, Math.min(9500, left)), ttl: 120000, width: 3 });
         } catch (e2) {
           detail.push('备用 ' + (e2.detail || e2.message || '没通'));
         }
@@ -1851,7 +1851,7 @@ window.WJLive = (function () {
     if (src === 'weibo' && String(title || '').trim()) {
       fallback.push({
         label: '微博镜像',
-        run: function () { return weiboRssTopic(title, n, Math.max(7000, Math.min(11000, deadline - Date.now()))); }
+        run: function () { return weiboRssTopic(title, n, Math.max(9000, Math.min(15000, deadline - Date.now()))); }
       });
     }
 
