@@ -1322,6 +1322,30 @@
       '<div class="sk" style="height:56px;border-radius:10px;margin-bottom:8px"></div>' +
       '<div class="sk" style="height:56px;border-radius:10px"></div>';
 
+    /* 微博没有解析服务时注定拿不到实时帖子（搜索接口要访客 Cookie），
+       别让它先等 12 秒超时再报错：直接去找缓存，找不到就立刻说清楚。 */
+    var hasRelay = false;
+    try { hasRelay = (L.parseBases && L.parseBases().length > 0) || await L.hasServer(); } catch (e) { hasRelay = false; }
+    if (srcId === 'weibo' && !hasRelay) {
+      box.innerHTML = '<div class="topic-head"><span class="h2" style="font-size:14px">正在找这个话题的缓存</span>' +
+        '<span class="sec-sub"><span class="spin"></span></span></div>' +
+        '<div class="sk" style="height:56px;border-radius:10px"></div>';
+      var wq = null;
+      try { wq = await L.topicCached(srcId, tid, title, 20); } catch (e) { wq = null; }
+      var b0 = document.getElementById('topicBox');
+      if (!b0) return;
+      if (wq) {
+        topicCache = { src: srcId, title: title, id: id, data: wq };
+        b0.innerHTML = topicBoxHtml(wq, all);
+      } else {
+        b0.innerHTML = '<div class="note mt-s" style="border-color:rgba(255,176,32,.3)">' + U.ic('info', 14) +
+          '<div>微博的搜索接口要访客 Cookie，浏览器既拿不到也带不上，这个话题下的帖子只能由服务器代抓。配一台解析服务（免费，1 分钟）这里就变成实时；头条不需要，它是直连的。</div></div>' +
+          '<button class="btn btn-primary btn-block mt-s" data-act="parse-service">' + U.ic('wand', 15) + ' 配一台解析服务（免费）</button>' +
+          '<button class="btn btn-soft btn-block mt-s" data-act="topic-retry">' + U.ic('refresh', 15) + ' 再试一次</button>';
+      }
+      return;
+    }
+
     /* 先把手里有的铺上：本机上次实时、或仓库缓存。头条的帖子流要过公共代理，
        慢的时候要十几秒，不能让用户对着骨架屏干等。 */
     var quick = null;
@@ -1339,7 +1363,7 @@
       var cached = topicCache.data && topicCache.src === srcId && topicCache.title === title && topicCache.data.via === 'live'
         ? topicCache.data
         : null;
-      var t = cached || await L.topic(srcId, tid, title, 20, { budget: quick ? 22000 : 12000 });
+      var t = cached || await L.topic(srcId, tid, title, 20, { budget: quick ? 26000 : 15000 });
       topicCache = { src: srcId, title: title, id: id, data: t };
       var b2 = document.getElementById('topicBox');
       if (b2) b2.innerHTML = topicBoxHtml(t, all);

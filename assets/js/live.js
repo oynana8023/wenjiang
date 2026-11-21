@@ -803,8 +803,15 @@ window.WJLive = (function () {
   var TP_SNAP = 'data/hot.json';
   var tpMem = null;
 
+  var tpP = null;
   async function topicSnapshot() {
     if (tpMem && Date.now() - tpMem.at < 4 * 60000) return tpMem.data;
+    if (tpP) return tpP;
+    tpP = loadTopicSnapshot().then(function (d) { tpP = null; return d; }, function (e) { tpP = null; throw e; });
+    return tpP;
+  }
+
+  async function loadTopicSnapshot() {
     /* 构建时已经内联了一份：直接用它，别再为点开一个话题去下 200KB */
     if (typeof window !== 'undefined' && window.__WJ_SNAP__ && window.__WJ_SNAP__.topics) {
       tpMem = { at: Date.now(), data: window.__WJ_SNAP__.topics };
