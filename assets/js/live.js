@@ -478,10 +478,15 @@ window.WJLive = (function () {
 
   /* 快照：先读同目录 data/hot.json（部署后由 Action 定时更新），
      读不到就用构建时内联进 HTML 的那一份（双击本地文件也能看到真实榜单） */
+  var snapMem = null;
   async function fetchSnapshot() {
+    if (snapMem && Date.now() - snapMem.at < 3 * 60000) return snapMem.data;
     try {
       var d = await getJSON(withShare(SNAPSHOT + '?t=' + Math.floor(Date.now() / 60000)), 6000);
-      if (d && d.sources) return d;
+      if (d && d.sources) {
+        snapMem = { at: Date.now(), data: d };
+        return d;
+      }
     } catch (e) { /* 本地文件 / 未提交快照 / 网络受限，走内联兜底 */ }
     return window.__WJ_SNAP__ || null;
   }
@@ -696,6 +701,11 @@ window.WJLive = (function () {
 
   async function topicSnapshot() {
     if (tpMem && Date.now() - tpMem.at < 4 * 60000) return tpMem.data;
+    /* 构建时已经内联了一份：直接用它，别再为点开一个话题去下 200KB */
+    if (typeof window !== 'undefined' && window.__WJ_SNAP__ && window.__WJ_SNAP__.topics) {
+      tpMem = { at: Date.now(), data: window.__WJ_SNAP__.topics };
+      return tpMem.data;
+    }
     var d = null;
     /* 话题和热榜在同一份文件里（Action 只提交这一个文件），先读它的 topics 字段 */
     try {
