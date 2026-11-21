@@ -101,20 +101,38 @@ window.WJLive = (function () {
   var probeCache = {};
   var PROBE_TTL = 3 * 60000;
 
+  /* 探活：不只看 /api/health，404 之后再去看一眼根路径到底是什么，
+     这样界面才能说清「403 是被人挡住」还是「这地址压根不是解析服务」。 */
   async function probeBase(base, ms) {
     var k = base || '(same)';
     var c = probeCache[k];
     if (c && Date.now() - c.at < PROBE_TTL) return c;
     var t0 = Date.now();
-    var res = { base: base, ok: false, ms: 0, at: Date.now(), version: '' };
+    var res = { base: base, ok: false, ms: 0, at: Date.now(), version: '', runtime: '', status: 0, hint: '', error: '' };
+
     try {
-      var d = await getJSON(apiUrl(base, '/api/health'), ms || 5000);
-      res.ok = !!(d && d.ok);
-      res.version = (d && d.version) || '';
-      res.runtime = (d && d.runtime) || '';
+      var d = await getJSON(apiUrl(base, '/api/health'), ms || 6000);
+      if (d && (d.ok || d.version || d.name)) {
+        res.ok = true;
+        res.version = d.version || '';
+        res.runtime = d.runtime || '';
+      } else {
+        res.hint = 'shape';
+      }
     } catch (e) {
-      res.error = e.message || '连不上';
+      res.status = (e && e.status) || 0;
+      res.error = (e && e.message) || '连不上';
     }
+
+    /* 服务能连上、但 /api/health 不对：拉一眼首页，判断是「别人家的网站」还是「半个服务」 */
+    if (!res.ok && (res.status === 404 || res.hint === 'shape')) {
+      try {
+        var txt = await getText(apiUrl(base, '/'), ms || 6000);
+        if (/<html/i.test(txt)) res.hint = 'html';
+        if (/\/api\/parse|\/api\/topic|wenjiang|文匠/i.test(txt)) res.hint = 'site';
+      } catch (e2) { /* ignore */ }
+    }
+
     res.ms = Date.now() - t0;
     res.at = Date.now();
     probeCache[k] = res;
@@ -641,6 +659,7 @@ window.WJLive = (function () {
      谁先回来用谁，失败不拖累别的通道。 */
   var PROXIES = [
     { id: 'jina', label: '公共阅读器', text: true, wrap: function (u) { return 'https://r.jina.ai/' + u; } },
+    { id: 'corslol', label: '公共通道 C', wrap: function (u) { return 'https://api.cors.lol/?url=' + encodeURIComponent(u); } },
     { id: 'allorigins', label: '公共代理 A', wrap: function (u) { return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u); } },
     { id: 'codetabs', label: '公共代理 B', wrap: function (u) { return 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u); } }
   ];
@@ -994,61 +1013,752 @@ window.WJLive = (function () {
     });
   }
 
-  /* 头条话题：官方接口 + 公共代理。
-     头图/阅读量的接口本身带 CORS，浏览器能直连；
-     帖子流（topic_innerflow）只要请求里带 Origin 就 403，所以必须过一层代理。
-     代理会限流，所以记一下哪条上次通过了，下次先用它。 */
-  var JSON_PROXY = [
-    { id: 'allorigins', wrap: function (u) { return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u); } },
-    { id: 'codetabs', wrap: function (u) { return 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u); } },
-    { id: 'corslol', wrap: function (u) { return 'https://api.cors.lol/?url=' + encodeURIComponent(u); } },
-    { id: 'cors_eu', wrap: function (u) { return 'https://cors.eu.org/' + u; } },
-    { id: 'isomorphic', wrap: function (u) { return 'https://cors.isomorphic-git.org/' + u; } }
+  /* ---------------- 公共取数通道池 ----------------
+
+     浏览器读别人的 JSON/XML 会被 CORS 拦（对方不给 access-control-allow-origin）。
+     国内能直接用的几条公开通道都不稳定，还会按 IP 限流，所以这里不指望「某一条永远在」，
+     而是把它们做成一个带健康记忆的池子：
+
+       · 成功的记一笔，下次排前面；429 / 403 的冷却 5 分钟，别硬撞；
+       · 一次只打 2 条，谁先给出合格内容就用谁，不把三家一起打爆；
+       · 同一个 URL 90 秒内只取一次，反复点同一条话题不再重复请求。 */
+
+  var PX_KEY = 'wj.px.v1';
+  var PX_COOL = 5 * 60000;
+
+  var PX = [
+    { id: 'corslol', label: 'cors.lol', wrap: function (u) { return 'https://api.cors.lol/?url=' + encodeURIComponent(u); } },
+    { id: 'allorigins', label: 'allorigins', wrap: function (u) { return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u); } },
+    { id: 'codetabs', label: 'codetabs', wrap: function (u) { return 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u); } },
+    { id: 'corsfix', label: 'corsfix', wrap: function (u) { return 'https://proxy.corsfix.com/?' + u; } },
+    { id: 'cors_eu', label: 'cors.eu.org', wrap: function (u) { return 'https://cors.eu.org/' + u; } },
+    { id: 'thing', label: 'thingproxy', wrap: function (u) { return 'https://thingproxy.freeboard.io/fetch/' + u; } }
   ];
 
-  function proxyOrder() {
-    var last = '';
-    try { last = localStorage.getItem('wj.proxy.good') || ''; } catch (e) { /* ignore */ }
-    var arr = JSON_PROXY.slice();
-    arr.sort(function (a, b) { return (b.id === last ? 1 : 0) - (a.id === last ? 1 : 0); });
-    return arr;
-  }
-
-  function markProxy(id, ok) {
+  function pxMap() {
     try {
-      if (ok) localStorage.setItem('wj.proxy.good', id);
-      else if (localStorage.getItem('wj.proxy.good') === id) localStorage.removeItem('wj.proxy.good');
-    } catch (e) { /* ignore */ }
+      var m = JSON.parse(localStorage.getItem(PX_KEY) || '{}');
+      return (m && typeof m === 'object') ? m : {};
+    } catch (e) { return {}; }
   }
 
+  function pxSave(m) {
+    try { localStorage.setItem(PX_KEY, JSON.stringify(m)); } catch (e) { /* ignore */ }
+  }
+
+  /* 排序：能用的先上（成功次数多、上次成功近），冷却中的排到队尾而不是扔掉——
+     宁可最后再试一次，也别因为「全都刚被限流」就直接失败。 */
+  function pxOrder() {
+    var m = pxMap(), now = Date.now();
+    var list = PX.slice();
+    list.sort(function (a, b) {
+      var sa = m[a.id] || {}, sb = m[b.id] || {};
+      var ca = (sa.until && sa.until > now) ? 1 : 0;
+      var cb2 = (sb.until && sb.until > now) ? 1 : 0;
+      if (ca !== cb2) return ca - cb2;
+      if (ca) return (sa.until || 0) - (sb.until || 0);
+      var ra = sa.ok || 0, rb = sb.ok || 0;
+      if (ra !== rb) return rb - ra;
+      return (sb.last || 0) - (sa.last || 0);
+    });
+    return list;
+  }
+
+  function pxMark(id, ok, status) {
+    var m = pxMap(), s = m[id] || { ok: 0, fail: 0 };
+    if (ok) {
+      s.ok = (s.ok || 0) + 1;
+      s.last = Date.now();
+      delete s.until;
+      s.fail = 0;
+    } else {
+      s.fail = (s.fail || 0) + 1;
+      /* 429 是限流，半分钟就恢复；403 是被这个站点挡了，先别撞十分钟 */
+      if (status === 429) s.until = Date.now() + 45000;
+      else if (status === 403) s.until = Date.now() + 10 * 60000;
+      else if (status === 503) s.until = Date.now() + 2 * 60000;
+      else if (s.fail >= 3) s.until = Date.now() + 60000;
+    }
+    m[id] = s;
+    pxSave(m);
+  }
+
+  /* 带状态码的取文本：CORS 被拦时 fetch 直接 TypeError（没有 status），
+     这类失败先不冷却，连续三次才歇一会儿 */
+  async function pxFetchText(url, ms) {
+    var tk = timeout(ms || 12000);
+    try {
+      var r = await fetch(url, { signal: tk.signal, cache: 'no-store' });
+      var body = '';
+      try { body = await r.text(); } catch (e2) { /* ignore */ }
+      if (!r.ok) {
+        var err = new Error('HTTP ' + r.status);
+        err.status = r.status;
+        err.body = body;
+        throw err;
+      }
+      return body;
+    } finally { tk.done(); }
+  }
+
+  /* 判断代理到底有没有把内容拿回来：200 也可能是「Rate limit exceeded」这种纯文本 */
+  function pxDecode(body, kind) {
+    var s = String(body || '').trim();
+    if (!s) return null;
+    if (kind === 'xml') return (/<item[\s>]|<entry[\s>]/i.test(s) ? s : null);
+    if (kind === 'html') return (s.length > 300 && /<\w+[\s>]/.test(s) ? s : null);
+    try { return JSON.parse(s); } catch (e) { /* 有的代理会在前面加一行日志 */ }
+    var i = s.indexOf('{');
+    if (i > -1) {
+      try { return JSON.parse(s.slice(i)); } catch (e2) { /* ignore */ }
+    }
+    return null;
+  }
+
+  var pxMemo = {};
+
+  /* 一批（默认 2 条）同时发车，谁先给出合格内容就用谁 */
+  function pxRace(batch, url, kind, ms, detail) {
+    return new Promise(function (resolve, reject) {
+      var left = batch.length, done = false;
+      var timer = setTimeout(function () {
+        if (done) return;
+        done = true;
+        detail.push(batch.map(function (p) { return p.label + '：超时'; }).join('、'));
+        reject(new Error('超时'));
+      }, ms + 2000);
+      batch.forEach(function (p) {
+        pxFetchText(p.wrap(url), ms).then(function (body) {
+          var v = pxDecode(body, kind);
+          if (v === null) {
+            var bad = new Error('返回的不是' + (kind === 'xml' ? ' RSS' : kind === 'html' ? '网页' : ' JSON'));
+            bad.status = 200;
+            throw bad;
+          }
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          pxMark(p.id, true);
+          resolve({ data: v, from: p.label });
+        }).catch(function (err) {
+          pxMark(p.id, false, err && err.status);
+          detail.push(p.label + '：' + errMsg(err));
+          if (--left === 0 && !done) {
+            done = true;
+            clearTimeout(timer);
+            reject(new Error('这一批都没成功'));
+          }
+        });
+      });
+    });
+  }
+
+  /* 依次打若干批，直到拿到合格内容或预算用完 */
+  async function pxGet(url, opts) {
+    opts = opts || {};
+    var kind = opts.kind || 'json';
+    var ms = opts.ms || 12000;
+    var budget = opts.budget || Math.min(ms * 2 + 4000, 30000);
+    var ck = kind + ' ' + url;
+    var c = pxMemo[ck];
+    if (c && Date.now() - c.at < (opts.ttl || 90000)) return { data: c.data, from: c.from, cached: true };
+
+    var list = pxOrder();
+    if (!list.length) {
+      var e0 = new Error('没有可用的公共通道');
+      e0.code = 'NO_PROXY';
+      throw e0;
+    }
+
+    var started = Date.now(), idx = 0, detail = [];
+    var width = opts.width || 2;
+    while (idx < list.length) {
+      var left = budget - (Date.now() - started);
+      if (left < 1500) break;
+      var batch = list.slice(idx, idx + width);
+      idx += batch.length;
+      try {
+        var got = await pxRace(batch, url, kind, Math.min(ms, left), detail);
+        pxMemo[ck] = { at: Date.now(), data: got.data, from: got.from };
+        return got;
+      } catch (e) { /* 换下一批 */ }
+    }
+
+    var err = new Error('公共通道都没成功');
+    err.detail = detail.join('；');
+    throw err;
+  }
+
+  /* 头条话题：头图接口本身带 CORS，浏览器能直连；
+     帖子流（topic_innerflow）只要请求里带 Origin 就 403，必须过一层公共通道。 */
   async function ttTopicLive(id, n) {
     var headUrl = 'https://api.toutiaoapi.com/api/trending/topic/' + id + '/?rank=';
     var feedUrl = 'https://api.toutiaoapi.com/api/feed/topic_innerflow/v1/?query_id=' + id +
       '&offset=0&count=16&aid=13&category=topic_innerflow&ttfrom=amos_land_normal' +
       '&stream_api_version=88&client_extra_params=' + encodeURIComponent('{"is_webview":"1"}');
 
-    /* 头图这条能直连，先发出去，和帖子流并行 */
     var headP = getJSON(headUrl, 6000).catch(function () { return null; });
+    var feed = await pxGet(feedUrl, { kind: 'json', ms: 16000, width: 2, ttl: 120000 });
+    var out = ttParse(feed.data, await headP);
+    if (!out.items.length && !out.header.banner) throw new Error('这个话题暂时没有内容');
+    out.items = out.items.slice(0, n || 20);
+    out.from = '头条 · ' + feed.from;
+    return out;
+  }
 
-    var tasks = proxyOrder().map(function (px) {
-      return {
-        label: px.id,
-        run: function () {
-          return getJSON(px.wrap(feedUrl), 18000).then(function (d) {
-            markProxy(px.id, true);
-            return d;
-          }, function (e) {
-            markProxy(px.id, false);
-            throw e;
+  /* ---------------- 微博：不用自己部署也能实时 ----------------
+
+     微博的搜索接口要访客 Cookie（genvisitor2 换 SUB），浏览器拿不到也带不上，
+     所以「直连」这条路永远是死的。但微博关键词搜索被做成了 RSS：
+     公共 RSSHub 镜像 /weibo/keyword/xxx 每次请求都是现抓微博，返回带作者、正文、
+     原帖链接和发布时间 —— 这就是话题下别人刚发的帖子。
+
+     镜像本身不一定给 CORS 头，所以再套一层公共通道读 RSS。整条链路
+     浏览器 → 公共通道 → RSSHub 镜像 → 微博，全部是现取的，没有仓库缓存参与。 */
+
+  var RSSHUB = [
+    'https://rsshub.woodland.cafe',
+    'https://rsshub.rssforever.com',
+    'https://hub.slarker.me'
+  ];
+
+  function rsshubList() {
+    var arr = null;
+    try { arr = JSON.parse(localStorage.getItem('wj.rsshub') || 'null'); } catch (e) { arr = null; }
+    if (!Array.isArray(arr) || !arr.length) arr = RSSHUB.slice();
+    var out = [];
+    arr.forEach(function (x) {
+      var s = tidyBase(x);
+      if (s && out.indexOf(s) < 0) out.push(s);
+    });
+    return out;
+  }
+
+  function rssItems(xml) {
+    var doc = null;
+    try { doc = new DOMParser().parseFromString(xml, 'text/xml'); } catch (e) { return []; }
+    if (!doc) return [];
+    var nodes = doc.getElementsByTagName('item');
+    if (!nodes.length) nodes = doc.getElementsByTagName('entry');
+    var out = [];
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      var pick = function (tag) {
+        var el = n.getElementsByTagName(tag)[0];
+        return el ? String(el.textContent || '') : '';
+      };
+      var link = pick('link');
+      if (!link) {
+        var lk = n.getElementsByTagName('link')[0];
+        if (lk && lk.getAttribute) link = lk.getAttribute('href') || '';
+      }
+      out.push({
+        title: pick('title'),
+        link: link,
+        date: pick('pubDate') || pick('published') || pick('updated'),
+        desc: pick('description') || pick('summary')
+      });
+    }
+    return out;
+  }
+
+  function weiboFromRss(xml, kw, n) {
+    var raw = rssItems(xml);
+    var items = [];
+    raw.forEach(function (r) {
+      var box = document.createElement('div');
+      box.innerHTML = r.desc || '';
+      var a = box.getElementsByTagName('a')[0];
+      var author = a ? String(a.textContent || '').trim() : '';
+      var text = String(box.textContent || r.title || '')
+        .replace(/\u200b/g, '')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+      /* [图片] 有时在描述里、有时只在标题里，两处都数一遍 */
+      var pics = ((text + ' ' + String(r.title || '')).match(/\[图片\]/g) || []).length;
+      text = text.replace(/\[图片\]/g, '').replace(/[ \t]{2,}/g, ' ').trim();
+      /* 描述开头是「作者名:」，和上面的 author 重复，去掉 */
+      if (author && text.indexOf(author) === 0) {
+        text = text.slice(author.length).replace(/^[:：\s]+/, '');
+      }
+      var idm = String(r.link || '').match(/\/([A-Za-z0-9]{5,})$/);
+      var at = '';
+      if (r.date) {
+        var d = new Date(r.date);
+        if (!isNaN(d.getTime())) at = d.toISOString();
+      }
+      var body = (text || r.title || '').trim();
+      if (!body && !r.link) return;
+      items.push({
+        id: idm ? idm[1] : '',
+        url: r.link || '',
+        author: author || '微博用户',
+        avatar: '',
+        text: body.slice(0, 600),
+        images: [],
+        pics: pics,
+        at: at,
+        likes: 0,
+        comments: 0,
+        reposts: 0
+      });
+    });
+    if (!items.length) throw new Error('镜像这次没返回内容');
+    return { items: items.slice(0, n || 20), header: { title: kw, banner: '', readCount: 0, talkCount: 0 } };
+  }
+
+  async function weiboRssTopic(kw, n, budget) {
+    var word = String(kw || '').replace(/^#+|#+$/g, '').trim();
+    if (!word) throw new Error('没有话题词');
+    var hosts = rsshubList();
+    var deadline = Date.now() + (budget || 17000);
+    var detail = [];
+    /* 一个镜像一个镜像地试：同时打三家只会把公共通道打到 429 */
+    for (var i = 0; i < hosts.length; i++) {
+      var h = hosts[i];
+      var host = h.replace(/^https?:\/\//, '');
+      var left = deadline - Date.now();
+      if (left < 2500) break;
+      try {
+        var r = await pxGet(h + '/weibo/keyword/' + encodeURIComponent(word), {
+          kind: 'xml', ms: Math.min(13000, left), budget: left, ttl: 120000, width: 2
+        });
+        var out = weiboFromRss(r.data, word, n);
+        out.from = '微博镜像 · ' + host;
+        return out;
+      } catch (e) {
+        detail.push(host + '：' + (e.detail || e.message || '没通'));
+      }
+    }
+    var err = new Error('微博镜像没通');
+    err.detail = detail.join('；').slice(0, 150);
+    err.code = 'MIRROR_DOWN';
+    throw err;
+  }
+
+  /* ---------------- 二级页：话题下的帖子 ----------------
+
+     微博、头条的话题接口都不给 CORS 头，浏览器直连一定失败。所以分三层：
+
+     1. 配了解析服务（Cloudflare Worker / 自建 VPS）→ 服务端实时抓，最完整；
+     2. 头条还有一条「公共线路」：官方 topic_innerflow 接口本身不需要登录，
+        只是缺 CORS，套一层公共代理就能实时读到，实测可用；
+     3. 都没有才用仓库里的缓存（Action 生成），标成「缓存」+ 时间。
+
+     微博没有第 2 条路：它的搜索接口要访客 Cookie，浏览器既拿不到也带不上，
+     这部分只能靠解析服务，UI 里会直说。 */
+
+  function ttParse(flow, head) {
+    var items = [];
+    var data = (flow && flow.data) || [];
+    for (var k = 0; k < data.length; k++) {
+      var c = data[k] && data[k].content;
+      if (typeof c === 'string') {
+        try { c = JSON.parse(c); } catch (e) { c = null; }
+      }
+      if (!c) continue;
+      var text = plainText(c.content || c.abstract || '');
+      var title = plainText(c.title || '');
+      if (!text && !title) continue;
+      var imgs = [];
+      var cl = c.detail_cover_list || [];
+      for (var j = 0; j < cl.length; j++) {
+        var u = (cl[j] && (cl[j].url || (cl[j].url_list && cl[j].url_list[0] && cl[j].url_list[0].url))) || '';
+        if (u) imgs.push(String(u).replace(/^http:/, 'https:'));
+      }
+      var gid = String(c.group_id || ((c.schema || '').match(/group_id=(\d+)/) || [])[1] || '');
+      items.push({
+        id: gid,
+        url: gid ? 'https://www.toutiao.com/w/' + gid + '/' : '',
+        author: (c.user && c.user.name) || plainText(c.source || ''),
+        avatar: ((c.user && c.user.avatar_url) || '').replace(/^http:/, 'https:'),
+        title: title,
+        text: (text || title).slice(0, 500),
+        images: imgs.slice(0, 6),
+        at: c.create_time ? new Date(c.create_time * 1000).toISOString() : '',
+        likes: c.digg_count || 0,
+        comments: c.comment_count || 0,
+        reposts: c.share_count || 0
+      });
+      if (items.length >= 20) break;
+    }
+    var banner = head && head.banner_urls && head.banner_urls[0] ? String(head.banner_urls[0]).replace(/^http:/, 'https:') : '';
+    return {
+      items: items,
+      header: {
+        title: (head && head.topic_title) || '',
+        banner: banner,
+        readCount: (head && head.read_count) || 0,
+        talkCount: (head && head.talk_count) || 0
+      }
+    };
+  }
+
+  function plainText(s) {
+    return String(s || '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#\d+;/g, '')
+      .replace(/\u200b/g, '')
+      .trim();
+  }
+
+  /* 任意结果竞速：和 raceList 一样，只是返回值可以是对象 */
+  function raceAny(tasks, budget) {
+    return new Promise(function (resolve, reject) {
+      var left = tasks.length, done = false, errs = [];
+      if (!left) return reject(new Error('没有可用的取数通道'));
+      var timer = setTimeout(function () {
+        if (done) return;
+        done = true;
+        var e = new Error('取数通道都没响应');
+        e.detail = errs.join('；');
+        reject(e);
+      }, budget || 10000);
+      tasks.forEach(function (t) {
+        Promise.resolve()
+          .then(function () { return t.run(); })
+          .then(function (v) {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            resolve({ value: v, prov: t.label });
+          })
+          .catch(function (err) {
+            errs.push(t.label + '：' + errMsg(err));
+            if (--left === 0 && !done) {
+              done = true;
+              clearTimeout(timer);
+              var e = new Error('取数通道都没成功');
+              e.detail = errs.join('；');
+              reject(e);
+            }
           });
+      });
+    });
+  }
+
+  /* ---------------- 公共取数通道池 ----------------
+
+     浏览器读别人的 JSON/XML 会被 CORS 拦（对方不给 access-control-allow-origin）。
+     国内能直接用的几条公开通道都不稳定，还会按 IP 限流，所以这里不指望「某一条永远在」，
+     而是把它们做成一个带健康记忆的池子：
+
+       · 成功的记一笔，下次排前面；429 / 403 的冷却 5 分钟，别硬撞；
+       · 一次只打 2 条，谁先给出合格内容就用谁，不把三家一起打爆；
+       · 同一个 URL 90 秒内只取一次，反复点同一条话题不再重复请求。 */
+
+  var PX_KEY = 'wj.px.v1';
+  var PX_COOL = 5 * 60000;
+
+  var PX = [
+    { id: 'corslol', label: 'cors.lol', wrap: function (u) { return 'https://api.cors.lol/?url=' + encodeURIComponent(u); } },
+    { id: 'allorigins', label: 'allorigins', wrap: function (u) { return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u); } },
+    { id: 'codetabs', label: 'codetabs', wrap: function (u) { return 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u); } },
+    { id: 'corsfix', label: 'corsfix', wrap: function (u) { return 'https://proxy.corsfix.com/?' + u; } },
+    { id: 'cors_eu', label: 'cors.eu.org', wrap: function (u) { return 'https://cors.eu.org/' + u; } },
+    { id: 'thing', label: 'thingproxy', wrap: function (u) { return 'https://thingproxy.freeboard.io/fetch/' + u; } }
+  ];
+
+  function pxMap() {
+    try {
+      var m = JSON.parse(localStorage.getItem(PX_KEY) || '{}');
+      return (m && typeof m === 'object') ? m : {};
+    } catch (e) { return {}; }
+  }
+
+  function pxSave(m) {
+    try { localStorage.setItem(PX_KEY, JSON.stringify(m)); } catch (e) { /* ignore */ }
+  }
+
+  /* 排序：能用的先上（成功次数多、上次成功近），冷却中的排到队尾而不是扔掉——
+     宁可最后再试一次，也别因为「全都刚被限流」就直接失败。 */
+  function pxOrder() {
+    var m = pxMap(), now = Date.now();
+    var list = PX.slice();
+    list.sort(function (a, b) {
+      var sa = m[a.id] || {}, sb = m[b.id] || {};
+      var ca = (sa.until && sa.until > now) ? 1 : 0;
+      var cb2 = (sb.until && sb.until > now) ? 1 : 0;
+      if (ca !== cb2) return ca - cb2;
+      if (ca) return (sa.until || 0) - (sb.until || 0);
+      var ra = sa.ok || 0, rb = sb.ok || 0;
+      if (ra !== rb) return rb - ra;
+      return (sb.last || 0) - (sa.last || 0);
+    });
+    return list;
+  }
+
+  function pxMark(id, ok, status) {
+    var m = pxMap(), s = m[id] || { ok: 0, fail: 0 };
+    if (ok) {
+      s.ok = (s.ok || 0) + 1;
+      s.last = Date.now();
+      delete s.until;
+      s.fail = 0;
+    } else {
+      s.fail = (s.fail || 0) + 1;
+      /* 429 是限流，半分钟就恢复；403 是被这个站点挡了，先别撞十分钟 */
+      if (status === 429) s.until = Date.now() + 45000;
+      else if (status === 403) s.until = Date.now() + 10 * 60000;
+      else if (status === 503) s.until = Date.now() + 2 * 60000;
+      else if (s.fail >= 3) s.until = Date.now() + 60000;
+    }
+    m[id] = s;
+    pxSave(m);
+  }
+
+  /* 带状态码的取文本：CORS 被拦时 fetch 直接 TypeError（没有 status），
+     这类失败先不冷却，连续三次才歇一会儿 */
+  async function pxFetchText(url, ms) {
+    var tk = timeout(ms || 12000);
+    try {
+      var r = await fetch(url, { signal: tk.signal, cache: 'no-store' });
+      var body = '';
+      try { body = await r.text(); } catch (e2) { /* ignore */ }
+      if (!r.ok) {
+        var err = new Error('HTTP ' + r.status);
+        err.status = r.status;
+        err.body = body;
+        throw err;
+      }
+      return body;
+    } finally { tk.done(); }
+  }
+
+  /* 判断代理到底有没有把内容拿回来：200 也可能是「Rate limit exceeded」这种纯文本 */
+  function pxDecode(body, kind) {
+    var s = String(body || '').trim();
+    if (!s) return null;
+    if (kind === 'xml') return (/<item[\s>]|<entry[\s>]/i.test(s) ? s : null);
+    if (kind === 'html') return (s.length > 300 && /<\w+[\s>]/.test(s) ? s : null);
+    try { return JSON.parse(s); } catch (e) { /* 有的代理会在前面加一行日志 */ }
+    var i = s.indexOf('{');
+    if (i > -1) {
+      try { return JSON.parse(s.slice(i)); } catch (e2) { /* ignore */ }
+    }
+    return null;
+  }
+
+  var pxMemo = {};
+
+  /* 一批（默认 2 条）同时发车，谁先给出合格内容就用谁 */
+  function pxRace(batch, url, kind, ms, detail) {
+    return new Promise(function (resolve, reject) {
+      var left = batch.length, done = false;
+      var timer = setTimeout(function () {
+        if (done) return;
+        done = true;
+        detail.push(batch.map(function (p) { return p.label + '：超时'; }).join('、'));
+        reject(new Error('超时'));
+      }, ms + 2000);
+      batch.forEach(function (p) {
+        pxFetchText(p.wrap(url), ms).then(function (body) {
+          var v = pxDecode(body, kind);
+          if (v === null) {
+            var bad = new Error('返回的不是' + (kind === 'xml' ? ' RSS' : kind === 'html' ? '网页' : ' JSON'));
+            bad.status = 200;
+            throw bad;
+          }
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          pxMark(p.id, true);
+          resolve({ data: v, from: p.label });
+        }).catch(function (err) {
+          pxMark(p.id, false, err && err.status);
+          detail.push(p.label + '：' + errMsg(err));
+          if (--left === 0 && !done) {
+            done = true;
+            clearTimeout(timer);
+            reject(new Error('这一批都没成功'));
+          }
+        });
+      });
+    });
+  }
+
+  /* 依次打若干批，直到拿到合格内容或预算用完 */
+  async function pxGet(url, opts) {
+    opts = opts || {};
+    var kind = opts.kind || 'json';
+    var ms = opts.ms || 12000;
+    var budget = opts.budget || Math.min(ms * 2 + 4000, 30000);
+    var ck = kind + ' ' + url;
+    var c = pxMemo[ck];
+    if (c && Date.now() - c.at < (opts.ttl || 90000)) return { data: c.data, from: c.from, cached: true };
+
+    var list = pxOrder();
+    if (!list.length) {
+      var e0 = new Error('没有可用的公共通道');
+      e0.code = 'NO_PROXY';
+      throw e0;
+    }
+
+    var started = Date.now(), idx = 0, detail = [];
+    var width = opts.width || 2;
+    while (idx < list.length) {
+      var left = budget - (Date.now() - started);
+      if (left < 1500) break;
+      var batch = list.slice(idx, idx + width);
+      idx += batch.length;
+      try {
+        var got = await pxRace(batch, url, kind, Math.min(ms, left), detail);
+        pxMemo[ck] = { at: Date.now(), data: got.data, from: got.from };
+        return got;
+      } catch (e) { /* 换下一批 */ }
+    }
+
+    var err = new Error('公共通道都没成功');
+    err.detail = detail.join('；');
+    throw err;
+  }
+
+  /* 头条话题：头图接口本身带 CORS，浏览器能直连；
+     帖子流（topic_innerflow）只要请求里带 Origin 就 403，必须过一层公共通道。 */
+  async function ttTopicLive(id, n) {
+    var headUrl = 'https://api.toutiaoapi.com/api/trending/topic/' + id + '/?rank=';
+    var feedUrl = 'https://api.toutiaoapi.com/api/feed/topic_innerflow/v1/?query_id=' + id +
+      '&offset=0&count=16&aid=13&category=topic_innerflow&ttfrom=amos_land_normal' +
+      '&stream_api_version=88&client_extra_params=' + encodeURIComponent('{"is_webview":"1"}');
+
+    var headP = getJSON(headUrl, 6000).catch(function () { return null; });
+    var feed = await pxGet(feedUrl, { kind: 'json', ms: 16000, width: 2, ttl: 120000 });
+    var out = ttParse(feed.data, await headP);
+    if (!out.items.length && !out.header.banner) throw new Error('这个话题暂时没有内容');
+    out.items = out.items.slice(0, n || 20);
+    out.from = '头条 · ' + feed.from;
+    return out;
+  }
+
+  /* ---------------- 微博：不用自己部署也能实时 ----------------
+
+     微博的搜索接口要访客 Cookie（genvisitor2 换 SUB），浏览器拿不到也带不上，
+     所以「直连」这条路永远是死的。但微博关键词搜索被做成了 RSS：
+     公共 RSSHub 镜像 /weibo/keyword/xxx 每次请求都是现抓微博，返回带作者、正文、
+     原帖链接和发布时间 —— 这就是话题下别人刚发的帖子。
+
+     镜像本身不一定给 CORS 头，所以再套一层公共通道读 RSS。整条链路
+     浏览器 → 公共通道 → RSSHub 镜像 → 微博，全部是现取的，没有仓库缓存参与。 */
+
+  var RSSHUB = [
+    'https://rsshub.woodland.cafe',
+    'https://rsshub.rssforever.com',
+    'https://hub.slarker.me'
+  ];
+
+  function rsshubList() {
+    var arr = null;
+    try { arr = JSON.parse(localStorage.getItem('wj.rsshub') || 'null'); } catch (e) { arr = null; }
+    if (!Array.isArray(arr) || !arr.length) arr = RSSHUB.slice();
+    var out = [];
+    arr.forEach(function (x) {
+      var s = tidyBase(x);
+      if (s && out.indexOf(s) < 0) out.push(s);
+    });
+    return out;
+  }
+
+  function rssItems(xml) {
+    var doc = null;
+    try { doc = new DOMParser().parseFromString(xml, 'text/xml'); } catch (e) { return []; }
+    if (!doc) return [];
+    var nodes = doc.getElementsByTagName('item');
+    if (!nodes.length) nodes = doc.getElementsByTagName('entry');
+    var out = [];
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      var pick = function (tag) {
+        var el = n.getElementsByTagName(tag)[0];
+        return el ? String(el.textContent || '') : '';
+      };
+      var link = pick('link');
+      if (!link) {
+        var lk = n.getElementsByTagName('link')[0];
+        if (lk && lk.getAttribute) link = lk.getAttribute('href') || '';
+      }
+      out.push({
+        title: pick('title'),
+        link: link,
+        date: pick('pubDate') || pick('published') || pick('updated'),
+        desc: pick('description') || pick('summary')
+      });
+    }
+    return out;
+  }
+
+  function weiboFromRss(xml, kw, n) {
+    var raw = rssItems(xml);
+    var items = [];
+    raw.forEach(function (r) {
+      var box = document.createElement('div');
+      box.innerHTML = r.desc || '';
+      var a = box.getElementsByTagName('a')[0];
+      var author = a ? String(a.textContent || '').trim() : '';
+      var text = String(box.textContent || r.title || '')
+        .replace(/\u200b/g, '')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+      /* [图片] 有时在描述里、有时只在标题里，两处都数一遍 */
+      var pics = ((text + ' ' + String(r.title || '')).match(/\[图片\]/g) || []).length;
+      text = text.replace(/\[图片\]/g, '').replace(/[ \t]{2,}/g, ' ').trim();
+      /* 描述开头是「作者名:」，和上面的 author 重复，去掉 */
+      if (author && text.indexOf(author) === 0) {
+        text = text.slice(author.length).replace(/^[:：\s]+/, '');
+      }
+      var idm = String(r.link || '').match(/\/([A-Za-z0-9]{5,})$/);
+      var at = '';
+      if (r.date) {
+        var d = new Date(r.date);
+        if (!isNaN(d.getTime())) at = d.toISOString();
+      }
+      var body = (text || r.title || '').trim();
+      if (!body && !r.link) return;
+      items.push({
+        id: idm ? idm[1] : '',
+        url: r.link || '',
+        author: author || '微博用户',
+        avatar: '',
+        text: body.slice(0, 600),
+        images: [],
+        pics: pics,
+        at: at,
+        likes: 0,
+        comments: 0,
+        reposts: 0
+      });
+    });
+    if (!items.length) throw new Error('镜像这次没返回内容');
+    return { items: items.slice(0, n || 20), header: { title: kw, banner: '', readCount: 0, talkCount: 0 } };
+  }
+
+  async function weiboRssTopic(kw, n, budget) {
+    var word = String(kw || '').replace(/^#+|#+$/g, '').trim();
+    if (!word) throw new Error('没有话题词');
+    var hosts = rsshubList();
+    var tasks = hosts.map(function (h) {
+      var host = h.replace(/^https?:\/\//, '');
+      return {
+        label: '微博镜像',
+        run: function () {
+          return pxGet(h + '/weibo/keyword/' + encodeURIComponent(word), { kind: 'xml', ms: 14000, ttl: 120000 })
+            .then(function (r) {
+              var out = weiboFromRss(r.data, word, n);
+              out.from = '微博镜像 · ' + host;
+              return out;
+            });
         }
       };
     });
-    var feed = (await raceAny(tasks, 20000)).value;
-    var out = ttParse(feed, await headP);
-    if (!out.items.length && !out.header.banner) throw new Error('这个话题暂时没有内容');
-    out.items = out.items.slice(0, n || 20);
-    return out;
+    if (!tasks.length) throw new Error('没有可用的微博镜像');
+    return (await raceAny(tasks, budget || 17000)).value;
   }
 
   /* 本机最近一次「实时成功」的话题内容：再点同一个话题时先给这一份，
@@ -1123,6 +1833,12 @@ window.WJLive = (function () {
       tasks.push({ label: '头条实时', run: function () { return ttTopicLive(id, n); } });
     }
 
+    /* 微博也有一条「不用部署任何东西」的路：公共 RSSHub 镜像把关键词搜索转成 RSS，
+       再套一层公共通道读回来。镜像是现抓微博的，不是缓存。 */
+    if (src === 'weibo' && String(title || '').trim()) {
+      tasks.push({ label: '微博镜像', run: function () { return weiboRssTopic(title, n, 16000); } });
+    }
+
     var liveErr = null;
     var lk = localTopicKey(src, id, title);
     if (tasks.length) {
@@ -1136,9 +1852,12 @@ window.WJLive = (function () {
       }
     }
 
+    /* 实时没成：把原因带上，界面才能说清是「限流了」还是「没配服务」 */
+    var why = liveErr ? (liveErr.detail || liveErr.message || '') : '';
+
     var mine = readLocalTopic(lk);
     if (mine) {
-      return { items: mine.items.slice(0, n || 12), header: mine.header || null, via: 'cache', at: mine.at, from: '本机上次实时' };
+      return { items: mine.items.slice(0, n || 12), header: mine.header || null, via: 'cache', at: mine.at, from: '本机上次实时', why: why };
     }
 
     var snap = await topicSnapshot();
@@ -1148,7 +1867,8 @@ window.WJLive = (function () {
         items: (hit.items || []).slice(0, n || 12),
         header: { title: hit.title || title, banner: hit.banner || '', readCount: hit.readCount || 0, talkCount: hit.talkCount || 0 },
         via: 'cache',
-        at: hit.at || (snap.updatedAt ? new Date(snap.updatedAt).getTime() : 0)
+        at: hit.at || (snap.updatedAt ? new Date(snap.updatedAt).getTime() : 0),
+        why: why
       };
     }
     if (liveErr) throw liveErr;
@@ -2066,6 +2786,11 @@ window.WJLive = (function () {
     posts: posts,
     topic: topic,
     topicCached: topicCached,
+    weiboRssTopic: weiboRssTopic,
+    weiboFromRss: weiboFromRss,
+    rssItems: rssItems,
+    pxGet: pxGet,
+    pxOrder: pxOrder,
     clearHotMemo: clearHotMemo,
     ttTopicLive: ttTopicLive,
     topicId: topicId,

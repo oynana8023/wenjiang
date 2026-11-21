@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI, C = window.WJCreate;
 
-  var VERSION = 'v2.15.0';
+  var VERSION = 'v2.16.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -1242,6 +1242,7 @@
     if (p.at) meta.push(fmtPublished(p.at) || U.fmtTime(p.at));
     if (p.likes) meta.push('赞 ' + U.fmtHot(p.likes));
     if (p.comments) meta.push('评 ' + U.fmtHot(p.comments));
+    if (!imgs.length && p.pics) meta.push('含 ' + p.pics + ' 张图');
     var av = p.avatar
       ? '<img class="tp-av" src="' + esc(L.imgUrl(p.avatar)) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">'
       : '<span class="tp-av tp-av-t">' + esc(String(p.author || '网').slice(0, 1)) + '</span>';
@@ -1261,7 +1262,7 @@
     var rows = items.slice(0, show).map(topicPostHtml).join('');
     var isCache = t.via !== 'live';
     var stamp = t.at ? U.fmtTime(new Date(t.at).toISOString()) : '稍早';
-    var via = isCache ? '缓存 · ' + stamp : '实时';
+    var via = isCache ? '缓存 · ' + stamp : ('实时' + (t.from && t.from !== '解析服务' ? ' · ' + t.from : ''));
     var head = (t.header && t.header.banner)
       ? '<div class="topic-cover"><img src="' + esc(L.imgUrl(t.header.banner)) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></div>'
       : '';
@@ -1273,11 +1274,9 @@
       : '';
     var warn = isCache
       ? '<div class="note warn mt-s">' + U.ic('clock', 14) +
-        '<div>上面是 <b>' + stamp + '</b> 那一版，不是此刻的。' +
-        (lastTopic.src === 'weibo'
-          ? '微博搜索接口要访客 Cookie，浏览器带不上，实时只能靠解析服务。'
-          : '公共线路这会儿没通。') +
-        '点下面重试，或到「我的 → 解析服务」配一台（免费）。</div></div>' +
+        '<div>上面是 <b>' + stamp + '</b> 那一版，不是此刻的。实时那条路这次没通' +
+        (t.why ? '：' + esc(String(t.why).slice(0, 90)) : '') +
+        '。公共通道会限流，过一会儿再点一次通常就恢复；想一直稳，配一台解析服务（免费）。</div></div>' +
         '<button class="btn btn-soft btn-block mt-s" data-act="topic-retry">' + U.ic('refresh', 15) + ' 重试实时</button>'
       : '';
     return head + '<div class="topic-head"><span class="h2" style="font-size:14px">' +
@@ -1301,7 +1300,10 @@
     }).join('');
     var html = '<div class="pv-meta">' + esc(meta.join(' · ')) + '</div>' +
       '<div class="pv-text">' + esc(String(p.text || '')).replace(/\n/g, '<br>') + '</div>' +
-      (pics ? '<div class="pv-imgs">' + pics + '</div>' : '');
+      (pics ? '<div class="pv-imgs">' + pics + '</div>' : '') +
+      (!pics && p.pics
+        ? '<div class="sec-sub" style="margin-top:10px">原帖还有 ' + p.pics + ' 张图，这里只同步了文字；点下面「打开原帖」看图。</div>'
+        : '');
     var foot = '<button class="btn btn-primary btn-block" data-act="post-write" data-idx="' + (idx > -1 ? idx : 0) + '">' +
       U.ic('wand', 16) + ' 用这条写</button>' +
       (p.url ? '<button class="btn btn-soft btn-block" data-act="open-url" data-url="' + esc(p.url) + '">' + U.ic('external', 15) + ' 打开原帖</button>' : '') +
@@ -1317,39 +1319,9 @@
     var box = document.getElementById('topicBox');
     if (!box) return;
     var tid = id || L.topicId(url);
-    var sk = '<div class="topic-head"><span class="h2" style="font-size:14px">正在取话题内容</span>' +
-      '<span class="sec-sub"><span class="spin"></span> 稍等</span></div>' +
-      '<div class="sk" style="height:56px;border-radius:10px;margin-bottom:8px"></div>' +
-      '<div class="sk" style="height:56px;border-radius:10px"></div>';
 
-    /* 微博没有解析服务时注定拿不到实时帖子（搜索接口要访客 Cookie），
-       别让它先等 12 秒超时再报错：直接去找缓存，找不到就立刻说清楚。 */
-    var hasRelay = false;
-    try { hasRelay = (L.parseBases && L.parseBases().length > 0) || await L.hasServer(); } catch (e) { hasRelay = false; }
-    if (srcId === 'weibo' && !hasRelay) {
-      box.innerHTML = '<div class="topic-head"><span class="h2" style="font-size:14px">正在找这个话题的缓存</span>' +
-        '<span class="sec-sub"><span class="spin"></span></span></div>' +
-        '<div class="sk" style="height:56px;border-radius:10px"></div>';
-      var wq = null;
-      try { wq = await L.topicCached(srcId, tid, title, 20); } catch (e) { wq = null; }
-      var b0 = document.getElementById('topicBox');
-      if (!b0) return;
-      if (wq) {
-        topicCache = { src: srcId, title: title, id: id, data: wq };
-        b0.innerHTML = topicBoxHtml(wq, all);
-      } else {
-        var wurl = url || ('https://s.weibo.com/weibo?q=' + encodeURIComponent('#' + title + '#'));
-        b0.innerHTML = '<div class="note mt-s" style="border-color:rgba(255,176,32,.3)">' + U.ic('info', 14) +
-          '<div>微博的搜索接口要访客 Cookie，浏览器既拿不到也带不上，这个话题下的帖子只能由服务器代抓。想马上看，点下面直接去微博；想在这里看，配一台解析服务（免费，1 分钟）就变成实时。</div></div>' +
-          '<button class="btn btn-primary btn-block mt-s" data-act="open-url" data-url="' + esc(wurl) + '">' + U.ic('external', 15) + ' 在微博里看这个话题</button>' +
-          '<button class="btn btn-soft btn-block mt-s" data-act="parse-service">' + U.ic('wand', 15) + ' 配一台解析服务（免费）</button>' +
-          '<button class="btn btn-ghost btn-block mt-s" data-act="topic-retry">' + U.ic('refresh', 15) + ' 再试一次缓存</button>';
-      }
-      return;
-    }
-
-    /* 先把手里有的铺上：本机上次实时、或仓库缓存。头条的帖子流要过公共代理，
-       慢的时候要十几秒，不能让用户对着骨架屏干等。 */
+    /* 先把手里有的铺上：本机上次实时、或仓库缓存。实时那一跳（头条过公共通道、
+       微博过镜像）要几百毫秒到十几秒，不能让用户对着骨架屏干等。 */
     var quick = null;
     if (L.topicCached) {
       try { quick = await L.topicCached(srcId, tid, title, 20); } catch (e) { quick = null; }
@@ -1358,35 +1330,36 @@
       topicCache = { src: srcId, title: title, id: id, data: quick };
       box.innerHTML = topicBoxHtml(quick, all);
     } else {
-      box.innerHTML = sk;
+      box.innerHTML = '<div class="topic-head"><span class="h2" style="font-size:14px">正在取话题内容</span>' +
+        '<span class="sec-sub"><span class="spin"></span> 稍等</span></div>' +
+        '<div class="sk" style="height:56px;border-radius:10px;margin-bottom:8px"></div>' +
+        '<div class="sk" style="height:56px;border-radius:10px"></div>';
     }
 
     try {
       var cached = topicCache.data && topicCache.src === srcId && topicCache.title === title && topicCache.data.via === 'live'
         ? topicCache.data
         : null;
-      var t = cached || await L.topic(srcId, tid, title, 20, { budget: quick ? 26000 : 15000 });
+      var t = cached || await L.topic(srcId, tid, title, 20, { budget: quick ? 26000 : 17000 });
       topicCache = { src: srcId, title: title, id: id, data: t };
       var b2 = document.getElementById('topicBox');
       if (b2) b2.innerHTML = topicBoxHtml(t, all);
     } catch (e) {
-      var hint = e && e.code === 'NO_RELAY'
-        ? '微博的搜索接口要访客 Cookie，浏览器既拿不到也带不上，所以这个话题下的帖子只能由服务器代抓。配一台解析服务（免费，1 分钟）这里就变成实时；头条不需要，它是直连的。'
-        : '这次没取到：' + ((e && e.message) || '接口没响应') + '。公共线路偶尔会限流，稍等再点一次通常就好；也可以直接打开话题页看。';
       var b3 = document.getElementById('topicBox');
       if (!b3) return;
+      var why = (e && (e.detail || e.message)) || '接口没响应';
+      var hint = srcId === 'weibo'
+        ? '微博的话题要服务端代抓，公共镜像这会儿也没通（' + why + '）。三条路：直接去微博看原帖；配一台解析服务（免费，1 分钟）这里就变实时；或者过一会儿再点一次。'
+        : '这次没取到：' + why + '。公共线路会限流，稍等再点一次通常就好。';
+      var note = '<div class="note warn mt-s">' + U.ic('info', 14) + '<div>' + esc(hint) + '</div></div>';
       if (quick) {
-        b3.insertAdjacentHTML('beforeend',
-          '<div class="note warn mt-s">' + U.ic('clock', 14) + '<div>' + esc(hint) + '</div></div>' +
+        b3.insertAdjacentHTML('beforeend', note +
           '<button class="btn btn-soft btn-block mt-s" data-act="topic-retry">' + U.ic('refresh', 15) + ' 重试实时</button>');
       } else {
-        b3.innerHTML = '<div class="note mt-s" ' + (e && e.code === 'NO_RELAY' ? 'style="border-color:rgba(255,176,32,.3)"' : '') + '>' +
-          U.ic('info', 14) + '<div>' + esc(hint) + '</div></div>' +
-          (e && e.code === 'NO_RELAY'
-            ? '<button class="btn btn-primary btn-block mt-s" data-act="parse-service">' + U.ic('wand', 15) + ' 配一台解析服务（免费）</button>'
-            : '') +
+        b3.innerHTML = note +
           '<button class="btn btn-primary btn-block mt-s" data-act="open-url" data-url="' + esc(url || '') + '">' + U.ic('external', 15) + ' 打开话题页看</button>' +
-          '<button class="btn btn-soft btn-block mt-s" data-act="topic-retry">' + U.ic('refresh', 15) + ' 再试一次</button>';
+          '<button class="btn btn-soft btn-block mt-s" data-act="parse-service">' + U.ic('wand', 15) + ' 配一台解析服务（免费）</button>' +
+          '<button class="btn btn-ghost btn-block mt-s" data-act="topic-retry">' + U.ic('refresh', 15) + ' 再试一次</button>';
       }
     }
   }
@@ -2024,15 +1997,16 @@
     var list = L.parseBases();
     var key = L.parseKey ? L.parseKey() : '';
     var html =
-      '<p style="color:var(--ink-2)">浏览器读不了别人的网页（跨域限制），取正文要有服务器代抓。' +
-      '不配也能试：内置了 3 条公共阅读线路（Jina Reader / AllOrigins / CodeTabs），能通就直接用；' +
-      '它们不受我们控制，限流或下线时就得靠自己那台。填多个地址时并行竞速，一条挂了自动换下一条。</p>' +
+      '<p style="color:var(--ink-2)">浏览器读不了别人的网页（跨域限制），抓正文要有一台服务器代抓。' +
+      '<b>不配也能用</b>：热榜直连各平台接口，话题二级页走公共线路和微博镜像，都是实时的；' +
+      '这一项只影响两件事——微博话题的完整度、以及任意网页正文的抓取（那里内置了 3 条公共阅读线路兜底）。' +
+      '填多个地址会并行竞速，一条挂了自动换下一条。</p>' +
       (list.length
         ? '<div class="note mt-s" style="border-color:rgba(217,255,75,.28)">' + U.ic('check', 13) +
           '<div>已配置 <b>' + list.length + '</b> 条通道。解析和联网取证都走它。</div></div>'
         : '<div class="note mt-s" style="border-color:rgba(255,176,32,.3)">' + U.ic('alert', 13) +
-          '<div><b>还没配自己的解析服务。</b>现在走公共线路，常见文章页有机会取到，遇到强风控站点就会失败；' +
-          '创作板块的联网取证也需要一台自己的服务。<b>热榜和头条二级页不受影响</b>——热榜直连公开榜单接口，头条话题走公共线路，都是实时的；只有微博话题下的帖子需要这台服务。</div></div>') +
+          '<div><b>还没配自己的解析服务。</b>现在走公共线路：文章正文常见站点能取到，强风控站点会失败；' +
+          '微博话题走公共镜像，能通但会被限流。<b>配一台就稳了</b>——热榜本身一直不受影响，它直连接口。</div></div>') +
       '<div class="field mt-m"><div class="field-head"><span class="lbl">服务地址</span>' +
       '<span class="sec-sub">一行一个，留空 = 关闭</span></div>' +
       '<textarea data-field="parsebases" rows="4" spellcheck="false" placeholder="https://wenjiang-parse.你的账号.workers.dev">' +
@@ -2042,7 +2016,9 @@
       '<input data-field="parsekey" value="' + esc(key) + '" spellcheck="false" placeholder="可留空"></div>' +
       '<button class="btn btn-soft btn-block mt-s" data-act="open-url" data-url="https://deploy.workers.cloudflare.com/?url=https://github.com/oynana8023/wenjiang/tree/main/worker">' +
       U.ic('external', 15) + ' 一键部署解析服务（浏览器打开）</button>' +
-      '<div class="sec-sub" style="margin-top:6px;line-height:1.6">免费，不用信用卡；登录 Cloudflare 点 Deploy，1 分钟拿到地址。</div>' +
+      '<div class="sec-sub" style="margin-top:6px;line-height:1.6">免费，不用信用卡；登录 Cloudflare 点 Deploy，1 分钟拿到地址，' +
+      '形如 <code>https://wenjiang-parse.xxx.workers.dev</code>。<b>别的网址填进来一律检测不过</b>——' +
+      '包括本页自己的预览链接（那种地址对外是 403「链接不完整」）。</div>' +
       '<div id="parse-test" class="note mt-s">' + U.ic('info', 14) +
       '<div><b>也可以命令行部署：</b><br>' +
       '1. <code>cd worker</code><br>' +
@@ -2060,18 +2036,38 @@
     });
   }
 
+  /* 把探活结果说成人话：403 不是「连不上」，是「这个地址根本不让我读」 */
+  function baseFailText(r) {
+    var s0 = r.status || 0;
+    if (s0 === 401) return 'HTTP 401 · 这服务设了口令，把 PARSE_KEY 填到上面「访问口令」再检测';
+    if (s0 === 403) return 'HTTP 403 · 被这个地址挡了。它多半不是解析服务——' +
+      '比如把本页的预览链接、或者别的网站填进来了；Worker 地址长这样：wenjiang-xxx.你的账号.workers.dev';
+    if (s0 === 404) return 'HTTP 404 · 能连上，但没有 /api/health，不像本项目的解析服务';
+    if (s0 >= 500) return 'HTTP ' + s0 + ' · 服务在，但它自己挂了（看 Cloudflare 日志）';
+    if (s0 === 200 && r.hint === 'html') return '返回的是一个网页，不是 /api/health 接口，地址填错了';
+    if (s0 === 200 && r.hint === 'shape') return '有响应，但返回的不是 {ok:true}，版本对不上';
+    return '连不上 · ' + (r.error || '无响应') + '（域名解析失败、超时，或被当前网络拦了）';
+  }
+
   function parseTestHtml(rows) {
     if (!rows || !rows.length) return '<div class="sec-sub">没有可检测的地址</div>';
     return rows.map(function (r) {
       var name = r.base || '站内同源';
       var ok = !!r.ok;
+      var self = r.base && r.base.replace(/\/+$/, '') === location.origin;
       var tail = ok
         ? ('在线 · ' + r.ms + 'ms' + (r.version ? ' · v' + r.version : ''))
-        : ('连不上 · ' + (r.error || '无响应'));
+        : (self ? '这就是页面自己的地址，同源已经在用了，不用填它' : baseFailText(r));
+      var open = (!ok && !self && r.base)
+        ? '<a href="' + esc(r.base) + '" target="_blank" rel="noopener" ' +
+          'style="font-size:11px;color:var(--ink-3);text-decoration:underline">在浏览器打开看看</a>'
+        : '';
       return '<div style="padding:9px 0;border-top:1px solid var(--line)">' +
         '<div style="font-size:13px;font-weight:600;word-break:break-all;line-height:1.45">' + esc(name) + '</div>' +
-        '<div style="margin-top:2px;font-family:var(--f-mono);font-size:11px;color:' + (ok ? 'var(--ok)' : 'var(--danger)') + '">' +
-        esc(tail) + '</div></div>';
+        '<div style="margin-top:2px;font-family:var(--f-mono);font-size:11px;line-height:1.5;color:' + (ok ? 'var(--ok)' : 'var(--danger)') + '">' +
+        esc(tail) + '</div>' +
+        (open ? '<div style="margin-top:3px">' + open + '</div>' : '') +
+        '</div>';
     }).join('');
   }
 
@@ -3640,7 +3636,9 @@
         toast('正在检测…');
         runParseTest(f.list).then(function (rows) {
           var alive = rows.filter(function (r) { return r.ok; }).length;
-          toast(alive ? (alive + ' / ' + rows.length + ' 条通道在线') : '都连不上，检查一下地址');
+          if (alive) { toast(alive + ' / ' + rows.length + ' 条通道在线'); return; }
+          var r0 = rows[0] || {};
+          toast(r0.status ? ('没通过：' + baseFailText(r0)).slice(0, 90) : '没连上，看一眼下面的诊断', 3600);
         });
         break;
       }
