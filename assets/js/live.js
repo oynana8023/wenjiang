@@ -1322,7 +1322,7 @@ window.WJLive = (function () {
       if (left < 2500) break;
       try {
         var r = await pxGet(h + '/weibo/keyword/' + encodeURIComponent(word), {
-          kind: 'xml', ms: Math.min(13000, left), budget: left, ttl: 120000, width: 2
+          kind: 'xml', ms: Math.min(6500, left), budget: left, ttl: 120000, width: 2
         });
         var out = weiboFromRss(r.data, word, n);
         out.from = '微博镜像 · ' + host;
@@ -1331,8 +1331,7 @@ window.WJLive = (function () {
         detail.push(host + '：' + (e.detail || e.message || '没通'));
       }
     }
-    var err = new Error('微博镜像没通');
-    err.detail = detail.join('；').slice(0, 150);
+    var err = new Error(detail.join('；').slice(0, 100) || '微博镜像没通');
     err.code = 'MIRROR_DOWN';
     throw err;
   }
@@ -1842,7 +1841,7 @@ window.WJLive = (function () {
     if (src === 'weibo' && String(title || '').trim()) {
       fallback.push({
         label: '微博镜像',
-        run: function () { return weiboRssTopic(title, n, Math.max(8000, deadline - Date.now())); }
+        run: function () { return weiboRssTopic(title, n, Math.max(7000, Math.min(13000, deadline - Date.now()))); }
       });
     }
 
