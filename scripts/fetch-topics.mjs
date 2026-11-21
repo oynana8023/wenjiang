@@ -22,9 +22,9 @@ const UA_M =
 const UA_D =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
 
-const WEIBO_TOP = 12;   // 微博只抓前 14 条，再多会拖慢 Action
-const TT_TOP = 12;
-const POSTS_PER = 6;
+const WEIBO_TOP = 10;   // 只为兜底：抓前 10 个话题，够点开就行，文件越小手机下得越快
+const TT_TOP = 10;
+const POSTS_PER = 4;
 const KEEP_MS = 0;  // 不再合并旧条目：文件每 15 分钟提交一次，越小越好
 
 function timer(ms) {
@@ -161,8 +161,8 @@ async function weiboPosts(title) {
       url: s.mblogid ? 'https://m.weibo.cn/detail/' + s.mblogid : 'https://m.weibo.cn/detail/' + s.mid,
       author: (s.user && s.user.screen_name) || '',
       avatar: imgFix((s.user && s.user.profile_image_url) || ''),
-      text: text.slice(0, 500),
-      images: pics.slice(0, 6),
+      text: text.slice(0, 300),
+      images: pics.slice(0, 3),
       at: (() => { const d = new Date(s.created_at || ''); return isNaN(d.getTime()) ? '' : d.toISOString(); })(),
       likes: s.attitudes_count || 0,
       comments: s.comments_count || 0,
@@ -226,8 +226,8 @@ async function ttTopic(id) {
       author: (c.user && c.user.name) || plain(c.source || ''),
       avatar: imgFix((c.user && c.user.avatar_url) || ''),
       title: title,
-      text: (text || title).slice(0, 500),
-      images: imgs.slice(0, 6),
+      text: (text || title).slice(0, 300),
+      images: imgs.slice(0, 3),
       at: c.create_time ? new Date(c.create_time * 1000).toISOString() : '',
       likes: c.digg_count || 0,
       comments: c.comment_count || 0,
