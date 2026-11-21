@@ -10,7 +10,7 @@
 import { readFile, writeFile, stat } from 'node:fs/promises';
 
 const CSS = 'assets/css/app.css';
-const JS = ['assets/js/data.js', 'assets/js/engine.js', 'assets/js/live.js', 'assets/js/ui.js', 'assets/js/app.js'];
+const JS = ['assets/js/data.js', 'assets/js/engine.js', 'assets/js/live.js', 'assets/js/ui.js', 'assets/js/create.js', 'assets/js/app.js'];
 
 const esc = (s) => s.replace(/<\/script/gi, '<\\/script');
 

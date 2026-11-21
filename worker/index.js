@@ -14,7 +14,7 @@
  * 部署方式见 README「三分钟上线自己的解析服务」。
  */
 
-const VERSION = '3.4.0';
+const VERSION = '3.5.0';
 const MAX_BYTES = 12 * 1024 * 1024;
 const TEXT_LIMIT = 12000;
 const TIMEOUT = 13000;
@@ -855,6 +855,188 @@ async function coverFor(src, title) {
   return { ok: false };
 }
 
+/* ---------------- 网页搜索 ----------------
+   给「内容创作」查资料用：把必应的结果页当普通网页抓回来，解析成
+   { title, url, site, snippet, date }。不依赖任何搜索 API Key。
+   结果缓存 8 分钟，同一批检索词不重复打搜索引擎。 */
+const SEARCH_TTL = 8 * 60 * 1000;
+const searchCache = new Map();
+
+function decodeCk(href) {
+  try {
+    const u = new URL(href, 'https://www.bing.com');
+    if (!/bing\.com$/i.test(u.hostname)) return href;
+    if (!/^\/ck\/a/.test(u.pathname)) return href;
+    const b = u.searchParams.get('u') || '';
+    if (!b.startsWith('a1')) return href;
+    let s = b.slice(2).replace(/-/g, '+').replace(/_/g, '/');
+    while (s.length % 4) s += '=';
+    return atob(s);
+  } catch (e) {
+    return href;
+  }
+}
+
+function bingItems(html) {
+  const out = [];
+  const blocks = String(html).match(/<li[^>]*class="[^"]*\bb_algo\b[^"]*"[\s\S]*?<\/li>/g) || [];
+  for (const b of blocks) {
+    const h2 = b.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
+    if (!h2) continue;
+    const title = stripTags(h2[1]).replace(/\s+/g, ' ').trim();
+    if (!title) continue;
+    const a = h2[1].match(/<a[^>]+href="([^"]+)"/i) || b.match(/<a[^>]+href="(https?:\/\/[^"]+)"/i);
+    const url = a ? decodeCk(decode(a[1])) : '';
+    const citeM = b.match(/<cite[^>]*>([\s\S]*?)<\/cite>/i);
+    const site = citeM ? stripTags(citeM[1]).replace(/\s+/g, ' ').trim().split(/[›>]/)[0].trim() : '';
+    let rest = b.replace(h2[0], ' ').replace(/<cite[\s\S]*?<\/cite>/i, ' ');
+    const snip = stripTags(rest)
+      .replace(/\s+/g, ' ')
+      .replace(/^(阅读更多|网页快照|·)+/g, '')
+      .trim();
+    const dm = b.match(/(\d{4}年\d{1,2}月\d{1,2}日|\d{4}-\d{1,2}-\d{1,2}|(\d+)\s*(小时|分钟|天)前)/);
+    out.push({
+      title: title.slice(0, 160),
+      url: /^https?:\/\//i.test(url) ? url : '',
+      site: site.slice(0, 60),
+      snippet: snip.slice(0, 320),
+      date: dm ? dm[0] : ''
+    });
+  }
+  return out;
+}
+
+function rssItems(xml) {
+  const out = [];
+  const blocks = String(xml).match(/<item>[\s\S]*?<\/item>/g) || [];
+  for (const b of blocks) {
+    const pick = (tag) => {
+      const m = b.match(new RegExp('<' + tag + '>([\\s\\S]*?)</' + tag + '>', 'i'));
+      return m ? decode(m[1]).replace(/<!\[CDATA\[|\]\]>/g, '').replace(/\s+/g, ' ').trim() : '';
+    };
+    const title = pick('title');
+    if (!title) continue;
+    const url = pick('link');
+    let site = '';
+    try { site = new URL(url).hostname.replace(/^www\./, ''); } catch (e) { site = ''; }
+    out.push({ title, url, site, snippet: pick('description').slice(0, 320), date: pick('pubDate') });
+  }
+  return out;
+}
+
+/* 搜狗微信：中文长尾词比必应准，且直接命中公众号原文 */
+function sogouWxItems(html) {
+  const out = [];
+  const blocks = String(html).match(/<li id="sogou_vr_11002601_box_\d+"[\s\S]*?<\/li>/g) || [];
+  for (const b of blocks) {
+    const t = b.match(/<h3>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+    if (!t) continue;
+    const title = stripTags(t[2]).replace(/\s+/g, ' ').trim();
+    if (!title) continue;
+    let url = decode(t[1]).replace(/&amp;/g, '&');
+    if (url.indexOf('http') !== 0) url = 'https://weixin.sogou.com' + url;
+    const sn = b.match(/<p class="txt-info"[^>]*>([\s\S]*?)<\/p>/i);
+    const snippet = sn ? stripTags(sn[1]).replace(/\s+/g, ' ').trim() : '';
+    const acc = b.match(/<a[^>]*class="account"[^>]*>([\s\S]*?)<\/a>/i);
+    out.push({
+      title: title.slice(0, 120),
+      url,
+      site: acc ? stripTags(acc[1]).trim() : '公众号',
+      snippet: snippet.slice(0, 320),
+      date: ''
+    });
+  }
+  return out;
+}
+
+async function searchWeb(q, opts) {
+  const query = String(q || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  if (!query) throw new Error('缺少检索词');
+  const n = Math.min(20, Math.max(5, Number(opts && opts.n) || 10));
+  const fresh = String((opts && opts.fresh) || '');
+  const ck = query + '|' + n + '|' + fresh;
+  const hit = searchCache.get(ck);
+  if (hit && Date.now() - hit.at < SEARCH_TTL) return hit.data;
+
+  const filters = { d: 'ex1:"ez1"', w: 'ex1:"ez2"', m: 'ex1:"ez3"', y: 'ex1:"ez4"' }[fresh] || '';
+  const base = new URL('https://cn.bing.com/search');
+  base.searchParams.set('q', query);
+  base.searchParams.set('count', String(n));
+  base.searchParams.set('setlang', 'zh-Hans');
+  base.searchParams.set('ensearch', '0');
+  if (filters) base.searchParams.set('filters', filters);
+
+  let items = [];
+  let engine = '';
+  try {
+    const { html } = await grab(base, UA_DESKTOP);
+    items = bingItems(html);
+    if (items.length) engine = 'bing';
+  } catch (e) { /* 换 RSS */ }
+
+  if (!items.length) {
+    try {
+      const ru = new URL('https://www.bing.com/search');
+      ru.searchParams.set('q', query);
+      ru.searchParams.set('format', 'rss');
+      ru.searchParams.set('count', String(n));
+      const { html } = await grab(ru, UA_DESKTOP);
+      items = rssItems(html);
+      if (items.length) engine = 'bing-rss';
+    } catch (e) { /* 放弃 */ }
+  }
+
+  /* 中文长尾词：必应经常给"小/两"这类单字结果，补一路公众号搜索 */
+  if (/[\u4e00-\u9fa5]/.test(query)) {
+    try {
+      const su = new URL('https://weixin.sogou.com/weixin');
+      su.searchParams.set('type', '2');
+      su.searchParams.set('query', query);
+      const { html } = await grab(su, UA_MOBILE);
+      const wx = sogouWxItems(html);
+      if (wx.length) {
+        items = items.concat(wx);
+        engine = engine ? engine + '+sogou' : 'sogou';
+      }
+    } catch (e) { /* 忽略 */ }
+  }
+
+  /* 按「检索词二元组覆盖率」重排：必应对冷门中文词会返回单字结果，
+     这些结果和 query 几乎不重合，排到最后就不会挤掉真正相关的条目。 */
+  const gm = (function () {
+    const s = String(query).replace(/[^\u4e00-\u9fa5a-z0-9]/gi, '');
+    const set = new Set();
+    for (let i = 0; i < s.length - 1; i += 1) set.add(s.slice(i, i + 2));
+    return set;
+  })();
+  const rel = (it) => {
+    if (!gm.size) return 0;
+    const t = String(it.title || '') + ' ' + String(it.snippet || '');
+    let n = 0;
+    gm.forEach((g) => { if (t.indexOf(g) >= 0) n += 1; });
+    return n / gm.size;
+  };
+  items.sort((a, b) => rel(b) - rel(a));
+
+  const seen = new Set();
+  items = items.filter((it) => {
+    const k = (it.url || it.title).replace(/[#?].*$/, '');
+    if (!k || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  }).slice(0, n);
+
+  const data = { q: query, engine, items, at: Date.now() };
+  if (items.length) {
+    searchCache.set(ck, { at: Date.now(), data });
+    if (searchCache.size > 200) {
+      const first = searchCache.keys().next().value;
+      searchCache.delete(first);
+    }
+  }
+  return data;
+}
+
 /* ---------------- HTTP ---------------- */
 
 /* ---------------- 模型接口中转 ----------------
@@ -957,7 +1139,7 @@ const LANDING = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <h1>文匠解析服务 <span class="ok">运行中</span></h1>
 <p>把下面这个地址填进 App 的「我的 → 解析服务」即可：</p>
 <p><code id="u"></code></p>
-<p>接口：<code>GET /api/parse?url=</code> · <code>GET /api/meta?url=</code> · <code>POST /api/llm</code>（模型接口中转）· 健康检查 <code>GET /api/health</code></p>
+<p>接口：<code>GET /api/parse?url=</code> · <code>GET /api/search?q=</code>（网页检索）· <code>GET /api/meta?url=</code> · <code>POST /api/llm</code>（模型接口中转）· 健康检查 <code>GET /api/health</code></p>
 <p>把 <code>/api/health</code> 这段去掉，剩下的就是根地址。</p>
 <script>document.getElementById('u').textContent=location.origin;</script>
 </div></body></html>`;
@@ -986,6 +1168,19 @@ export default {
 
     if (url.pathname === '/api/health') {
       return json({ ok: true, version: VERSION, runtime: 'worker' });
+    }
+
+    /* 网页检索：内容创作查最新资料用 */
+    if (url.pathname === '/api/search') {
+      try {
+        const out = await searchWeb(url.searchParams.get('q') || '', {
+          n: Number(url.searchParams.get('n') || 10),
+          fresh: url.searchParams.get('fresh') || ''
+        });
+        return json(Object.assign({ ok: out.items.length > 0 }, out));
+      } catch (e) {
+        return json({ ok: false, error: (e && e.message) || '搜索失败', items: [] });
+      }
     }
 
     if (url.pathname === '/api/parse') {

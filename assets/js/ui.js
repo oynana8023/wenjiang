@@ -180,10 +180,13 @@ window.WJUI = (function () {
       '<span>今日 <b>' + state.works.length + '</b> 篇</span></div>';
 
     h += '<div class="entries">';
-    h += '<button class="entry primary" data-act="start" data-mode="link">' +
-      '<span class="ico">' + ic('link', 18) + '</span>' +
-      '<span class="etxt"><b>链接二创</b><span>粘贴公众号、头条、新闻链接，自动取正文</span></span>' +
+    h += '<button class="entry primary" data-act="tab" data-tab="create">' +
+      '<span class="ico">' + ic('wand', 18) + '</span>' +
+      '<span class="etxt"><b>接任务原创</b><span>贴活动帖，拆任务、联网查证，写出自己的稿</span></span>' +
       '<span class="arrow">' + ic('right', 16) + '</span></button>';
+    h += '<button class="entry" data-act="start" data-mode="link">' +
+      '<div class="ico">' + ic('link', 16) + '</div>' +
+      '<div class="etxt"><b>链接二创</b><span>公众号、头条、新闻链接</span></div></button>';
     h += '<button class="entry" data-act="start" data-mode="text">' +
       '<div class="ico">' + ic('text', 16) + '</div>' +
       '<div class="etxt"><b>文案改写</b><span>已有稿子，换风格换平台</span></div></button>';

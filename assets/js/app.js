@@ -4,9 +4,9 @@
 (function () {
   'use strict';
 
-  var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI;
+  var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI, C = window.WJCreate;
 
-  var VERSION = 'v2.11.0';
+  var VERSION = 'v2.12.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -41,6 +41,14 @@
     },
     result: null,
     resultTab: 'body',
+    create: {
+      url: '', raw: '', busy: false, err: '', stepNote: '', showRaw: false,
+      src: null, task: null, picks: [], edit: false,
+      queries: [], evidence: [], searchBusy: false, searchNote: '', searchErr: '', linkInput: '',
+      material: { notes: '', text: '', images: [], video: null },
+      set: { platform: 'bee', genre: 'note', words: 0, tone: 'warm' },
+      pickNames: [], result: null, originBusy: false, history: []
+    },
     comment: { mode: 'link', link: '', text: '', n: 4, tone: 'warm', busy: false, list: [], err: '', source: '' },
     genLoading: false,
     genStep: 0,
@@ -72,6 +80,10 @@
         state.compose.text1 = '';
         state.compose.text2 = '';
         state.compose.mode = state.compose.mode || 'link';
+      }
+      if (raw.create) {
+        if (Array.isArray(raw.create.history)) state.create.history = raw.create.history.slice(0, 12);
+        if (raw.create.set) Object.assign(state.create.set, raw.create.set);
       }
     } catch (e) { /* ignore */ }
     if (state.quota.day !== dayKey()) {
@@ -189,6 +201,12 @@
           words: state.compose.words,
           deai: state.compose.deai,
           faithful: state.compose.faithful
+        },
+        create: {
+          history: (state.create.history || []).slice(0, 12).map(function (w) {
+            return { id: w.id, title: w.title, words: w.words, platformName: w.platformName, at: w.at, data: w.data };
+          }),
+          set: state.create.set
         }
       }));
     } catch (e) { /* ignore */ }
@@ -239,9 +257,9 @@
 
   /* ---------------- 路由 ---------------- */
 
-  var TITLES = { home: '', rank: '热榜', compose: '新建', result: '成稿', works: '作品库', me: '我的', comment: '写评论' };
-  var NAV_ROUTES = ['home', 'rank', 'works', 'me'];
-  var TAB_OF = { home: 'home', rank: 'rank', works: 'works', me: 'me' };
+  var TITLES = { home: '', rank: '热榜', create: '内容创作', compose: '新建', result: '成稿', works: '作品库', me: '我的', comment: '写评论', task: '拆任务', studio: '创作台', origin: '原创稿' };
+  var NAV_ROUTES = ['home', 'rank', 'create', 'works', 'me'];
+  var TAB_OF = { home: 'home', rank: 'rank', create: 'create', works: 'works', me: 'me' };
 
   function go(route, opts) {
     opts = opts || {};
@@ -292,6 +310,10 @@
       html = loadingHtml();
     } else if (route === 'home') html = U.home(state);
     else if (route === 'rank') html = U.rank(state);
+    else if (route === 'create') html = C.views.home(state);
+    else if (route === 'task') html = C.views.task(state);
+    else if (route === 'studio') html = C.views.studio(state);
+    else if (route === 'origin') html = C.views.result(state);
     else if (route === 'compose') html = U.compose(state);
     else if (route === 'result') html = U.result(state);
     else if (route === 'works') html = U.works(state);
@@ -345,6 +367,8 @@
     navEl.innerHTML = navHtml();
     fabEl.innerHTML = U.ic('plus', 24, 2);
     fabEl.setAttribute('data-act', 'fab');
+    /* 中间那一格现在是「创作」，悬浮加号会和它重叠，先整体收起 */
+    fabEl.classList.add('hide');
 
     syncSegs();
     animateScore();
@@ -363,6 +387,10 @@
       right = route === 'compose' || route === 'comment'
         ? U.quotaPill(state)
         : '<button class="iconbtn" data-act="more">' + U.ic('more', 17) + '</button>';
+    } else if (route === 'task' || route === 'studio' || route === 'origin') {
+      left = '<button class="iconbtn" data-act="back">' + U.ic('left', 18) + '</button>' +
+        '<h1 class="static">' + (TITLES[route] || '') + '</h1>';
+      right = '<button class="iconbtn" data-act="cr-help">' + U.ic('help', 17) + '</button>';
     } else {
       left = '<h1>' + (TITLES[route] || '') + '</h1>';
       if (route === 'rank') right = '<button class="iconbtn" data-act="hot-reload">' + U.ic('refresh', 17) + '</button>';
@@ -375,13 +403,13 @@
     var items = [
       { k: 'home', i: 'home', t: '首页' },
       { k: 'rank', i: 'fire', t: '热榜' },
-      null,
+      { k: 'create', i: 'wand', t: '创作' },
       { k: 'works', i: 'folder', t: '作品' },
       { k: 'me', i: 'user', t: '我的' }
     ];
     return items.map(function (it) {
       if (!it) return '<span></span>';
-      var on = state.route === it.k;
+      var on = state.route === it.k || (it.k === 'create' && ['task', 'studio', 'origin'].indexOf(state.route) > -1);
       return '<button class="' + (on ? 'on' : '') + '" data-act="tab" data-tab="' + it.k + '">' +
         U.ic(it.i, 21, on ? 1.9 : 1.6) + '<span>' + it.t + '</span></button>';
     }).join('');
@@ -2166,6 +2194,288 @@
     );
   }
 
+  /* ---------------- 内容创作 ---------------- */
+
+  function cr() { return state.create; }
+
+  /* 选文件：必须在点击事件里同步触发，iOS 才认 */
+  function pickFiles(accept, multiple) {
+    return new Promise(function (resolve) {
+      var inp = document.createElement('input');
+      inp.type = 'file';
+      inp.accept = accept;
+      if (multiple) inp.multiple = true;
+      inp.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+      document.body.appendChild(inp);
+      var done = false;
+      inp.addEventListener('change', function () {
+        done = true;
+        resolve(Array.prototype.slice.call(inp.files || []));
+        setTimeout(function () { inp.remove(); }, 200);
+      });
+      setTimeout(function () { if (!done) resolve([]); }, 120000);
+      inp.click();
+    });
+  }
+
+  async function crDoParse(url, text) {
+    var c = cr();
+    url = String(url || '').trim();
+    text = String(text || '').trim();
+    if (!url && text.length < 40) { toast('先贴一条链接，或把活动正文粘进来'); return; }
+    c.busy = true;
+    c.err = '';
+    c.stepNote = text ? '正在读你粘的正文' : '正在读活动页';
+    render('same');
+    var src;
+    try {
+      if (text) {
+        src = { title: '', text: text, chars: text.length, via: 'manual', images: [] };
+      } else {
+        src = await L.parseLink(url, function (note) { c.stepNote = note; }, '');
+      }
+    } catch (e) {
+      c.busy = false;
+      c.err = (e && e.message) || '解析失败';
+      render('same');
+      return;
+    }
+    c.src = src;
+    c.stepNote = '正在拆任务';
+    render('same');
+    var task;
+    try {
+      task = await C.extractTask(src.text, src.title, url, providerChain('chat'));
+    } catch (e) {
+      task = C.localTask(src.text, src.title, url);
+    }
+    c.task = task;
+    c.picks = task.ways.length ? [0] : [];
+    c.queries = C.queriesFor(task);
+    /* 原帖是活动规则的唯一权威来源：先放进资料池并勾上，
+       检索不到东西时也有一份可核对的事实，不至于让模型凭空编。 */
+    c.evidence = [];
+    c.result = null;
+    if (src.text && src.text.length > 80) {
+      c.evidence.push({
+        id: 'src', title: (task.title || src.title || '任务原帖') + '（原帖）',
+        url: url, site: task.platformName || '活动原帖', date: '',
+        snippet: String(src.text).slice(0, 200), text: String(src.text).slice(0, 2200),
+        rel: 100, on: true, from: 'task'
+      });
+    }
+    if (task.platform) c.set.platform = task.platform;
+    c.busy = false;
+    c.stepNote = '';
+    go('task', { nav: 'push' });
+  }
+
+  async function crSearch(rotate) {
+    var c = cr();
+    if (!c.task) { go('create', { nav: 'tab' }); return; }
+    if (c.searchBusy) return;
+    if (!c.queries.length) c.queries = C.queriesFor(c.task);
+    if (rotate && c.queries.length > 1) c.queries = c.queries.slice(1).concat([c.queries[0] + ' 现场']);
+    c.searchBusy = true;
+    c.searchErr = '';
+    c.searchNote = '';
+    c.stepNote = '准备检索';
+    render('same');
+    var r;
+    try {
+      r = await C.searchAll(c.queries, function (note) {
+        c.stepNote = note;
+        var el = document.querySelector('[data-step-note]');
+        if (el) el.textContent = note;
+      });
+    } catch (e) {
+      r = { items: [], channels: {}, error: e.message || '检索失败' };
+    }
+    c.searchBusy = false;
+    var added = 0;
+    var core = C.coreOf(c.task);
+    (r.items || []).forEach(function (it) {
+      var key = String(it.url || (it.site + '|' + it.title)).replace(/[#?].*$/, '').slice(0, 120);
+      var dup = c.evidence.some(function (e) {
+        return String(e.url || (e.site + '|' + e.title)).replace(/[#?].*$/, '').slice(0, 120) === key;
+      });
+      var rl = C.rel(core, (it.title || '') + ' ' + (it.snippet || ''));
+      if (dup || rl < 0.25) return;
+      c.evidence.push({
+        id: 'e' + Date.now() + '_' + added,
+        title: it.title || '',
+        url: it.url || '',
+        site: it.site || '',
+        date: it.date || '',
+        snippet: it.snippet || '',
+        text: '',
+        rel: Math.round(rl * 100),
+        /* 相关度不够的先列出来但不勾：交给用户判断，别把无关网页塞进模型 */
+        on: rl >= 0.45,
+        from: it.from || 'search'
+      });
+      added += 1;
+    });
+    if (!Object.keys(r.channels || {}).length) {
+      c.searchErr = '没有可用的检索通道。联网取证需要一台解析服务：到「我的 → 解析服务」填一个 Worker 地址（README 里有 3 分钟部署方法）。';
+    } else if (!c.evidence.length) {
+      c.searchErr = r.error || '检索通道没有返回可用结果';
+      c.searchNote = '没有查到可用的公开资料。可以贴一篇你找到的报道，或只用自己上传的素材写。';
+    } else {
+      var ch = Object.keys(r.channels || {}).map(function (k) {
+        return k === 'search' ? '搜索接口' : '网页转文本';
+      });
+      c.searchNote = '本轮通道：' + (ch.join(' / ') || '—') + '；新增 ' + added + ' 条。只有勾选的资料会交给模型。';
+    }
+    render('same');
+  }
+
+  async function crAddLink() {
+    var c = cr();
+    var u = String(c.linkInput || '').trim();
+    if (!/^https?:\/\//i.test(u)) { toast('先粘一个 http 开头的链接'); return; }
+    toast('正在读这篇…', 1600);
+    try {
+      var src = await L.parseLink(u, null, '');
+      c.evidence.unshift({
+        id: 'e' + Date.now(), title: src.title || u.slice(0, 40), url: u,
+        site: L.hostOf(u), date: '', snippet: String(src.text || '').slice(0, 240),
+        text: String(src.text || '').slice(0, 2200), on: true, from: 'link'
+      });
+      c.linkInput = '';
+      render('same');
+      toast('已加入资料：' + (src.chars || 0) + ' 字');
+    } catch (e) {
+      toast('这篇没读成：' + ((e && e.message) || '解析失败'), 3000);
+    }
+  }
+
+  async function crAddImages() {
+    var c = cr();
+    var files = await pickFiles('image/*', true);
+    if (!files.length) return;
+    var chain = providerChain('chat');
+    toast(files.length > 1 ? '正在读 ' + files.length + ' 张图…' : '正在读图…', 2000);
+    for (var i = 0; i < files.length && c.material.images.length < 9; i++) {
+      try {
+        var im = await C.addImage(files[i], chain);
+        c.material.images.push(im);
+        render('same');
+      } catch (e) { toast('这张没读成：' + e.message); }
+    }
+    if (!C.visionChain(chain)) toast('没有识图模型，图片只作配图，不参与写作', 3200);
+  }
+
+  async function crAddVideo() {
+    var c = cr();
+    var files = await pickFiles('video/*', false);
+    if (!files.length) return;
+    toast('正在抽帧读画面…', 2600);
+    try {
+      var v = await C.readVideo(files[0], providerChain('chat'));
+      c.material.video = v;
+      render('same');
+      toast(v.frames.length ? '抽到 ' + v.frames.length + ' 帧' : '视频读不出画面，可以补一句描述');
+    } catch (e) {
+      toast('视频没读成：' + e.message, 3000);
+    }
+  }
+
+  async function crOrigin(extra) {
+    var c = cr();
+    if (c.originBusy) return;
+    if (!c.task) { toast('先确认任务'); return; }
+    var chain = providerChain('chat');
+    if (!chain.length) { openModelGate(); return; }
+    var picks = (c.picks || []).map(function (i) { return c.task.ways[i]; }).filter(Boolean);
+    c.pickNames = picks.length ? picks.map(function (w) { return w.name; }) : [c.task.ways[0].name];
+    c.originBusy = true;
+    render('same');
+    try {
+      var r = await C.writeGrounded({
+        task: c.task,
+        platform: c.set.platform,
+        genre: c.set.genre,
+        words: c.set.words,
+        tone: c.set.tone,
+        evidence: c.evidence,
+        material: c.material,
+        pickNames: c.pickNames,
+        extra: extra || ''
+      }, { chain: chain });
+      r.checklist = C.checklist(c.task, r.plain, r.tags, r.check);
+      c.result = r;
+      c.history.unshift({
+        id: 'o' + Date.now(), title: r.title, words: r.words,
+        platformName: C.platformName(c.set.platform), at: Date.now(), data: r
+      });
+      c.history = c.history.slice(0, 12);
+      save();
+      c.originBusy = false;
+      go('origin', { nav: 'push' });
+      buzz(14);
+    } catch (e) {
+      c.originBusy = false;
+      render('same');
+      toast((e && e.message) || '生成失败', 3600);
+    }
+  }
+
+  function crFullText(r) {
+    var t = (r.title ? r.title + '\n\n' : '') + r.body;
+    if (state.settings.declare) t += '\n\n——\n本文由 AI 辅助创作，事实与配图已人工核对。';
+    return t;
+  }
+
+  function crCopy() {
+    var c = cr();
+    if (!c.result) return;
+    var txt = crFullText(c.result);
+    var done = function () { toast('已复制，去平台粘贴'); buzz(10); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(done, function () { fallbackCopy(txt); done(); });
+    } else {
+      fallbackCopy(txt);
+      done();
+    }
+  }
+
+  function fallbackCopy(txt) {
+    var ta = document.createElement('textarea');
+    ta.value = txt;
+    ta.style.cssText = 'position:fixed;left:-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (e) { /* ignore */ }
+    ta.remove();
+  }
+
+  function openModelGate() {
+    openSheet(
+      '<p>原创稿必须由模型来写：它要先读资料、再组织语言。本机引擎只会换词，写不出这个。</p>' +
+      '<div class="note mt-s">' + U.ic('cpu', 14) +
+      '<div>到「我的 → 模型服务」加一个 OpenAI 兼容服务商（通义、智谱、DeepSeek、Kimi 都行），填 Base URL 和 Key，选一个对话模型。</div></div>',
+      { title: '还差一个模型', foot: '<button class="btn btn-primary btn-block" data-act="cr-to-model">去配置模型</button>' }
+    );
+  }
+
+  function openCreateHelp() {
+    openSheet(
+      '<p><b style="color:var(--ink)">它是怎么写的</b></p>' +
+      '<p>一、读活动帖，拆出「参与方式 / 截止 / 话题 / 奖项 / 硬性要求」，拆错可以手改。</p>' +
+      '<p>二、拿任务里的关键词去公开网页检索，把结果列给你勾选。检索走你自己的解析服务，不经过第三方。</p>' +
+      '<p>三、模型只拿到勾选的资料和你上传的素材。数字、日期、名额必须能在资料里找到，找不到就标红。</p>' +
+      '<p>四、成稿页列出「哪句话来自哪条资料」，发布前自己再核一遍。</p>' +
+      '<div class="hr"></div>' +
+      '<p><b style="color:var(--ink)">三条底线</b></p>' +
+      '<p>不编造数字与亲历细节；不整段照搬资料；不承诺收益、不用绝对化说法。</p>' +
+      '<div class="hr"></div>' +
+      '<p><b style="color:var(--ink)">检索不到怎么办</b></p>' +
+      '<p>把官方活动页、你找到的报道链接贴进「Add source」，或只用自己拍的图和真实经历写。宁可写短，不编。</p>',
+      { title: '原创是怎么来的' }
+    );
+  }
+
   /* ---------------- 事件 ---------------- */
 
   function findHot(srcId, i) {
@@ -2188,6 +2498,192 @@
         go('compose', { nav: 'push' });
         buzz(8);
         break;
+
+      /* ---- 内容创作 ---- */
+
+      case 'cr-paste':
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          navigator.clipboard.readText().then(function (txt) {
+            var c = cr();
+            c.url = String(txt || '').trim();
+            render('same');
+            toast(c.url ? '已粘贴链接' : '剪贴板是空的');
+          }, function () { toast('读不到剪贴板，手动粘一下'); });
+        } else {
+          toast('这个浏览器不给读剪贴板，手动粘一下');
+        }
+        break;
+
+      case 'cr-example':
+        cr().url = C.EXAMPLE_URL;
+        render('same');
+        break;
+
+      case 'cr-parse':
+        crDoParse(cr().url, '');
+        break;
+
+      case 'cr-parse-text':
+        crDoParse('', cr().raw);
+        break;
+
+      case 'cr-toggle-raw':
+        cr().showRaw = !cr().showRaw;
+        render('same');
+        break;
+
+      case 'cr-pick': {
+        var c1 = cr();
+        var i1 = Number(t.dataset.i);
+        var at = c1.picks.indexOf(i1);
+        if (at > -1) c1.picks.splice(at, 1);
+        else c1.picks.push(i1);
+        c1.picks.sort(function (a, b) { return a - b; });
+        render('same');
+        break;
+      }
+
+      case 'cr-edit-toggle':
+        cr().edit = !cr().edit;
+        render('same');
+        break;
+
+      case 'cr-edit-task':
+        cr().edit = true;
+        go('task', { nav: 'push' });
+        break;
+
+      case 'cr-back-home':
+        go('create', { nav: 'tab' });
+        break;
+
+      case 'cr-confirm': {
+        var c2 = cr();
+        if (!c2.picks.length) { toast('先选一个玩法'); return; }
+        go('studio', { nav: 'push' });
+        crSearch(false);
+        break;
+      }
+
+      case 'cr-search':
+        crSearch(false);
+        break;
+
+      case 'cr-refresh-topic':
+        crSearch(true);
+        break;
+
+      case 'cr-ev': {
+        var c3 = cr();
+        var e3 = c3.evidence[Number(t.dataset.i)];
+        if (e3) { e3.on = !e3.on; render('same'); }
+        break;
+      }
+
+      case 'cr-addlink':
+        crAddLink();
+        break;
+
+      case 'cr-add-img':
+        crAddImages();
+        break;
+
+      case 'cr-del-img': {
+        var c4 = cr();
+        c4.material.images = c4.material.images.filter(function (x) { return x.id !== t.dataset.id; });
+        render('same');
+        break;
+      }
+
+      case 'cr-add-video':
+        crAddVideo();
+        break;
+
+      case 'cr-del-video':
+        cr().material.video = null;
+        render('same');
+        break;
+
+      case 'cr-set': {
+        var c5 = cr();
+        var k5 = t.dataset.k, v5 = t.dataset.v;
+        c5.set[k5] = k5 === 'words' ? Number(v5) : v5;
+        render('same');
+        break;
+      }
+
+      case 'cr-go': {
+        var cg = cr();
+        var evOn = cg.evidence.filter(function (e) { return e.on; }).length;
+        var m = cg.material;
+        var hasMat = !!(m.notes || m.text || m.images.length || m.video);
+        if (!evOn && !hasMat) {
+          openSheet(
+            '<p>现在既没有勾选资料，也没有你的素材。模型只能拿任务标题和规则硬写，写出来多半空泛，还容易编。</p>' +
+            '<div class="note mt-s">' + U.ic('info', 14) + '<div>更好的做法：贴一篇官方说明或报道，或者写两句你自己的真实感受，再让它写。</div></div>',
+            {
+              title: '资料是空的',
+              foot: '<div class="dock-row">' +
+                '<button class="btn btn-soft" style="flex:1" data-act="cr-addlink-focus">去贴链接</button>' +
+                '<button class="btn" style="flex:1;background:var(--surface-2);color:var(--ink-2)" data-act="cr-go-anyway">只凭任务写</button>' +
+                '</div>'
+            }
+          );
+          return;
+        }
+        crOrigin('');
+        break;
+      }
+
+      case 'cr-go-anyway':
+        closeSheet();
+        crOrigin('资料为空，只能基于任务信息写，不要虚构任何具体经历、数字或他人评价。');
+        break;
+
+      case 'cr-addlink-focus':
+        closeSheet();
+        setTimeout(function () {
+          var el = document.querySelector('[data-cr-field="linkInput"]');
+          if (el) { el.focus(); el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+        }, 320);
+        break;
+
+      case 'cr-redo':
+        crOrigin('换一个开头和结构，别和上一稿的段落顺序一样。');
+        break;
+
+      case 'cr-fix': {
+        var c6 = cr();
+        var bad6 = (c6.result && c6.result.check && c6.result.check.bad || []).map(function (x) { return x.token; });
+        crOrigin('上一稿这些数字/时间没有出处：' + bad6.join('、') + '。删掉或改成资料里的写法。');
+        break;
+      }
+
+      case 'cr-back-studio':
+        go('studio', { nav: 'pop' });
+        break;
+
+      case 'cr-copy':
+        crCopy();
+        break;
+
+      case 'cr-to-model':
+        closeSheet();
+        go('me', { nav: 'tab' });
+        break;
+
+      case 'cr-help':
+        openCreateHelp();
+        break;
+
+      case 'cr-open-history': {
+        var c7 = cr();
+        var w7 = (c7.history || []).filter(function (x) { return x.id === t.dataset.id; })[0];
+        if (!w7 || !w7.data) return;
+        c7.result = Object.assign({ checklist: [], facts: [], shots: [], tags: [] }, w7.data);
+        go('origin', { nav: 'push' });
+        break;
+      }
 
       case 'start':
         state.compose.mode = t.dataset.mode || 'link';
@@ -3196,6 +3692,25 @@
     });
 
     app.addEventListener('input', function (e) {
+      var cf = e.target.closest('[data-cr-field]');
+      if (cf) {
+        var ck = cf.dataset.crField;
+        var cc = cr();
+        if (ck === 'url') cc.url = cf.value;
+        else if (ck === 'raw') cc.raw = cf.value;
+        else if (ck === 'linkInput') cc.linkInput = cf.value;
+        else if (ck === 'notes') cc.material.notes = cf.value;
+        else if (ck === 'draft') cc.material.text = cf.value;
+        else if (ck === 'tTitle' && cc.task) cc.task.title = cf.value;
+        else if (ck === 'tDeadline' && cc.task) cc.task.deadline = cf.value;
+        else if (ck === 'tTags' && cc.task) {
+          cc.task.hashtags = cf.value.split(/[\s,，#]+/).map(function (x) { return x.trim(); }).filter(Boolean).slice(0, 6);
+        } else if (ck === 'tRules' && cc.task) {
+          cc.task.rules = cf.value.split(/\n+/).map(function (x) { return x.trim(); }).filter(Boolean).slice(0, 10);
+        }
+        if (cf.tagName === 'TEXTAREA') autosize();
+        return;
+      }
       var f = e.target.closest('[data-field]');
       if (f) {
         var k = f.dataset.field;
