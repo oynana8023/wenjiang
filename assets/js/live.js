@@ -1126,7 +1126,7 @@ window.WJLive = (function () {
         done = true;
         detail.push(batch.map(function (p) { return p.label + '：超时'; }).join('、'));
         reject(new Error('超时'));
-      }, ms + 2000);
+      }, ms + 800);
       batch.forEach(function (p) {
         pxFetchText(p.wrap(url), ms).then(function (body) {
           var v = pxDecode(body, kind);
@@ -1171,7 +1171,7 @@ window.WJLive = (function () {
     }
 
     var started = Date.now(), idx = 0, detail = [];
-    var width = opts.width || 2;
+    var width = opts.width || 3;
     while (idx < list.length) {
       var left = budget - (Date.now() - started);
       if (left < 1500) break;

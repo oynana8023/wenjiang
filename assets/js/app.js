@@ -1324,7 +1324,14 @@
        微博过镜像）要几百毫秒到十几秒，不能让用户对着骨架屏干等。 */
     var quick = null;
     if (L.topicCached) {
-      try { quick = await L.topicCached(srcId, tid, title, 20); } catch (e) { quick = null; }
+      /* 最多等 1.2 秒：本机缓存是同步的，仓库缓存要下 data/hot.json（200KB），
+         网络慢时不能让它把首屏拖住——那份下载会继续跑，后面实时失败时正好用得上。 */
+      try {
+        quick = await Promise.race([
+          L.topicCached(srcId, tid, title, 20).catch(function () { return null; }),
+          new Promise(function (res) { setTimeout(function () { res(null); }, 1200); })
+        ]);
+      } catch (e) { quick = null; }
     }
     if (quick) {
       topicCache = { src: srcId, title: title, id: id, data: quick };
