@@ -12,10 +12,14 @@ window.WJLive = (function () {
   var SNAPSHOT = 'data/hot.json';
 
   /* 统计托管（GitHub Pages）没有自己的后端，浏览器又跨不过 CORS，取正文必须有一台服务器代抓。
-     这里支持配「多个」地址：云端实例、自建 Cloudflare Worker、自己的 VPS 都可以一起填，
-     解析时并行探活、谁先返回用谁，一条挂了不影响另一条。 */
-  var CLOUD_DEFAULT = 'https://ae4456e3164821b38.app.workbuddy.host';
-  var CLOUD_CODE = 'KQNPRGHZG2';
+     这里支持配「多个」地址：自建 Cloudflare Worker、自己的 VPS 都可以一起填，
+     解析时并行探活、谁先返回用谁，一条挂了不影响另一条。
+
+     注意：不要再内置任何「云端默认实例」。之前那个地址是开发环境的临时域名，
+     下线后所有没配过地址的用户都会卡在 12 秒超时上——解析用不了，热榜也拖到只能读快照。
+     现在没配置就是没配置，界面直说，让用户去部署自己的 Worker。 */
+  var CLOUD_DEFAULT = '';
+  var CLOUD_CODE = '';
   var BASES_KEY = 'wj.parse.bases';
   var KEY_KEY = 'wj.parse.key';
 
@@ -54,7 +58,7 @@ window.WJLive = (function () {
     }
     var one = null;
     try { one = localStorage.getItem('wj.parse.base'); } catch (e) { /* ignore */ }
-    if (one === null) return [CLOUD_DEFAULT];
+    if (one === null) return CLOUD_DEFAULT ? [CLOUD_DEFAULT] : [];
     one = tidyBase(one);
     return one ? [one] : [];
   }
@@ -383,25 +387,93 @@ window.WJLive = (function () {
     return out;
   }
 
+  /* 静态托管没有后端，公共聚合接口就成了唯一活路。
+     单一接口（imsyy）2026 年 11 月起长期挂掉，只剩快照，所以这里做多源竞速：
+     同一个榜单先问 60s，再问 codelife，最后才试老接口；谁先给出条目用谁。
+     60s / codelife 都返回 CORS 头，浏览器可直连，不需要任何代理。 */
+  var HOT60 = 'https://60s.viki.moe/v2/';
+  var CODELIFE = 'https://api.codelife.cc/api/top/list?lang=cn';
+  var HOT_ROUTE = {
+    weibo: [{ k: '60s', p: 'weibo' }, { k: 'codelife', p: 'KqndgxeLl9' }, { k: 'imsyy' }],
+    zhihu: [{ k: '60s', p: 'zhihu' }, { k: 'codelife', p: 'mproPpoq6O' }, { k: 'imsyy' }],
+    douyin: [{ k: '60s', p: 'douyin' }, { k: 'codelife', p: 'WnBe01o371' }, { k: 'imsyy' }],
+    bilibili: [{ k: 'codelife', p: 'Jb0vmloB1G' }, { k: '60s', p: 'bili' }, { k: 'imsyy' }],
+    sspai: [{ k: 'sspai' }, { k: 'imsyy' }],
+    toutiao: [{ k: '60s', p: 'toutiao' }, { k: 'codelife', p: 'nIFi0r9b6N' }, { k: 'imsyy' }],
+    baidu: [{ k: '60s', p: 'baidu' }, { k: 'imsyy' }],
+    '36kr': [{ k: 'imsyy' }],
+    ithome: [{ k: 'imsyy' }],
+    geekpark: [{ k: 'imsyy' }]
+  };
+
+  async function hot60(id) {
+    var d = await getJSON(HOT60 + id, 4500);
+    return normList(d);
+  }
+
+  async function hotCodelife(id) {
+    var d = await getJSON(CODELIFE, 4500, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: id, page: 1, size: 50 })
+    });
+    return normList(d);
+  }
+
+  async function hotSspai() {
+    var d = await getJSON('https://sspai.com/api/v1/article/index/page/get?limit=30&offset=0&sort=recommend', 4500);
+    var arr = (d && d.data) || [];
+    return normList(arr.map(function (x) {
+      return { title: x.title, url: x.id ? 'https://sspai.com/post/' + x.id : '', hot: x.like_count || 0, desc: x.summary || '' };
+    }));
+  }
+
+  /* 解析服务和热榜共用一份「不通」记录：地址填错时不要每个源都等一遍超时 */
+  function deadBases() {
+    try { var m = JSON.parse(localStorage.getItem('wj.base.dead') || '{}'); return (m && typeof m === 'object') ? m : {}; } catch (e) { return {}; }
+  }
+  function isDeadBase(b) {
+    var k = String(b || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    var t = deadBases()[k];
+    return !!(t && Date.now() - t < 18e5);
+  }
+
   async function fetchSource(id) {
     if (await hasServer()) {
-      var d = await getJSON(withShare('/api/hot?src=' + encodeURIComponent(id)), 12000);
+      var d = await getJSON(withShare('/api/hot?src=' + encodeURIComponent(id)), 9000);
       if (d && d.ok) return normList(d);
       throw new Error((d && d.error) || '抓取失败');
     }
     /* 静态托管时，借解析服务那台机器上的 /api/hot 拿实时榜单
-       （它抓的是官方接口，不依赖 GitHub 定时任务是否准点） */
-    var bases = parseBases();
+       （它抓的是官方接口，不依赖 GitHub 定时任务是否准点）。
+       只给 6 秒：地址填错时不能把整页拖住。 */
+    var bases = parseBases().filter(function (b) { return !isDeadBase(b); });
     if (bases.length) {
       try {
-        var cd = await getJSON(apiUrl(bases[0], '/api/hot', { src: id }), 12000);
+        var cd = await getJSON(apiUrl(bases[0], '/api/hot', { src: id }), 5000);
         if (cd && cd.ok && Array.isArray(cd.items) && cd.items.length) return normList(cd.items);
-      } catch (e) { /* 换公共聚合接口 */ }
+      } catch (e) { /* 换公共接口 */ }
     }
-    var payload = await getJSON(AGG + '/' + id, 8000);
-    var list = normList(payload);
-    if (!list.length) throw new Error('接口没有返回条目');
-    return list;
+    var route = HOT_ROUTE[id] || [{ k: 'imsyy' }];
+    var lastErr = '';
+    var started = Date.now();
+    for (var i = 0; i < route.length; i++) {
+      /* 一条源最多等 7 秒：接口挂了就赶紧读快照，别让整页陪着等 */
+      if (i && Date.now() - started > 7000) break;
+      var r = route[i];
+      try {
+        var list = [];
+        if (r.k === '60s') list = await hot60(r.p);
+        else if (r.k === 'codelife') list = await hotCodelife(r.p);
+        else if (r.k === 'sspai') list = await hotSspai();
+        else list = normList(await getJSON(AGG + '/' + id, 4500));
+        if (list.length) return list;
+        lastErr = r.k + ' 没有返回条目';
+      } catch (e) {
+        lastErr = r.k + '：' + errMsg(e);
+      }
+    }
+    throw new Error(lastErr || '接口没有返回条目');
   }
 
   /* 快照：先读同目录 data/hot.json（部署后由 Action 定时更新），
@@ -740,8 +812,11 @@ window.WJLive = (function () {
     });
 
     if (!tasks.length) {
-      var none = new Error('没有配置解析服务');
-      none.detail = '到「我的 → 解析服务」填一个地址，或直接用「粘贴全文」模式。';
+      var none = new Error('没有配置解析服务，取不到网页正文');
+      none.code = 'NO_CHANNEL';
+      none.detail = '浏览器不能直接读别人的网页（跨域限制），要有一台服务器代抓。\n' +
+        '两条路：① 到「我的 → 解析服务」填一个 Cloudflare Worker 地址（仓库 worker/ 里有一份，部署约 3 分钟）；' +
+        '② 或在新建页点「直接粘全文」，把正文复制进来，改写效果一样。';
       none.url = url;
       throw none;
     }

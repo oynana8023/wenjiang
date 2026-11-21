@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI, C = window.WJCreate;
 
-  var VERSION = 'v2.12.0';
+  var VERSION = 'v2.13.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -861,17 +861,24 @@
       return;
     }
 
-    if (src.trim().length < 40) {
+    /* 门槛要和 validate() 对齐：粘贴的正文 30 字就够，只有「解析出来的网页正文」才要求 40 字。
+       以前两条路都按 40 卡，用户写了 35 字点生成，被弹回新建页还以为是模型坏了。 */
+    var needLen = state.compose.mode === 'link' ? 40 : (state.compose.titleOnly ? 6 : 30);
+    if (src.trim().length < needLen) {
       state.genLoading = false;
       state.route = 'compose';
       render('pop');
-      /* 只说「素材太短」用户不知道该干嘛。把取到的字数和下一步讲清楚。 */
-      openParseFail({
-        message: '这条只取到 ' + src.trim().length + ' 字，凑不成一篇稿。',
-        detail: '常见原因：页面要登录、正文由脚本后加载，或分享链接指向的是摘要页。',
-        url: state.compose.mode === 'link' ? state.compose.link1 : '',
-        title: state.compose.sourceTitle || ''
-      });
+      if (state.compose.mode === 'link') {
+        /* 链接没取到正文：告诉他取到多少、为什么、下一步怎么办 */
+        openParseFail({
+          message: '这条只取到 ' + src.trim().length + ' 字，凑不成一篇稿。',
+          detail: '常见原因：页面要登录、正文由脚本后加载，或分享链接指向的是摘要页。',
+          url: state.compose.link1,
+          title: state.compose.sourceTitle || ''
+        });
+      } else {
+        toast('素材只有 ' + src.trim().length + ' 字，再补几句具体的事');
+      }
       state.busy = false;
       return;
     }
@@ -1862,23 +1869,35 @@
     var key = L.parseKey ? L.parseKey() : '';
     var html =
       '<p style="color:var(--ink-2)">浏览器读不了别人的网页（跨域限制），取正文必须有一台服务器代抓。' +
-      '可以填多个地址，解析时并行竞速：一条挂了自动换另一条。建议保留默认云端，把自建 Worker 加在第二行。</p>' +
+      '可以用仓库里的 Cloudflare Worker，也可以用自己的 VPS；填多个地址时并行竞速，一条挂了自动换下一条。</p>' +
+      (list.length
+        ? '<div class="note mt-s" style="border-color:rgba(217,255,75,.28)">' + U.ic('check', 13) +
+          '<div>已配置 <b>' + list.length + '</b> 条通道。解析和联网取证都走它。</div></div>'
+        : '<div class="note mt-s" style="border-color:rgba(255,176,32,.3)">' + U.ic('alert', 13) +
+          '<div><b>现在没有可用的解析服务。</b>贴链接取正文、创作板块的联网取证都用不了；' +
+          '可以先在「新建 → 链接」里直接粘全文，不影响改写。</div></div>') +
       '<div class="field mt-m"><div class="field-head"><span class="lbl">服务地址</span>' +
       '<span class="sec-sub">一行一个，留空 = 关闭</span></div>' +
-      '<textarea data-field="parsebases" rows="4" spellcheck="false" placeholder="' + esc(L.CLOUD_DEFAULT) + '">' +
+      '<textarea data-field="parsebases" rows="4" spellcheck="false" placeholder="https://wenjiang-parse.你的账号.workers.dev">' +
       esc(list.join('\n')) + '</textarea></div>' +
       '<div class="field mt-s"><div class="field-head"><span class="lbl">访问口令</span>' +
       '<span class="sec-sub">Worker 设了 PARSE_KEY 才需要填</span></div>' +
       '<input data-field="parsekey" value="' + esc(key) + '" spellcheck="false" placeholder="可留空"></div>' +
-      '<div id="parse-test" class="note mt-s">' + U.ic('alert', 14) +
-      '<div>接口只要支持 <b>GET /api/health</b> 和 <b>GET /api/parse?url=</b>，返回 <b>{ok,title,text}</b> 即可。' +
-      '仓库里的 <b>worker/index.js</b> 是 Cloudflare Worker 版，免费额度每天 10 万次，' +
-      '点 README 里的「一键部署」三分钟就能有一条永久属于自己的解析通道，再把地址填到上面。</div></div>';
+      '<button class="btn btn-soft btn-block mt-s" data-act="open-url" data-url="https://deploy.workers.cloudflare.com/?url=https://github.com/oynana8023/wenjiang/tree/main/worker">' +
+      U.ic('external', 15) + ' 一键部署解析服务（浏览器打开）</button>' +
+      '<div class="sec-sub" style="margin-top:6px;line-height:1.6">免费，不用信用卡；登录 Cloudflare 点 Deploy，1 分钟拿到地址。</div>' +
+      '<div id="parse-test" class="note mt-s">' + U.ic('info', 14) +
+      '<div><b>也可以命令行部署：</b><br>' +
+      '1. <code>cd worker</code><br>' +
+      '2. <code>npx wrangler login</code>，再 <code>npx wrangler deploy</code><br>' +
+      '3. 把打印出来的 <code>https://xxx.workers.dev</code> 填到上面，点「保存并检测」。<br>' +
+      '接口只要支持 <b>GET /api/health</b>（返回 {ok:true}）和 <b>GET /api/parse?url=</b>（返回 {ok,title,text}）就行，' +
+      '自己的服务器也能接。</div></div>';
     openSheet(html, {
       title: '解析服务',
       foot: '<button class="btn btn-primary btn-block" data-act="save-parse">保存并检测</button>' +
         '<button class="btn btn-ghost btn-block" data-act="test-parse">只检测，不保存</button>' +
-        '<button class="btn btn-ghost btn-block" data-act="reset-parse">恢复默认云端</button>'
+        '<button class="btn btn-ghost btn-block" data-act="reset-parse">清空地址</button>'
     });
   }
 
@@ -1949,9 +1968,11 @@
         }
       } catch (e) { /* 按行拆 */ }
     }
+    /* 模型偶尔不按格式回，直接吐一段 JSON 或「ok」。这些不能当评论显示出去 */
+    var junk = /^\s*[{\[]|"\s*:\s*|^ok$/i;
     return t.split('\n').map(function (x) {
       return x.replace(/^\s*(?:[-*•]|\d+[.、)])\s*/, '').replace(/^["“]|["”]$/g, '').trim();
-    }).filter(function (x) { return x.length >= 6 && x.length <= 90; });
+    }).filter(function (x) { return x.length >= 6 && x.length <= 90 && !junk.test(x); });
   }
 
   async function makeComments(text, n, tone) {
@@ -2054,7 +2075,10 @@
     lastFail = !dead0 && err && err.url ? { url: err.url, title: hint } : null;
 
     var dead = (err && err.code) === 'DEAD';
-    var why = dead
+    var noCh = (err && err.code) === 'NO_CHANNEL';
+    var why = noCh
+      ? '这台设备上还没有配置解析服务。填一个地址后，贴链接就能自动取正文；在那之前可以先粘全文。'
+      : dead
       ? '这条链接本身已经打不开了（作者删除、内容下架，或分享链接过期）。换一条新分享出来的链接最稳；' +
         '也可以长按把正文复制下来，走「直接粘全文」，改写效果一样。'
       : offline
@@ -2065,7 +2089,8 @@
     var detail = d ? '<div class="sec-sub" style="margin-top:10px;word-break:break-all;line-height:1.8;white-space:pre-line">' + esc(d) + '</div>' : '';
 
     var msg = String((err && err.message) || '');
-    var lead = (msg && msg !== '这个链接没取到正文') ? msg : '服务器连上了，但这一页没把正文交出来。';
+    var lead = noCh ? '贴链接取正文需要一台解析服务器，现在还没配。'
+      : (msg && msg !== '这个链接没取到正文') ? msg : '服务器连上了，但这一页没把正文交出来。';
 
     openSheet(
       '<p>' + esc(lead) + '</p>' +
@@ -2083,6 +2108,7 @@
             ? '<button class="btn btn-soft btn-block" data-act="copy" data-text="' + esc(err.url) + '">' + U.ic('copy', 15) + ' 复制链接</button>' +
               '<button class="btn btn-soft btn-block" data-act="open-url" data-url="' + esc(err.url) + '">' + U.ic('external', 15) + ' 用浏览器打开</button>'
             : '') +
+          (noCh ? '<button class="btn btn-primary btn-block" data-act="parse-service">' + U.ic('wand', 15) + ' 去配置解析服务</button>' : '') +
           '<button class="btn btn-ghost btn-block" data-act="to-text">改成粘贴全文（照样能改写）</button>'
       }
     );
@@ -2150,7 +2176,7 @@
     openSheet(
       '<p><b style="color:var(--ink)">三类数据，三种标签：</b></p>' +
       '<div class="rows mt-s">' +
-      '<div class="row"><span class="rt"><b>实时抓取</b><small>直接调公开榜单接口，显示抓取时刻</small></span><span class="badge live">实时</span></div>' +
+      '<div class="row"><span class="rt"><b>实时抓取</b><small>浏览器直连 60s / codelife 等公开榜单接口，显示抓取时刻</small></span><span class="badge live">实时</span></div>' +
       '<div class="row"><span class="rt"><b>定时快照</b><small>GitHub Action 每 15 分钟生成，存在仓库里</small></span><span class="badge sample">快照</span></div>' +
       '<div class="row"><span class="rt"><b>内置示例</b><small>我写的样例文章，不是新闻</small></span><span class="badge sample">示例</span></div>' +
       '</div>' +
@@ -2235,10 +2261,20 @@
         src = await L.parseLink(url, function (note) { c.stepNote = note; }, '');
       }
     } catch (e) {
-      c.busy = false;
-      c.err = (e && e.message) || '解析失败';
-      render('same');
-      return;
+      /* 示例任务不能因为「没配解析服务 / 断网」就打不开：它自带一份公开活动原文，
+         正好用来演示拆任务。真实链接仍然老实报错，不拿示例冒充。 */
+      if (!text && url === C.EXAMPLE_URL && C.EXAMPLE_TEXT) {
+        src = {
+          title: '小蜜蜂两周年生日活动开启！一起庆生赢现金',
+          text: C.EXAMPLE_TEXT, chars: C.EXAMPLE_TEXT.length, via: 'sample', images: []
+        };
+        c.stepNote = '用内置示例原文（没走网络）';
+      } else {
+        c.busy = false;
+        c.err = (e && e.message) || '解析失败';
+        render('same');
+        return;
+      }
     }
     c.src = src;
     c.stepNote = '正在拆任务';
@@ -2317,7 +2353,8 @@
       added += 1;
     });
     if (!Object.keys(r.channels || {}).length) {
-      c.searchErr = '没有可用的检索通道。联网取证需要一台解析服务：到「我的 → 解析服务」填一个 Worker 地址（README 里有 3 分钟部署方法）。';
+      c.searchErr = '没有可用的检索通道，这一轮没能联网查资料。上面那条「官方原帖」已经勾上了，日期、话题、奖项都能对着它写；' +
+        '想补充最新报道的话，到「我的 → 解析服务」填一个 Worker 地址（约 3 分钟），或自己贴一篇报道链接。';
     } else if (!c.evidence.length) {
       c.searchErr = r.error || '检索通道没有返回可用结果';
       c.searchNote = '没有查到可用的公开资料。可以贴一篇你找到的报道，或只用自己上传的素材写。';
@@ -3357,17 +3394,22 @@
         break;
 
       case 'reset-parse':
-        L.setParseBases([L.CLOUD_DEFAULT]);
+        L.setParseBases([]);
         if (L.setParseKey) L.setParseKey('');
         if (L.invalidateProbe) L.invalidateProbe();
         closeSheet();
-        toast('已恢复默认云端解析');
+        toast('已清空解析地址');
         render('tab');
         break;
 
       case 'test-parse': {
         var tf = readParseForm();
-        runParseTest(tf.list.length ? tf.list : [L.CLOUD_DEFAULT]);
+        if (!tf.list.length) {
+          var tb0 = document.getElementById('parse-test');
+          if (tb0) tb0.innerHTML = '<div style="width:100%" class="sec-sub">还没有填地址。把 Worker 部署后的 https://…workers.dev 填进来再检测。</div>';
+          break;
+        }
+        runParseTest(tf.list);
         break;
       }
 
@@ -3758,6 +3800,13 @@
         e.preventDefault();
         addManualModel();
       }
+    });
+
+    /* 桌面端习惯：Esc 关掉弹层。手机上点遮罩也能关，这里只是补一个键盘入口 */
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== 'Escape') return;
+      var layer = document.getElementById('layer');
+      if (layer && layer.classList.contains('on')) { closeSheet(); e.preventDefault(); }
     });
 
     window.addEventListener('popstate', function (ev) {

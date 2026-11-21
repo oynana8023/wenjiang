@@ -552,11 +552,14 @@ window.WJUI = (function () {
     h += '<div style="display:flex;align-items:center;gap:8px;margin-top:18px">' +
       '<span class="badge ai">AI 生成</span><span class="sec-sub">' + esc(r.styleName) + ' · ' + esc(r.platformName) + ' · ' + esc(r.modelName || '本机引擎') + '</span></div>';
     if (r.srcLen && r.target) {
-      var keep = Math.round(r.words / Math.max(1, r.srcLen) * 100);
+      /* 保留率超过 100% 说明模型写超了：按 100% 封顶显示，另注一句「扩写」，
+         不要出现「实际保留 350%」这种让人看不懂的数 */
+      var keepRaw = Math.round(r.words / Math.max(1, r.srcLen) * 100);
+      var keep = Math.min(100, keepRaw);
       var aim = '目标 ' + r.target + ' 字';
       if (r.want && r.want > r.target * 1.05) aim = '选了 ' + r.want + ' 字，原文只够 ' + r.target + ' 字';
       h += '<div class="sec-sub" style="margin-top:6px">原文 ' + r.srcLen + ' 字 · ' + aim +
-        ' · 实际保留 ' + keep + '%（人物、时间线、因果不删）</div>';
+        ' · 信息覆盖 ' + keep + '%' + (keepRaw > 105 ? '（成稿比原文长，属扩写）' : '') + '（人物、时间线、因果不删）</div>';
     }
     if (r.selfCheck) {
       h += '<div class="sec-sub" style="margin-top:6px">' + esc(r.selfCheck) + '</div>';
@@ -807,12 +810,12 @@ window.WJUI = (function () {
       '<span class="rt"><b>数据来源与标注规则</b><small>哪些是实时数据，哪些是示例</small></span>' +
       '<span class="chev">' + ic('right', 15) + '</span></button>';
     var _pbs = window.WJLive.parseBases ? window.WJLive.parseBases() : [window.WJLive.parseBase()].filter(Boolean);
-    var _pbName = !_pbs.length ? '已关闭'
-      : (_pbs.length === 1 && _pbs[0] === window.WJLive.CLOUD_DEFAULT ? '云端（默认）'
+    var _pbName = !_pbs.length ? '未配置'
+      : (_pbs.length === 1 && _pbs[0] === window.WJLive.CLOUD_DEFAULT ? '默认节点'
         : _pbs.length + ' 条通道');
     h += '<button class="row" data-act="parse-service"><span class="ri">' + ic('wand', 15) + '</span>' +
-      '<span class="rt"><b>解析服务</b><small>粘贴链接取正文用的后端</small></span>' +
-      '<span class="rv">' + _pbName + '</span>' +
+      '<span class="rt"><b>解析服务</b><small>' + (_pbs.length ? '粘贴链接取正文用的后端' : '没配后端，贴链接取不到正文') + '</small></span>' +
+      '<span class="rv"' + (_pbs.length ? '' : ' style="color:var(--warn)"') + '>' + _pbName + '</span>' +
       '<span class="chev">' + ic('right', 15) + '</span></button>';
 
     h += '<button class="row" data-act="open-compliance"><span class="ri">' + ic('shield', 15) + '</span>' +
