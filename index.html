@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- 文匠 AI · 单文件构建 2026-11-21T09:35:13.504Z · 源文件见 src/ 与 assets/ -->
+<!-- 文匠 AI · 单文件构建 2026-11-21T09:38:37.760Z · 源文件见 src/ 与 assets/ -->
 <html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="UTF-8">
@@ -10034,13 +10034,29 @@ window.WJCreate = (function () {
     renderTimer = setTimeout(function () { render('same'); }, 160);
   }
 
+  /* 先用构建时内联的快照铺一层：首屏 0 等待就有榜单，网络回来再逐源换成实时。
+     以前是空着骨架等第一个接口返回，慢网下要盯着三秒空白。 */
+  function seedHotFromSnapshot() {
+    var snap = window.__WJ_SNAP__;
+    if (!snap || !snap.sources) return;
+    var at = Date.parse(snap.updatedAt) || Date.now();
+    L.SOURCES.forEach(function (s) {
+      var x = snap.sources[s.id];
+      if (!x || !x.ok || !x.items || !x.items.length) return;
+      if (state.hot.bySrc[s.id] && state.hot.bySrc[s.id].items.length) return;
+      state.hot.bySrc[s.id] = { ok: true, items: x.items.slice(0, 50), via: 'snapshot', at: at, blocked: 0 };
+    });
+    recalcHot();
+  }
+
   async function loadAllHot() {
     state.hot.loading = true;
     softRender();
     var ids = L.SOURCES.map(function (s) { return s.id; });
     await Promise.all(ids.map(async function (id) {
       var cur = state.hot.bySrc[id];
-      if (cur && cur.ok && cur.items && cur.items.length) return;
+      /* 只有实时数据才跳过；快照铺的底要换成实时的 */
+      if (cur && cur.via === 'live' && cur.items && cur.items.length) return;
       try {
         var r = await L.hot(id);
         if (r && r[id]) state.hot.bySrc[id] = r[id];
@@ -13296,6 +13312,7 @@ window.WJCreate = (function () {
     var hash = location.hash.replace(/^#\/?/, '');
     if (NAV_ROUTES.indexOf(hash) > -1) state.route = hash;
 
+    seedHotFromSnapshot();
     render('root');
 
     /* 数据：先拉主源，再补齐其它源 */
