@@ -739,6 +739,23 @@ window.WJLive = (function () {
     return m ? m[1] : '';
   }
 
+  /* 开机后台预热一次：把 data/hot.json 里的 topics 读进内存。
+     这样点开话题时用的是 15 分钟内的数据，而不是构建时内联的那份（可能几小时前）。 */
+  var tpWarm = null;
+  function warmTopics() {
+    if (tpWarm) return tpWarm;
+    tpWarm = getJSON(withShare(TP_SNAP + '?t=' + Math.floor(Date.now() / 600000)), 9000)
+      .then(function (d) {
+        if (d && d.topics) {
+          tpMem = { at: Date.now(), data: d.topics };
+          try { localStorage.setItem('wj.topics.snap', JSON.stringify(d.topics)); } catch (e) { /* ignore */ }
+        }
+        return tpMem && tpMem.data;
+      })
+      .catch(function () { return null; });
+    return tpWarm;
+  }
+
   function pickTopic(snap, src, title, id) {
     if (!snap) return null;
     if (src === 'toutiao') {
@@ -1697,6 +1714,7 @@ window.WJLive = (function () {
     topic: topic,
     topicId: topicId,
     topicSnapshot: topicSnapshot,
+    warmTopics: warmTopics,
     imgUrl: imgUrl,
     listModels: listModels,
     testModel: testModel,

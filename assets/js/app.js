@@ -3973,6 +3973,8 @@
 
     seedHotFromSnapshot();
     render('root');
+    /* 二级页数据后台预热：不挡首屏，点开话题时直接用 */
+    setTimeout(function () { if (L.warmTopics) L.warmTopics(); }, 1200);
 
     /* 数据：先拉主源，再补齐其它源 */
     (async function () {

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- 文匠 AI · 单文件构建 2026-11-21T11:56:12.654Z · 源文件见 src/ 与 assets/ -->
+<!-- 文匠 AI · 单文件构建 2026-11-21T11:59:31.472Z · 源文件见 src/ 与 assets/ -->
 <html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="UTF-8">
@@ -6613,6 +6613,23 @@ window.WJLive = (function () {
     return m ? m[1] : '';
   }
 
+  /* 开机后台预热一次：把 data/hot.json 里的 topics 读进内存。
+     这样点开话题时用的是 15 分钟内的数据，而不是构建时内联的那份（可能几小时前）。 */
+  var tpWarm = null;
+  function warmTopics() {
+    if (tpWarm) return tpWarm;
+    tpWarm = getJSON(withShare(TP_SNAP + '?t=' + Math.floor(Date.now() / 600000)), 9000)
+      .then(function (d) {
+        if (d && d.topics) {
+          tpMem = { at: Date.now(), data: d.topics };
+          try { localStorage.setItem('wj.topics.snap', JSON.stringify(d.topics)); } catch (e) { /* ignore */ }
+        }
+        return tpMem && tpMem.data;
+      })
+      .catch(function () { return null; });
+    return tpWarm;
+  }
+
   function pickTopic(snap, src, title, id) {
     if (!snap) return null;
     if (src === 'toutiao') {
@@ -7571,6 +7588,7 @@ window.WJLive = (function () {
     topic: topic,
     topicId: topicId,
     topicSnapshot: topicSnapshot,
+    warmTopics: warmTopics,
     imgUrl: imgUrl,
     listModels: listModels,
     testModel: testModel,
@@ -13639,6 +13657,8 @@ window.WJCreate = (function () {
 
     seedHotFromSnapshot();
     render('root');
+    /* 二级页数据后台预热：不挡首屏，点开话题时直接用 */
+    setTimeout(function () { if (L.warmTopics) L.warmTopics(); }, 1200);
 
     /* 数据：先拉主源，再补齐其它源 */
     (async function () {
