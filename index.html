@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- 文匠 AI · 单文件构建 2026-11-21T16:24:10.065Z · 源文件见 src/ 与 assets/ -->
+<!-- 文匠 AI · 单文件构建 2026-11-21T16:33:49.562Z · 源文件见 src/ 与 assets/ -->
 <html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="UTF-8">
@@ -7000,7 +7000,7 @@ window.WJLive = (function () {
         done = true;
         detail.push(batch.map(function (p) { return p.label + '：超时'; }).join('、'));
         reject(new Error('超时'));
-      }, ms + 800);
+      }, ms + 300);
       batch.forEach(function (p) {
         pxFetchText(p.wrap(url), ms).then(function (body) {
           var v = pxDecode(body, kind);
@@ -7196,18 +7196,15 @@ window.WJLive = (function () {
       if (left < 2500) break;
       var url = h + '/weibo/keyword/' + encodeURIComponent(word);
       var r = null;
-      /* 第一跳只给 cors.lol 一次机会（它是目前唯一能连到镜像的一条），4.5 秒不回就换人 */
+      /* 三条一起发：cors.lol 快但一旦被限流浏览器直接 CORS 报错，
+         allorigins 慢（5～8 秒）但常能连通，codetabs 更慢。谁先回来用谁。 */
       try {
-        r = await pxGet(url, { kind: 'xml', ms: 4500, budget: 5000, ttl: 120000, width: 1 });
+        r = await pxGet(url, {
+          kind: 'xml', ms: Math.min(12000, left), budget: Math.max(6000, Math.min(14000, left)),
+          ttl: 120000, width: 3
+        });
       } catch (e1) {
-        detail.push('主通道 ' + (e1.detail || e1.message || '没通'));
-      }
-      if (!r) {
-        try {
-          r = await pxGet(url, { kind: 'xml', ms: Math.min(9000, left), budget: Math.max(3000, Math.min(9500, left)), ttl: 120000, width: 3 });
-        } catch (e2) {
-          detail.push('备用 ' + (e2.detail || e2.message || '没通'));
-        }
+        detail.push(e1.detail || e1.message || '没通');
       }
       if (r) {
         var out = weiboFromRss(r.data, word, n);
@@ -7725,7 +7722,7 @@ window.WJLive = (function () {
     if (src === 'weibo' && String(title || '').trim()) {
       fallback.push({
         label: '微博镜像',
-        run: function () { return weiboRssTopic(title, n, Math.max(9000, Math.min(15000, deadline - Date.now()))); }
+        run: function () { return weiboRssTopic(title, n, Math.max(10000, Math.min(16000, deadline - Date.now()))); }
       });
     }
 
