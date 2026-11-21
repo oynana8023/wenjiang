@@ -1912,8 +1912,10 @@
     openSheet(html, {
       title: '解析服务',
       foot: '<button class="btn btn-primary btn-block" data-act="save-parse">保存并检测</button>' +
-        '<button class="btn btn-ghost btn-block" data-act="test-parse">只检测，不保存</button>' +
-        '<button class="btn btn-ghost btn-block" data-act="reset-parse">清空地址</button>'
+        '<div class="dock-row" style="margin-top:8px">' +
+        '<button class="btn btn-soft" style="flex:1" data-act="test-parse">只检测</button>' +
+        '<button class="btn" style="flex:1;background:var(--surface-2);color:var(--ink-2)" data-act="reset-parse">清空地址</button>' +
+        '</div>'
     });
   }
 
