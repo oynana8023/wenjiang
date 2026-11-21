@@ -4,3 +4,4 @@ node_modules/
 .codebuddy/
 .cloudstudio
 package-lock.json
+.preview/
