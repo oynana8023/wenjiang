@@ -2337,7 +2337,7 @@
     var detail = d ? '<div class="sec-sub" style="margin-top:10px;word-break:break-all;line-height:1.8;white-space:pre-line">' + esc(d) + '</div>' : '';
 
     var msg = String((err && err.message) || '');
-    var lead = noCh ? '贴链接取正文需要一台解析服务器，现在还没配。'
+    var lead = noCh ? '这条链接没取到正文：现在既没填 DeepSeek Key，也没有自己的解析服务。'
       : deadBase ? '解析服务的地址在，但这次没连上。'
       : offline ? '解析服务没连上，不是这一页的问题。'
       : (msg && msg !== '这个链接没取到正文') ? msg : '服务器连上了，但这一页没把正文交出来。';
