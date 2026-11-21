@@ -4034,6 +4034,16 @@
     if (NAV_ROUTES.indexOf(hash) > -1) state.route = hash;
 
     render('root');
+    /* 三级缓存里最慢的一环是 data/hot.json（约 190KB）。等首屏稳定后在后台取一次，
+       点开话题时就不用现场等下载；取不到就算了，不影响任何功能。 */
+    setTimeout(function () {
+      if (document.hidden) return;
+      try {
+        var c = navigator.connection || {};
+        if (c.saveData) return;
+      } catch (e) { /* ignore */ }
+      if (L.warmTopics) L.warmTopics();
+    }, 3000);
 
     /* 数据：先拉主源，再补齐其它源 */
     (async function () {

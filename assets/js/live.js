@@ -820,7 +820,7 @@ window.WJLive = (function () {
     var d = null;
     /* 话题和热榜在同一份文件里（Action 只提交这一个文件），先读它的 topics 字段 */
     try {
-      var raw = await getJSON(withShare(TP_SNAP + '?t=' + Math.floor(Date.now() / 300000)), 6000);
+      var raw = await getJSON(withShare(TP_SNAP + '?t=' + Math.floor(Date.now() / 300000)), 12000);
       if (raw && raw.topics) d = raw.topics;
     } catch (e) { /* 本地文件 / 还没生成 */ }
     if (!d || (!d.weibo && !d.toutiao)) {

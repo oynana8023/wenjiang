@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- 文匠 AI · 单文件构建 2026-11-21T13:18:32.040Z · 源文件见 src/ 与 assets/ -->
+<!-- 文匠 AI · 单文件构建 2026-11-21T13:24:06.736Z · 源文件见 src/ 与 assets/ -->
 <html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="UTF-8">
@@ -6694,7 +6694,7 @@ window.WJLive = (function () {
     var d = null;
     /* 话题和热榜在同一份文件里（Action 只提交这一个文件），先读它的 topics 字段 */
     try {
-      var raw = await getJSON(withShare(TP_SNAP + '?t=' + Math.floor(Date.now() / 300000)), 6000);
+      var raw = await getJSON(withShare(TP_SNAP + '?t=' + Math.floor(Date.now() / 300000)), 12000);
       if (raw && raw.topics) d = raw.topics;
     } catch (e) { /* 本地文件 / 还没生成 */ }
     if (!d || (!d.weibo && !d.toutiao)) {
@@ -14083,6 +14083,16 @@ window.WJCreate = (function () {
     if (NAV_ROUTES.indexOf(hash) > -1) state.route = hash;
 
     render('root');
+    /* 三级缓存里最慢的一环是 data/hot.json（约 190KB）。等首屏稳定后在后台取一次，
+       点开话题时就不用现场等下载；取不到就算了，不影响任何功能。 */
+    setTimeout(function () {
+      if (document.hidden) return;
+      try {
+        var c = navigator.connection || {};
+        if (c.saveData) return;
+      } catch (e) { /* ignore */ }
+      if (L.warmTopics) L.warmTopics();
+    }, 3000);
 
     /* 数据：先拉主源，再补齐其它源 */
     (async function () {
