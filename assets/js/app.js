@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI;
 
-  var VERSION = 'v2.10.0';
+  var VERSION = 'v2.11.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -35,7 +35,7 @@
     hot: { bySrc: {}, active: 'weibo', loading: false, updatedAt: 0, okCount: 0 },
     compose: {
       mode: 'link', link1: '', text1: '', text2: '', titleOnly: false,
-      style: 'news', strength: 2, platform: 'toutiao',
+      style: 'news', strength: 2, platform: 'toutiao', words: 0,
       extra: '', deai: true, faithful: true, adv: false, sourceTitle: '', sourceUrl: '',
       sourceImages: [], sourceVideo: false, sourceNote: '', preview: null
     },
@@ -186,6 +186,7 @@
           style: state.compose.style,
           strength: state.compose.strength,
           platform: state.compose.platform,
+          words: state.compose.words,
           deai: state.compose.deai,
           faithful: state.compose.faithful
         }
@@ -640,8 +641,15 @@
       '你最清楚一件事：同一条新闻，发到今日头条、小红书、酷安和网易小蜜蜂，读者、结构、句长、标题写法完全是四套东西，' +
       '把一篇文章复制到四个平台，等于四个平台都发不好。你从不靠同义词替换凑原创，也不写"值得注意的是""综上所述"这类套话。' +
       '事实、数字、人名、机构名、直接引语一律不改；素材里没有的信息绝不添加。只输出 JSON，不要任何解释。';
+    /* 字数由用户定，平台区间只是参考。原文 5000 字压成 300 字，
+       人物来历和因果全没了，那不是改写，是摘要。 */
+    var srcLen = String(src || '').replace(/\s/g, '').length;
+    var want = Math.round(Number(c.words || 0)) || E.autoWords(srcLen);
+    var target = Math.min(want, Math.round(srcLen * 1.05) + 60);
+    var ratio = Math.max(10, Math.round(target / Math.max(1, srcLen) * 100));
     var user = '任务：把下面素材改写成一篇可以直接发到【' + (plat ? plat.name : '今日头条') + '】的稿子。\n\n' +
       brief + '\n' +
+      '【篇幅】这是硬指标，优先级高于上面任何区间：原文 ' + srcLen + ' 字，这次写成 ' + target + ' 字左右（约原文的 ' + ratio + '%）。\n' +
       '参考写法：' + style + '（与上面的平台要求冲突时，以平台要求为准）。\n' +
       '改写强度：' + strength + '。\n\n' +
       '动笔前先在心里做三件事（不要输出过程）：\n' +
@@ -649,7 +657,11 @@
       '2. 判断这篇的核心信息是哪一句，读者最想知道的是什么；\n' +
       '3. 按上面【结构】一段一段落位，缺材料的那一段宁可写短，也不要编。\n\n' +
       '硬性要求：\n' +
-      '- 篇幅落在指定区间；素材不足时写下限附近，不许为凑字数注水。\n' +
+      '- 字数按【篇幅】来，平台建议区间只在没给字数时参考；素材确实撑不到目标字数时，写满为止，不许编造、不许注水。\n' +
+      '- 压缩的是句子，不是信息。删细节可以，但谁、什么时候、做了什么、为什么、结果如何，这五样必须留着；\n' +
+      '  读者读完要知道每个人是从哪来的、为什么出现在这篇稿子里，不能只剩「某某表示」。\n' +
+      '- 不要逐句换同义词交差。按你自己的叙述顺序重排：先讲结果还是先讲经过由你判断，每个部分都要落到具体的人、数字或动作上。\n' +
+      '  长稿按内容分成 3–5 个小节，每节一个小标题；短稿不分节。\n' +
       '- 严格用该平台的结构和语气，不要混入其他平台的写法（例如给酷安写"姐妹们"、给小红书写"综上所述"）。\n' +
       '- 标题：1 个主标题 + 3 个备选，全部符合该平台标题习惯，不要同一句式换词。\n' +
       '- 正文用 \\n\\n 分段；需要小标题时最多用两级，统一写成「## 」，不要用「###」或更多井号；\n' +
@@ -659,7 +671,7 @@
       (c.deai ? '- 去 AI 味：删掉"首先/其次/综上所述/赋能/闭环/值得注意的是"，句子长短交错，允许口语。\n' : '') +
       (c.faithful ? '- 事实保真：数字、人名、机构名、直接引语必须与原文完全一致。\n' : '') +
       (c.extra ? '- 额外要求：' + c.extra + '\n' : '') +
-      '\n输出 JSON：{"title":"主标题","titles":["备选1","备选2","备选3"],"body":"正文，用\\n\\n分段","tags":["标签1","标签2"]}\n\n素材：\n' + src.slice(0, 6500);
+      '\n输出 JSON：{"title":"主标题","titles":["备选1","备选2","备选3"],"body":"正文，用\\n\\n分段，约 ' + target + ' 字","tags":["标签1","标签2"]}\n\n素材：\n' + src.slice(0, 12000);
     return [{ role: 'system', content: sys }, { role: 'user', content: user }];
   }
 
@@ -692,6 +704,11 @@
   async function build(src) {
     var c = state.compose;
     var chain = providerChain('chat');
+    /* 目标字数：用户选的优先；没选就按原文长度换算。两边算法都在 engine 里，
+       避免 UI、提示词、自检三处各写一套数字。 */
+    var srcLen0 = String(src || '').replace(/\s/g, '').length;
+    var wantW = Math.round(Number(c.words || 0)) || E.autoWords(srcLen0);
+    var targetW = Math.min(wantW, Math.round(srcLen0 * 1.05) + 60);
 
     if (chain.length) {
       state.genNote = chain.length > 1 ? '模型正在写（' + chain.length + ' 家待命）' : '模型正在写';
@@ -706,14 +723,14 @@
           /* 自检要带上标签一起看：标签在单独字段里，不然小红书永远被判「缺话题标签」 */
           var chkText = E.tidyBody(o.body) +
             ((o.tags && o.tags.length) ? '\n\n' + o.tags.slice(0, E.platTags(c.platform)).map(function (x) { return '#' + x; }).join(' ') : '');
-          check = E.platformCheck(chkText, c.platform);
+          check = E.platformCheck(chkText, c.platform, targetW);
           if (check.ok || tries >= 1) break;
           /* 结构缺项/篇幅跑偏/AI 腔：把问题回给模型，按平台规矩重写一稿 */
           tries += 1;
           state.genNote = '平台自检没通过，正在重写';
           msgs = msgs.concat([
             { role: 'assistant', content: String(res.text).slice(0, 4000) },
-            { role: 'user', content: '这稿不符合【' + platformName(c.platform) + '】的要求：' + check.issues.join('；') + '。请严格按上面的平台结构重写，事实和数字不变，只输出 JSON。' }
+            { role: 'user', content: '这稿不符合要求：' + check.issues.join('；') + '。请按上面的【篇幅】和平台结构重写，目标 ' + targetW + ' 字，事实、数字、人名不变，不要靠注水凑字数，只输出 JSON。' }
           ]);
         }
         var body = cleanBody(o.body, c.platform);
@@ -733,6 +750,9 @@
           source: src,
           sourceTitle: state.compose.sourceTitle,
           words: E.countWords(body),
+          target: targetW,
+          want: wantW,
+          srcLen: srcLen0,
           sim: simA,
           dupes: 0,
           score: Math.max(35, Math.min(96, 100 - simA)),
@@ -756,6 +776,7 @@
       style: c.style,
       strength: c.strength,
       platform: c.platform,
+      words: Number(c.words || 0),
       cat: '',
       variant: Math.floor(Math.random() * 9),
       sourceTitle: state.compose.sourceTitle || ''
@@ -767,6 +788,9 @@
       source: src,
       sourceTitle: state.compose.sourceTitle,
       words: r.words,
+      target: r.target,
+      want: Math.round(Number(c.words || 0)),
+      srcLen: r.srcLen,
       sim: r.sim,
       dupes: r.dupes,
       score: r.score,
@@ -2190,6 +2214,11 @@
         render('tab');
         break;
 
+      case 'words':
+        state.compose.words = Number(t.dataset.words || 0);
+        render('tab');
+        break;
+
       case 'platform': {
         var pk = t.dataset.platform;
         state.compose.platform = pk;
@@ -3179,6 +3208,11 @@
         }
         var c = document.querySelector("[data-cnt='" + k + "']");
         if (c) c.textContent = f.value.trim().length;
+        /* 粘完素材，字数那行要立刻跟着变，否则用户不知道默认会写多长 */
+        if (k === 'text1' || k === 'text2') {
+          var lt = document.querySelector('[data-lentip]');
+          if (lt) lt.textContent = E.lenTip(state.compose.text1, state.compose.words);
+        }
         if (f.tagName === 'TEXTAREA') {
           f.style.height = 'auto';
           f.style.height = Math.min(248, Math.max(72, f.scrollHeight + 4)) + 'px';

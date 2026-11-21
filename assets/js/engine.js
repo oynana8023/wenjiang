@@ -235,8 +235,10 @@ window.WJEngine = (function () {
     }
     // 加连接词：每 3 句最多一次，且句首不能已经有连接词
     var hasLead = /^(但|而|不过|然而|因此|所以|此外|同时|另外|其实|事实上|总的来说|问题是|更|说到底|官方|据|业内|数据显示|记者|通报|公告|开发者|企业|公司|用户|消费者|市场|行业|技术|模型|平台|产品)/.test(s);
-    if (!isFirst && ctx.connectProb > 0 && s.length > 20 && ctx.sinceConn >= 3 && !hasLead && ctx.rnd() < ctx.connectProb) {
+    if (!isFirst && ctx.connectProb > 0 && s.length > 20 && ctx.sinceConn >= (ctx.connGap || 3) && !hasLead && ctx.rnd() < ctx.connectProb) {
       var c = nextConnect(ctx);
+      /* 「数字也能说明问题：」挂在一句没有数字的话前面，读者会觉得被耍了 */
+      if (c && /数字|数据/.test(c) && !/\d+\s*(?:%|％|万|亿|元|倍|片|台|家|人|天|小时|分钟|克|公里|个|条|款|吨)/.test(s)) c = '';
       if (c && s.indexOf(c) !== 0) {
         s = c + s;
         ctx.sinceConn = 0;
@@ -457,8 +459,28 @@ window.WJEngine = (function () {
       tone: tone,
       hard: nums.length + quotes.length,
       srcLen: text.replace(/\s/g, '').length,
+      sentCount: sents.length,
       density: Math.round(text.replace(/\s/g, '').length / Math.max(1, sents.length))
     };
+  }
+
+  /* 没选字数时的默认值：短稿按原样，长稿留一半到八成。
+     5000 字留 2500，不是为了凑篇幅，是因为再压就只剩结论了。 */
+  function autoWords(srcLen) {
+    var n = Number(srcLen) || 0;
+    if (n <= 700) return Math.max(300, n);
+    if (n <= 1600) return Math.round(n * 0.82);
+    if (n <= 3500) return Math.round(n * 0.64);
+    return Math.round(n * 0.5);
+  }
+
+  /* 新建页那句提示，UI 和输入时刷新共用一份文案 */
+  function lenTip(text, words) {
+    var n = String(text || '').replace(/\s/g, '').length;
+    var w = Math.round(Number(words) || 0);
+    if (n <= 80) return '不按平台砍字数：选多少写多少，长稿会保留人物、时间线与因果';
+    if (!w) return '原文约 ' + n + ' 字，默认写成 ' + autoWords(n) + ' 字左右';
+    return '原文约 ' + n + ' 字 → 目标 ' + w + ' 字' + (w > n * 1.05 ? '（超出原文，会写满素材为止）' : '');
   }
 
   function planFor(a, opts, style) {
@@ -473,21 +495,43 @@ window.WJEngine = (function () {
     var p = PLAT[(opts && opts.platform) || ''];
     if (p && p.mode) mode = p.mode;
 
-    /* 目标长度：按平台上限与素材长度定，扩写也不超过原文的 1.6 倍，避免注水 */
-    var cap = (p && p.len) ? p.len[1] : 3000;
-    var targets = { report: 760, essay: 980, note: 460, script: 380, answer: 700, comment: 110, review: 640, buzz: 360, weibo: 180 };
-    var target = Math.min(cap, targets[mode] || 700);
-    if (p && p.len) target = Math.max(p.len[0], Math.min(target, p.len[1]));
-    if (a.srcLen < 320) target = Math.min(target, Math.round(a.srcLen * 1.5) + 60);
-    if (a.srcLen > 1600) target = Math.min(target, Math.round(a.srcLen * 0.55) + 120);
-
+    /* 目标字数：用户选了就按用户，没选就按原文长度定比例。
+       平台区间只作建议，绝不硬夹 —— 一篇 5000 字的深度稿压到 500 字，
+       人物来历、时间线、因果全丢，那不是改写，是摘要。 */
     var strength = Number(opts.strength || 2);
+    var want = Math.round(Number((opts && opts.words) || 0));
+    var srcLen = a.srcLen || 0;
+    var target;
+    if (want > 0) {
+      target = want;
+    } else {
+      target = autoWords(srcLen);
+    }
+    /* 微博、口播这类极短形态，只在「自动」时收一下上限 */
+    if (!want && p && p.max) target = Math.min(target, p.max);
+    /* 改写不是创作：稿子不该比原文还长，否则一定是注水。
+       原文撑不起用户选的字数时，写满素材为止，并在成稿页说明。 */
+    target = Math.min(target, Math.round(srcLen * 1.05) + 60);
+    target = Math.max(160, Math.min(target, 6000));
+
+    /* budget = 大约要写多少句；detail = 单句保留到多少字。
+       这两个值才是「不压缩过度」的开关，短平台也一样按它取料。 */
+    var avg = (a.sentCount && srcLen) ? srcLen / a.sentCount : 42;
+    avg = Math.max(24, Math.min(58, avg));
+    var budget = Math.max(4, Math.round(target / avg));
+    var detail = target >= 2400 ? 130 : target >= 1200 ? 88 : target >= 600 ? 58 : 40;
+
     var action = 'polish';
-    if (a.srcLen < target * 0.6 && strength >= 2) action = 'expand';
-    if (a.srcLen > target * 1.5) action = 'condense';
+    if (srcLen > target * 1.7) action = 'condense';
+    else if (srcLen > target * 1.12) action = 'trim';
+    if (srcLen < target * 0.72 && strength >= 2) action = 'expand';
     if (mode === 'comment' || mode === 'weibo') action = 'comment';
 
-    return { mode: mode, target: target, action: action, strength: strength, plat: p || null };
+    return {
+      mode: mode, target: target, action: action, strength: strength,
+      plat: p || null, budget: budget, detail: detail, srcLen: srcLen,
+      keep: Math.min(1.4, target / Math.max(1, srcLen))
+    };
   }
 
   function humanize(text) {
@@ -538,7 +582,7 @@ window.WJEngine = (function () {
      免得两边各写一套、越走越偏。 */
   var PLAT = {
     toutiao: {
-      name: '今日头条', mode: 'report', len: [700, 1200], para: [2, 3], sub: false, tags: 0,
+      name: '今日头条', mode: 'report', len: [700, 1200], para: [2, 3], sub: false, max: 6000, tags: 0,
       who: '在信息流里划到你，耐心只有三秒，随时会划走。',
       struct: '首段 2 句给结果或冲突，不铺垫；第二段交代原因；中间两段放数字、原话、对比；结尾落到「跟普通人有什么关系」或一句提问。',
       tone: '直白、克制，像跟同事转述一件事。',
@@ -547,7 +591,7 @@ window.WJEngine = (function () {
       shape: '结论先行 · 3–5 段 · 结尾落到普通人'
     },
     baijia: {
-      name: '百家号', mode: 'report', len: [800, 1400], para: [2, 3], sub: false, tags: 0,
+      name: '百家号', mode: 'report', len: [800, 1400], para: [2, 3], sub: false, max: 6000, tags: 0,
       who: '多从搜索进来，不知道前因后果，需要一篇能自洽的说明。',
       struct: '导语一句话交代谁、何时、做了什么、结果如何；第二段补背景与时间线；第三段给关键细节与数字；第四段讲影响与争议；最后一句收束。',
       tone: '书面、克制、第三人称，不用「我」。',
@@ -556,7 +600,7 @@ window.WJEngine = (function () {
       shape: '5W 导语 · 背景补全 · 第三人称'
     },
     wechat: {
-      name: '公众号', mode: 'essay', len: [1000, 1800], para: [2, 4], sub: true, tags: 0,
+      name: '公众号', mode: 'essay', len: [1000, 1800], para: [2, 4], sub: true, max: 6000, tags: 0,
       who: '主动点开，愿意读长文，但对空话和说教极度敏感。',
       struct: '导语用一个具体场景或反常识判断提出本文要回答的问题；三个小标题（## 开头），分别写发生了什么、为什么会这样、接下来看什么；结尾收在判断上。',
       tone: '有「我」的判断，句子长短交错，允许一句独立成段。',
@@ -565,7 +609,7 @@ window.WJEngine = (function () {
       shape: '场景开头 · 三个小标题 · 收在判断'
     },
     xhs: {
-      name: '小红书', mode: 'note', len: [300, 600], para: [1, 2], sub: false, tags: 4,
+      name: '小红书', mode: 'note', len: [300, 600], para: [1, 2], sub: false, max: 900, tags: 4,
       who: '在刷，只给三秒，先看图再看第一句。',
       struct: '第一句必须是钩子（结果/价格/反常识），不写「今天想和大家聊聊」；中间 3 条具体信息，每条一行，以「· 」开头，带数字、型号或体验；再一段两句的感受；最后一行 3–5 个话题标签。',
       tone: '第一人称、口语、短句，可以有一个语气词。',
@@ -574,7 +618,7 @@ window.WJEngine = (function () {
       shape: '钩子 · 3 条 · 感受 · 话题标签'
     },
     douyin: {
-      name: '抖音口播', mode: 'script', len: [220, 420], para: [1, 1], sub: false, tags: 0,
+      name: '抖音口播', mode: 'script', len: [220, 420], para: [1, 1], sub: false, max: 1000, tags: 0,
       who: '在划视频，前 3 秒决定走不走。',
       struct: '0–3 秒一句钩子，直接抛结果或疑问；随后 4–6 句事实，一句一个信息；一句转折「但真正的变化不在这」；结尾一句提问或判断。',
       tone: '念出来顺口，每句不超过 18 字，不用长定语。',
@@ -583,7 +627,7 @@ window.WJEngine = (function () {
       shape: '3 秒钩子 · 一句一个信息 · 念得顺'
     },
     zhihu: {
-      name: '知乎', mode: 'answer', len: [800, 1400], para: [2, 4], sub: false, tags: 0,
+      name: '知乎', mode: 'answer', len: [800, 1400], para: [2, 4], sub: false, max: 6000, tags: 0,
       who: '带着问题来，先要结论，再要证据，会挑逻辑漏洞。',
       struct: '第一段给结论；三条论据，每条落在数字、案例或原话上；一段边界说明（什么条件下不成立）；最后一句收。',
       tone: '理性、克制，允许术语但第一次出现要解释。',
@@ -592,7 +636,7 @@ window.WJEngine = (function () {
       shape: '结论 · 三条论据 · 边界条件'
     },
     coolapk: {
-      name: '酷安', mode: 'review', len: [500, 900], para: [1, 2], sub: false, tags: 1,
+      name: '酷安', mode: 'review', len: [500, 900], para: [1, 2], sub: false, max: 1200, tags: 1,
       who: '数码玩家，反感厂商稿和水文，一眼能看出你有没有真用过。',
       struct: '一句话结论（值不值/适合谁）；3 条优点，每条对应一个具体参数或使用场景；2 条槽点，必须说清代价；最后一句「谁该买、谁再等等」。',
       tone: '老用户口吻，短段落，可以用「真香/劝退/智商税」这类社区词，但别堆。',
@@ -601,7 +645,7 @@ window.WJEngine = (function () {
       shape: '结论 · 3 优点 2 槽点 · 谁该买'
     },
     bee: {
-      name: '网易小蜜蜂', mode: 'buzz', len: [250, 500], para: [1, 2], sub: false, tags: 2,
+      name: '网易小蜜蜂', mode: 'buzz', len: [250, 500], para: [1, 2], sub: false, max: 900, tags: 2,
       who: '年轻人刷生活日常，爱看真实吐槽和评分，不吃营销那套。',
       struct: '开头一句场景或直接给评分（如「我先打 7 分」）；一句锐评点明态度；2–3 条具体观察，每条一句话；一句「最想吐槽的」；结尾抛问题让大家接。',
       tone: '口语、有梗、短句，允许自嘲，不装。',
@@ -610,7 +654,7 @@ window.WJEngine = (function () {
       shape: '先打分 · 锐评 · 观察 · 抛问题'
     },
     bili: {
-      name: 'B站专栏', mode: 'essay', len: [900, 1500], para: [2, 4], sub: true, tags: 2,
+      name: 'B站专栏', mode: 'essay', len: [900, 1500], para: [2, 4], sub: true, max: 6000, tags: 2,
       who: '年轻用户，懂梗，反感标题党和说教，愿意看有信息量的长文。',
       struct: '开场一句「先说结论」；三个小标题（## 开头）分层展开；中间给一组对比或数字；结尾一段「省流」总结 + 一句「评论区聊聊」。',
       tone: '轻快、有梗但不油，可以用「省流」「离谱」「劝退」这类词。',
@@ -619,7 +663,7 @@ window.WJEngine = (function () {
       shape: '先说结论 · 三个小标题 · 省流收尾'
     },
     weibo: {
-      name: '微博', mode: 'weibo', len: [120, 240], para: [1, 1], sub: false, tags: 2,
+      name: '微博', mode: 'weibo', len: [120, 240], para: [1, 1], sub: false, max: 400, tags: 2,
       who: '刷热搜，只看一两句，情绪先于论证。',
       struct: '一段话：一句态度 + 一个事实或数字 + 一句追问；结尾带 1–2 个 #话题#。',
       tone: '短、直接、有立场，不抬杠。',
@@ -634,7 +678,8 @@ window.WJEngine = (function () {
     return '【' + p.name + '】\n' +
       '读者：' + p.who + '\n' +
       '结构：' + p.struct + '\n' +
-      '篇幅：' + p.len[0] + '–' + p.len[1] + ' 字，每段 ' + p.para[0] + '–' + p.para[1] + ' 句。\n' +
+      '段落：每段 ' + p.para[0] + '–' + p.para[1] + ' 句。\n' +
+      '平台常见篇幅 ' + p.len[0] + '–' + p.len[1] + ' 字，仅供参考；实际字数以用户指定的目标字数为准。\n' +
       '标题：' + p.title + '\n' +
       '语气：' + p.tone + '\n' +
       '禁忌：' + p.avoid + '\n' +
@@ -643,7 +688,8 @@ window.WJEngine = (function () {
 
   function platformHint(key) {
     var p = PLAT[key] || PLAT.toutiao;
-    return p.shape + ' · ' + p.len[0] + '–' + p.len[1] + ' 字';
+    /* 平台习惯只是参考，字数由用户在下面自己选 */
+    return p.shape + ' · 该平台常见 ' + p.len[0] + '–' + p.len[1] + ' 字，字数以上方选择为准';
   }
 
   /* 发出去之前先按平台规矩查一遍：结构缺项、篇幅跑偏、AI 腔，
@@ -653,15 +699,25 @@ window.WJEngine = (function () {
     return p.tags || 0;
   }
 
-  function platformCheck(text, key) {
+  function platformCheck(text, key, target) {
     var p = PLAT[key] || PLAT.toutiao;
     var body = String(text || '');
     var issues = [];
     var len = countWords(body);
-    if (len < Math.round(p.len[0] * 0.45)) issues.push('篇幅偏短：' + len + ' 字，要求 ' + p.len[0] + '–' + p.len[1] + ' 字');
-    if (len > Math.round(p.len[1] * 1.45)) issues.push('篇幅超出：' + len + ' 字，要求 ' + p.len[0] + '–' + p.len[1] + ' 字');
+    var want = Math.round(Number(target) || 0);
+    /* 用户选了字数就按用户的字数查，平台区间只在他没选时才用。
+       以前一律按平台查，5000 字的长稿选 2000 也会被判「超出」。 */
+    if (want > 0) {
+      if (len < Math.round(want * 0.7)) issues.push('字数不够：' + len + ' 字，目标 ' + want + ' 字');
+      if (len > Math.round(want * 1.3)) issues.push('字数超出：' + len + ' 字，目标 ' + want + ' 字');
+    } else {
+      if (len < Math.round(p.len[0] * 0.45)) issues.push('篇幅偏短：' + len + ' 字，要求 ' + p.len[0] + '–' + p.len[1] + ' 字');
+      if (len > Math.round(p.len[1] * 1.45)) issues.push('篇幅超出：' + len + ' 字，要求 ' + p.len[0] + '–' + p.len[1] + ' 字');
+    }
     if (key === 'xhs') {
-      if (body.indexOf('· ') < 0 && body.indexOf('• ') < 0) issues.push('缺少「· 」分点，小红书要 3 条具体信息');
+      var nDot = (body.match(/^· /gm) || []).length;
+      if (nDot < 3) issues.push('缺少「· 」分点，小红书至少 3 条具体信息');
+      else if (want >= 1200 && nDot < 6) issues.push('分点偏少：' + nDot + ' 条，' + want + ' 字的笔记至少要 6 条');
       if (!/#[^\s#]{1,12}/.test(body)) issues.push('缺少话题标签');
     }
     if (key === 'douyin') {
@@ -672,7 +728,9 @@ window.WJEngine = (function () {
     }
     if (p.sub) {
       var n = (body.match(/^## /gm) || []).length;
-      if (n < 2) issues.push('小标题不足：需要 2–3 个「## 」小标题');
+      var need = want >= 2400 ? 4 : 3;
+      if (n < Math.min(2, need - 1)) issues.push('小标题不足：需要 ' + need + ' 个左右的「## 」小标题');
+      else if (want >= 2400 && n < 3) issues.push('小标题不足：' + want + ' 字的长稿要分成 3–5 节');
     }
     if (key === 'coolapk') {
       if (!/(槽点|缺点|不足|问题也)/.test(body)) issues.push('没有写槽点，酷安读者只信有缺点的体验');
@@ -735,6 +793,10 @@ window.WJEngine = (function () {
     if (best < 0) return [s];
     var a = s.slice(0, best), b = s.slice(best + 1);
     if (/[指出表示认为称说介绍透露强调预计提到]$/.test(a)) return [s];
+    /* 冒号后面是解释，切开前半句就悬空了：「算了笔账：/ 如果良率…」 */
+    if (a.indexOf('：') > -1) return [s];
+    /* 时间状语不能单独成句：「2024 年 6 月。」后面没谓语 */
+    if (/\d+\s*[年月日号点时分]\s*$/.test(a)) return [s];
     if (/^(而|但|却|则|就|也|还|才|更|并|又|且|或|是)/.test(b)) return [s];
     return [a + '。', b];
   }
@@ -766,7 +828,7 @@ window.WJEngine = (function () {
   }
 
   function judgeLine(a, t1, t2, seed) {
-    var k2 = t2 || t1;
+    var k2 = (t2 && t2 !== t1) ? t2 : '';
     var k = Math.abs(seed || 0) % 3;
     if (a.tone === 'positive') {
       return ['对' + t1 + '来说，这是一次实打实的抬升，不是又一次概念炒作。',
@@ -777,6 +839,11 @@ window.WJEngine = (function () {
       return ['压力已经从' + t1 + '往上顶，' + k2 + '是第一个被挤压的环节。',
         '热闹是' + t1 + '的，代价最后还是要落到' + k2 + '上。',
         '这不是' + t1 + '一家的麻烦，' + k2 + '整条链路都得跟着调整。'][k];
+    }
+    if (!k2) {
+      return ['这件事的关键不在表面，往下还有一层。',
+        '把它放回时间线上看，变化才刚开始。',
+        t1 + '只是结果，原因在别处。'][k];
     }
     return ['决定走向的不是' + t1 + '本身，而是' + k2 + '。',
       '把' + t1 + '和' + k2 + '放在一起看，事情才清楚。',
@@ -857,6 +924,65 @@ window.WJEngine = (function () {
     return out;
   }
 
+  /* 一句值不值得留：数字、引语、因果、人物说话都加分。
+     以前按位置取前几句，5000 字的长稿永远只用开头，后面的料全废。 */
+  function infoScore(x) {
+    var t = String(x || '');
+    var sc = 0;
+    if (/\d/.test(t)) sc += 2.4;
+    if (/[“”「」]/.test(t)) sc += 1.6;
+    if (/(因为|由于|导致|所以|结果|原因|意味着|来源|此前|随后|之后|最终)/.test(t)) sc += 1.5;
+    if (/(表示|指出|称|说|认为|介绍|透露|回忆|解释|承认)/.test(t)) sc += 1.2;
+    if (/(记者|创始人|负责人|经理|教授|主任|工程师|用户|居民|工人|员工)/.test(t)) sc += 1.2;
+    if (t.length >= 18 && t.length <= 70) sc += 0.8;
+    if (t.length < 10) sc -= 1.2;
+    return sc;
+  }
+
+  /* 在一段里找连续 k 句、信息量最大的一块 */
+  function densest(list, k) {
+    if (!list.length) return [];
+    if (k >= list.length) return list.slice();
+    var best = -1e9, from = 0;
+    for (var i = 0; i + k <= list.length; i++) {
+      var sc = 0;
+      for (var j = i; j < i + k; j++) sc += infoScore(list[j]);
+      if (sc > best) { best = sc; from = i; }
+    }
+    return list.slice(from, from + k);
+  }
+
+  /* 按预算取料，同时保证覆盖全文：把句子切成分段，每段取最密的连续两三句。
+     只挑「最精彩的几句」会把人物来历和因果挑断，读起来就成了「某某说过什么」，
+     所以宁可每段连留两三句，也不隔句跳着摘。 */
+  function takeBlocks(list, k) {
+    if (!list || !list.length || k <= 0) return [];
+    if (k >= list.length) return list.slice();
+    var per = k >= 6 ? 3 : 2;
+    var parts = Math.max(1, Math.round(k / per));
+    var size = list.length / parts;
+    var out = [];
+    for (var i = 0; i < parts; i++) {
+      var from = Math.floor(i * size);
+      var to = (i === parts - 1) ? list.length : Math.floor((i + 1) * size);
+      var seg = list.slice(from, to);
+      if (!seg.length) continue;
+      var take = Math.min(per, Math.max(1, Math.round(k / parts)));
+      densest(seg, take).forEach(function (x) {
+        if (out.indexOf(x) < 0) out.push(x);
+      });
+    }
+    /* 还原成原文顺序，读者才不会觉得时间线被打乱 */
+    out.sort(function (a, b) { return list.indexOf(a) - list.indexOf(b); });
+    /* 「行业里的判断也在变。」这种总起句被摘到末尾，后面没有下文，读着像断了 */
+    while (out.length > 1) {
+      var last = stripPunct(out[out.length - 1]);
+      if (infoScore(out[out.length - 1]) < 0.4 || (last.length < 16 && !/\d/.test(last))) out.pop();
+      else break;
+    }
+    return out;
+  }
+
   function buildBody(style, sents, kws, ctx, opts) {
     var a = ctx.analysis || analyze(sents.join(''), sents, kws);
     var plan = ctx.plan || planFor(a, opts, style);
@@ -864,19 +990,27 @@ window.WJEngine = (function () {
     var t1 = pickTopic(kws);
     var t2 = secondTopic(kws, t1);
     if (!t2 || t2 === t1) t2 = (kws[1] && kws[1] !== t1) ? kws[1] : (kws[2] || t1);
+    /* 把整句标题当关键词，会拼出「把良率和一条光学模组产线的三年放在一起看」这种病句 */
+    if (t2 && (t2.length > 10 || /[，。、；]/.test(t2))) t2 = '';
     var catTags = (D.TAG_BY_CAT[opts.cat] || []).slice(0, 2);
     var center = a.center || sents[0] || '';
     var seed = Math.abs(ctx.seed || 0);
+    /* 目标字数换算成「写多少句、每句留多长」，所有结构共用 */
+    var budget = plan.budget || Math.max(4, Math.round((plan.target || 700) / 52));
+    var detailCap = plan.detail || 46;
     var written = [];
 
     var seenSent = {};
+    /* 长稿里 0.52 太狠：「周建国说」开头的两句本来就像，但讲的是两件事。
+       目标越长，阈值越松，只在几乎重复时才删。 */
+    var dupTh = (plan.target || 0) > 1500 ? 0.74 : (plan.target || 0) > 800 ? 0.62 : 0.52;
     function dedupe(list) {
       var keep = [];
       list.forEach(function (x) {
         if (!x || seenSent[x]) return;
         var dup = false;
         for (var i = 0; i < written.length; i++) {
-          if (similarity(x, written[i]) > 0.52) { dup = true; break; }
+          if (similarity(x, written[i]) > dupTh) { dup = true; break; }
         }
         if (dup) return;
         seenSent[x] = 1;
@@ -912,12 +1046,14 @@ window.WJEngine = (function () {
       }
       var facts = rest(sents, lead).filter(function (x) { return !isOpinion(x); });
       var ops = rest(sents, lead).filter(isOpinion);
-      groupN(facts, plat.para[1]).forEach(function (g) {
+      var perPara = Math.max(plat.para[1], Math.min(5, Math.round(budget / 14)));
+      groupN(takeBlocks(facts, Math.max(3, Math.round(budget * 0.85))), perPara).forEach(function (g) {
         var t = say(g);
         if (t) ro.push(t);
       });
-      if (ops.length) {
-        var o1 = say(ops.slice(0, 1));
+      var opsReal = ops.filter(function (x) { return stripPunct(x).length >= 14; });
+      if (opsReal.length) {
+        var o1 = say(opsReal.slice(0, 1));
         if (o1) ro.push(o1);
       }
       if (plat.name === '百家号' && a.nums.length) {
@@ -925,7 +1061,7 @@ window.WJEngine = (function () {
       }
       ro.push(plat.name === '百家号'
         ? '对普通读者来说，' + t1 + '的变化最终会体现在价格、选择和体验上，后续进展仍要看' + (t2 || '供给端') + '。'
-        : endLine(a, t1, t2, 'ask'));
+        : endLine(a, t1, t2, plan.target > 1500 ? '' : 'ask'));
       return varyOpeners(ro.filter(Boolean)).join('\n\n');
     }
 
@@ -944,19 +1080,22 @@ window.WJEngine = (function () {
       }
       var pool = rest(sents, eLead);
       var sec = [];
-      var cuts = [Math.ceil(pool.length * 0.4), Math.ceil(pool.length * 0.7)];
-      sec.push(pool.slice(0, cuts[0]));
-      sec.push(pool.slice(cuts[0], cuts[1]));
-      sec.push(pool.slice(cuts[1]));
+      /* 3000 字的长稿分三节，每节近千字，读着累；按字数给到四节 */
+      var nSec = plan.target >= 2400 ? 4 : 3;
+      for (var si = 0; si < nSec; si++) {
+        var f0 = Math.floor(pool.length * si / nSec);
+        var f1 = si === nSec - 1 ? pool.length : Math.floor(pool.length * (si + 1) / nSec);
+        sec.push(pool.slice(f0, f1));
+      }
 
       var heads = bili
-        ? ['一、' + t1 + '这次到底变了什么', '二、真正的分水岭是' + (t2 || '成本'), '三、普通人该关心什么']
-        : ['一、' + t1 + '到底发生了什么', '二、真正的变量在' + (t2 || '别处'), '三、接下来盯什么'];
+        ? ['一、' + t1 + '这次到底变了什么', '二、真正的分水岭是' + (t2 || '成本'), '三、普通人该关心什么', '四、还有什么没解决']
+        : ['一、' + t1 + '到底发生了什么', '二、真正的变量在' + (t2 || '别处'), '三、接下来盯什么', '四、还有什么没解决'];
       heads.forEach(function (h, i) {
         var g = sec[i] || [];
         if (!g.length) return;
         o.push('## ' + h);
-        var txt = deLead(say(g.slice(0, 5)));
+        var txt = deLead(say(takeBlocks(g, Math.max(2, Math.round(budget * 0.8 / 3)))));
         if (i === 1 && a.nums.length && /\d/.test(txt)) txt = txt.replace(/。$/, '') + '，这个数字是理解整件事的钥匙。';
         if (txt) o.push(txt);
         if (!bili && txt && txt.length < 130) {
@@ -988,19 +1127,28 @@ window.WJEngine = (function () {
       var hookSrc = (numHook ? numHook + '，' : '') + stripPunct(head) + '。';
       if (!/[。！？]$/.test(hookSrc)) hookSrc += '';
       n.push(hookSrc.replace(/。+$/, '。'));
+      /* 分点数量跟目标字数走：600 字给 3–4 条，2000 字给 8 条以上，
+         每条也可以用两三句把事说完整，而不是一句截断。 */
+      /* 条数按目标字数反推：一条分点大约 70 字，900 字给 12 条就够，
+         用 budget 推会多出一倍，整篇散掉。 */
+      var nPts = Math.max(3, Math.min(18, Math.round(plan.target / 75)));
+      var perPt = plan.target >= 2400 ? 4 : plan.target >= 1800 ? 3 : plan.target >= 900 ? 2 : 1;
+      var pool = rest(sents, center).filter(function (x) { return !isOpinion(x); });
+      var blocks = takeBlocks(pool, nPts * perPt);
       var pts = [];
-      var cand = rest(sents, center).slice().sort(function (x, y) {
-        return (/\d/.test(y) ? 1 : 0) - (/\d/.test(x) ? 1 : 0);
-      });
-      cand.forEach(function (x) {
-        if (pts.length >= 3) return;
-        if (isOpinion(x)) return;
-        if (!/\d|[一二三四五六七八九]|元|倍|小时|分钟|克|%/.test(x) && x.length < 18) return;
-        pts.push(x);
-      });
-      if (pts.length < 2) pts = pts.concat(cand.slice(0, 3 - pts.length));
-      pts.slice(0, 3).forEach(function (x) {
-        n.push('· ' + briefOf(deLead(transform(x, ctx)), 34).replace(/[。；]$/, '') + '。');
+      for (var bi = 0; bi < blocks.length && pts.length < nPts; bi += perPt) {
+        var grp = blocks.slice(bi, bi + perPt);
+        var txt = grp.map(function (x) { return deLead(transform(x, ctx)); }).join('');
+        if (stripPunct(txt).length < 8) continue;
+        pts.push(briefOf(txt, detailCap * perPt));
+      }
+      if (pts.length < 3) {
+        pool.slice(0, 3 - pts.length).forEach(function (x) {
+          pts.push(briefOf(deLead(transform(x, ctx)), detailCap));
+        });
+      }
+      pts.forEach(function (t) {
+        n.push('· ' + stripPunct(t) + '。');
       });
       var feel = a.tone === 'negative'
         ? '说真的，' + t1 + '这波热闹背后，先扛不住的往往是最底下的那批人。'
@@ -1027,7 +1175,7 @@ window.WJEngine = (function () {
           merged.push(t);
         }
       });
-      merged.slice(0, 7).forEach(function (t) {
+      takeBlocks(merged, Math.max(6, Math.min(22, budget))).forEach(function (t) {
         var q = stripPunct(t);
         /* 口播一句一口气：34 字以内整句念完；超了只在逗号处断，
            没有逗号就整句保留。以前按字数硬切，会切出「…千。」「元附近」。 */
@@ -1055,9 +1203,10 @@ window.WJEngine = (function () {
       var z = [];
       z.push('先说结论：' + stripPunct(center) + '。');
       var zs = rest(sents, center).filter(function (x) { return !isOpinion(x); });
-      var heads = ['第一，', '第二，', '第三，'];
-      zs.slice(0, 3).forEach(function (x, i) {
-        z.push(heads[i] + stripPunct(transform(x, ctx)) + '。');
+      var heads = ['第一，', '第二，', '第三，', '第四，', '第五，', '第六，', '第七，'];
+      var nArg = Math.max(3, Math.min(7, Math.round(budget * 0.34)));
+      takeBlocks(zs, nArg).forEach(function (x, i) {
+        z.push((heads[i] || ('第' + (i + 1) + '，')) + stripPunct(transform(x, ctx)) + '。');
       });
       if (a.nums.length > 1) {
         z.push('把' + a.nums.slice(0, 3).join('、') + '放在一起看，方向是一致的，单独拎一个数字容易误判。');
@@ -1079,7 +1228,8 @@ window.WJEngine = (function () {
       rv.push('先说结论：' + briefOf(center, 32) + '。' + (a.tone === 'negative'
         ? '东西不是不能买，是现在这个节点买不划算。'
         : '方向是对的，但别指望一步到位。'));
-      var pros = uniqList(pc.pos.filter(withNum).concat(pc.pos)).slice(0, 3);
+      var pros = uniqList(pc.pos.filter(withNum).concat(pc.pos))
+        .slice(0, Math.max(3, Math.min(8, Math.round(budget * 0.3))));
       if (pros.length < 2) {
         pros = pros.concat(uniqList(pc.mid).filter(function (x) {
           return !/(代价|问题|增加|增多|延长|压缩|下降|压力)/.test(x);
@@ -1088,18 +1238,29 @@ window.WJEngine = (function () {
       if (pros.length) {
         rv.push('值得肯定的地方：');
         pros.forEach(function (x, i) {
-          rv.push((i + 1) + '. ' + briefOf(deLead(transform(x, ctx)), 42) + '。');
+          rv.push((i + 1) + '. ' + briefOf(deLead(transform(x, ctx)), detailCap) + '。');
         });
       }
-      var cons = uniqList(pc.neg).slice(0, 2);
+      var cons = uniqList(pc.neg).slice(0, Math.max(2, Math.min(6, Math.round(budget * 0.2))));
       rv.push('槽点也摆出来：');
       if (cons.length) {
         cons.forEach(function (x) {
-          rv.push('· ' + briefOf(deLead(transform(x, ctx)), 42) + '。');
+          rv.push('· ' + briefOf(deLead(transform(x, ctx)), detailCap) + '。');
         });
       } else {
         rv.push('· 原文没给长期使用的数据，稳定性还得打个问号。');
         rv.push('· 价格是不是长期价、售后跟不跟得上，这两点也没交代。');
+      }
+      /* 目标字数明显超过「优点 + 槽点」能撑的量时，把中性的过程/背景
+         补进来，别让 2000 字的酷安稿只有 600 字。 */
+      if (plan.target > 1100) {
+        var mids = takeBlocks(uniqList(pc.mid), Math.max(3, Math.round(budget * 0.4)));
+        if (mids.length) {
+          rv.push('还有几点值得记一笔：');
+          mids.forEach(function (x) {
+            rv.push('· ' + briefOf(deLead(transform(x, ctx)), detailCap) + '。');
+          });
+        }
       }
       var isGoods = /(元|款|机型|配置|续航|性能|芯片|镜头|屏幕|克)/.test(center + sents.join(''));
       rv.push(isGoods
@@ -1124,11 +1285,11 @@ window.WJEngine = (function () {
           : '态度摆在这：先别急着站队，把几件事看清楚再说。');
       var obs = uniqList(rest(sents, center).filter(function (x) { return !isOpinion(x); }))
         .sort(function (x, y) { return (/\d/.test(y) ? 1 : 0) - (/\d/.test(x) ? 1 : 0); })
-        .slice(0, 3);
+        .slice(0, Math.max(3, Math.min(6, Math.round(budget * 0.36))));
       if (obs.length) {
         bz.push('几个具体观察：');
         obs.forEach(function (x) {
-          bz.push('· ' + briefOf(deLead(transform(x, ctx)), 38) + '。');
+          bz.push('· ' + briefOf(deLead(transform(x, ctx)), detailCap) + '。');
         });
       }
       var badPool = splitPC(rest(sents, center).filter(function (x) { return obs.indexOf(x) < 0; })).neg;
@@ -1338,6 +1499,11 @@ window.WJEngine = (function () {
     var core = trimCore(sents[0]);
     ctx.analysis = analyze(input, sents, kws);
     ctx.plan = planFor(ctx.analysis, opts, style);
+    /* 长稿句子多，同义替换的覆盖率会被稀释，重合率反而更高；
+       目标越长，替换密度给高一点，别让整段仍是原文的骨架。 */
+    if (ctx.plan.target > 1400) ctx.synProb = Math.min(0.62, ctx.synProb + 0.12);
+    /* 长稿里每三句一个「更关键的是」会很吵，拉开到五六句 */
+    ctx.connGap = ctx.plan.target > 2400 ? 7 : ctx.plan.target > 1400 ? 5 : 3;
     var body = humanize(buildBody(style, sents, kws, ctx, opts));
     var titles = buildTitles(style, kws, core, input, sents, opts.platform).filter(function (t, i, arr) {
       return t && arr.indexOf(t) === i;
@@ -1379,6 +1545,8 @@ window.WJEngine = (function () {
       score: score,
       dupes: dupes,
       words: countWords(body),
+      target: ctx.plan.target,
+      srcLen: ctx.plan.srcLen,
       sim: Math.round(overlap * 100),
       style: style,
       strength: strength,
@@ -2050,6 +2218,8 @@ window.WJEngine = (function () {
     platformBrief: platformBrief,
     platformHint: platformHint,
     platformCheck: platformCheck,
+    autoWords: autoWords,
+    lenTip: lenTip,
     platTags: platTags
   };
 })();

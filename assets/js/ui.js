@@ -382,6 +382,14 @@ window.WJUI = (function () {
     h += '<div class="sec-sub" style="margin-top:8px;line-height:1.6">' +
       esc(window.WJEngine.platformHint(c.platform)) + '</div></div>';
 
+    /* 目标字数：用户定，不让平台替他决定 */
+    var lenTipText = window.WJEngine.lenTip(c.text1, c.words);
+    h += '<div class="sec"><div class="sec-head"><div class="h2" style="font-size:15px">目标字数</div>' +
+      '<span class="sec-sub" data-lentip>' + esc(lenTipText) + '</span></div>';
+    h += '<div class="hscroll">' + D.LENGTHS.map(function (l) {
+      return '<button class="chip' + (Number(c.words) === l.key ? ' on' : '') + '" data-act="words" data-words="' + l.key + '">' + esc(l.name) + '</button>';
+    }).join('') + '</div></div>';
+
     /* 高级 */
     h += '<div class="sec"><button class="row" data-act="toggle-adv" style="border-radius:var(--r-m);border:1px solid var(--line);background:var(--surface)">' +
       '<span class="ri">' + ic('settings', 15) + '</span>' +
@@ -533,12 +541,20 @@ window.WJUI = (function () {
     }
 
     h += '<div class="metrics">' +
-      '<div class="metric"><div class="k">字数</div><div class="v">' + r.words + '</div></div>' +
+      '<div class="metric"><div class="k">字数</div><div class="v">' + r.words +
+        (r.target ? '<small>/' + r.target + '</small>' : '') + '</div></div>' +
       '<div class="metric"><div class="k">重合率</div><div class="v">' + (r.sim || 0) + '<small>%</small></div></div>' +
       '<div class="metric"><div class="k">重复句</div><div class="v">' + (r.dupes || 0) + '</div></div></div>';
 
     h += '<div style="display:flex;align-items:center;gap:8px;margin-top:18px">' +
       '<span class="badge ai">AI 生成</span><span class="sec-sub">' + esc(r.styleName) + ' · ' + esc(r.platformName) + ' · ' + esc(r.modelName || '本机引擎') + '</span></div>';
+    if (r.srcLen && r.target) {
+      var keep = Math.round(r.words / Math.max(1, r.srcLen) * 100);
+      var aim = '目标 ' + r.target + ' 字';
+      if (r.want && r.want > r.target * 1.05) aim = '选了 ' + r.want + ' 字，原文只够 ' + r.target + ' 字';
+      h += '<div class="sec-sub" style="margin-top:6px">原文 ' + r.srcLen + ' 字 · ' + aim +
+        ' · 实际保留 ' + keep + '%（人物、时间线、因果不删）</div>';
+    }
     if (r.selfCheck) {
       h += '<div class="sec-sub" style="margin-top:6px">' + esc(r.selfCheck) + '</div>';
     }
