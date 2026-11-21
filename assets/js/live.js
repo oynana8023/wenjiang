@@ -335,7 +335,7 @@ window.WJLive = (function () {
   function hasServer() {
     if (!serverProbe) {
       /* 纯静态托管上必然没有 /api/health，别去讨一个 404 */
-      if (/\.github\.io$|\.pages\.dev$|\.netlify\.app$|\.vercel\.app$/.test(location.hostname)) {
+      if (location.protocol === 'file:' || /\.github\.io$|\.pages\.dev$|\.netlify\.app$|\.vercel\.app$/.test(location.hostname)) {
         serverProbe = Promise.resolve(false);
         return serverProbe;
       }
@@ -527,10 +527,14 @@ window.WJLive = (function () {
   /* 公共代理只当最后的兜底。公开服务这两年收缩得很厉害，能通的越来越少，
      所以主力必须是自己的服务端（云端实例 / 自建 Worker / VPS）。
      每条通道单独限时，失败不影响下一条；全部失败时把每条的原因摊开给用户看 */
-  /* 2026-11 实测：codetabs / allorigins / r.jina.ai 三个都在国内直接超时（沙盒与手机都一样），
-     留在链路里只会让一次失败拖到 22 秒，还把「通道全挂」的锅甩给用户。
-     所以默认清空。真要加，只加自己部署过的、确认能在手机上通的地址。 */
-  var PROXIES = [];
+  /* 公共阅读器只当兜底：它们不是我们控制的，随时可能限流或下线，
+     但「一条都没有」比「有几条可能通」更糟。全部并发、各自 10 秒硬超时，
+     谁先回来用谁，失败不拖累别的通道。 */
+  var PROXIES = [
+    { id: 'jina', label: '公共阅读器', text: true, wrap: function (u) { return 'https://r.jina.ai/' + u; } },
+    { id: 'allorigins', label: '公共代理 A', wrap: function (u) { return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u); } },
+    { id: 'codetabs', label: '公共代理 B', wrap: function (u) { return 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u); } }
+  ];
 
   /* 把底层错误翻译成人话：502 是解析服务掉线，abort 是超时，Failed to fetch 多半被网络拦了 */
   function errMsg(e) {
@@ -683,27 +687,101 @@ window.WJLive = (function () {
     try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
   }
 
-  /* 话题下的帖子清单（二级页面）。微博走 m.weibo.cn 的搜索接口，其余源没有公开列表。 */
-  async function posts(src, title, n) {
+  /* 话题下的帖子清单（二级页面）。
+     两条路：配了解析服务就实时读；没配就读 data/topics.json —— 那份文件由
+     GitHub Action 每 15 分钟在服务器上抓一次（浏览器抓不了，微博/头条都不给
+     CORS 头），同目录读取没有跨域问题，所以「点开就有内容」不依赖任何配置。 */
+  var TP_SNAP = 'data/hot.json';
+  var tpMem = null;
+
+  async function topicSnapshot() {
+    if (tpMem && Date.now() - tpMem.at < 4 * 60000) return tpMem.data;
+    var d = null;
+    /* 话题和热榜在同一份文件里（Action 只提交这一个文件），先读它的 topics 字段 */
+    try {
+      var raw = await getJSON(withShare(TP_SNAP + '?t=' + Math.floor(Date.now() / 300000)), 6000);
+      if (raw && raw.topics) d = raw.topics;
+    } catch (e) { /* 本地文件 / 还没生成 */ }
+    if (!d || (!d.weibo && !d.toutiao)) {
+      try {
+        d = await getJSON(withShare('data/topics.json?t=' + Math.floor(Date.now() / 300000)), 4000);
+      } catch (e) { /* 兼容旧文件 */ }
+    }
+    if (!d || typeof d !== 'object') {
+      try { d = JSON.parse(localStorage.getItem('wj.topics.snap') || 'null'); } catch (e2) { d = null; }
+    }
+    /* 双击打开的单文件（file://）读不到同目录文件，用构建时内联的那一份 */
+    if ((!d || (!d.weibo && !d.toutiao)) && typeof window !== 'undefined') {
+      if (window.__WJ_SNAP__ && window.__WJ_SNAP__.topics) d = window.__WJ_SNAP__.topics;
+      else if (window.__WJ_TOPICS__) d = window.__WJ_TOPICS__;
+    }
+    if (d && (d.weibo || d.toutiao)) {
+      tpMem = { at: Date.now(), data: d };
+      try { localStorage.setItem('wj.topics.snap', JSON.stringify(d)); } catch (e3) { /* 配额满了就算了 */ }
+      return d;
+    }
+    return { weibo: {}, toutiao: {}, updatedAt: '' };
+  }
+
+  /* 头条的链接长这样：/trending/7710490430710776329/?... —— 数字就是话题 id */
+  function topicId(url) {
+    var m = String(url || '').match(/\/trending\/(\d{8,})/);
+    return m ? m[1] : '';
+  }
+
+  function pickTopic(snap, src, title, id) {
+    if (!snap) return null;
+    if (src === 'toutiao') {
+      if (id && snap.toutiao && snap.toutiao[id]) return snap.toutiao[id];
+      var t = String(title || '').trim();
+      if (t && snap.toutiao) {
+        var hit = Object.keys(snap.toutiao).filter(function (k) { return snap.toutiao[k].title === t; })[0];
+        if (hit) return snap.toutiao[hit];
+      }
+      return null;
+    }
+    var key = String(title || '').replace(/^#+|#+$/g, '').trim();
+    var all = (snap.weibo || {});
+    if (all[key]) return all[key];
+    var loose = Object.keys(all).filter(function (k) {
+      return k && (k.indexOf(key) > -1 || key.indexOf(k) > -1);
+    })[0];
+    return loose ? all[loose] : null;
+  }
+
+  async function topic(src, id, title, n) {
     var bases = parseBases();
-    if (!bases.length) throw new Error('没有配置解析服务');
-    var lastErr = null;
+    /* 自己就跑在解析服务上（本地 node / 自建实例）：同源接口优先，别绕公网 */
+    if (await hasServer()) bases = [''].concat(bases);
+    var liveErr = null;
     for (var i = 0; i < bases.length; i += 1) {
       try {
-        var d = await getJSON(apiUrl(bases[i], '/api/posts', { src: src || 'weibo', title: title, n: n || 12 }), 20000);
-        if (!d) throw new Error('返回为空');
-        if (!d.ok) {
-          var e = new Error(d.error || '取不到帖子列表');
-          e.code = d.code || '';
-          throw e;
-        }
-        return d.items || [];
-      } catch (e) {
-        lastErr = e;
-      }
+        var d = await getJSON(apiUrl(bases[i], '/api/topic', { src: src || 'weibo', id: id || '', title: title || '', n: n || 12 }), 20000);
+        if (d && d.ok) return { items: d.items || [], header: d.header || null, via: 'live', at: Date.now() };
+        if (d && d.error) liveErr = new Error(d.error);
+      } catch (e) { liveErr = e; }
     }
-    throw lastErr || new Error('取不到帖子列表');
+    var snap = await topicSnapshot();
+    var hit = pickTopic(snap, src, title, id);
+    if (hit && ((hit.items && hit.items.length) || hit.banner)) {
+      return {
+        items: (hit.items || []).slice(0, n || 12),
+        header: { title: hit.title || title, banner: hit.banner || '', readCount: hit.readCount || 0, talkCount: hit.talkCount || 0 },
+        via: 'snapshot',
+        at: hit.at || (snap.updatedAt ? new Date(snap.updatedAt).getTime() : 0)
+      };
+    }
+    if (liveErr) throw liveErr;
+    var e2 = new Error('没有配置解析服务');
+    e2.code = 'NO_RELAY';
+    throw e2;
   }
+
+  async function posts(src, title, n, id) {
+    var t = await topic(src, id, title, n);
+    return t.items || [];
+  }
+
 
   /* 新浪图床不认没有 referer 的请求，浏览器直接 <img> 会 403，走解析服务转一次 */
   function imgUrl(u) {
@@ -712,7 +790,7 @@ window.WJLive = (function () {
     if (!/sinaimg\.cn|weibocdn\.com|sina\.com\.cn/i.test(s)) return s;
     var h = (typeof location !== 'undefined' && location.hostname) || '';
     /* 页面本身就跑在解析服务上（localhost / 自建域名）：同源转发，别绕公网 */
-    if (/^(localhost|127\.|0\.0\.0\.0|\[::1\])$/.test(h)) {
+    if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])$/.test(h)) {
       return (location.origin || '') + '/api/img?u=' + encodeURIComponent(s);
     }
     var bases = parseBases();
@@ -842,7 +920,8 @@ window.WJLive = (function () {
     var serverOnly = tasks.filter(function (t) { return t.via === 'cloud' || t.via === 'server'; });
 
     try {
-      return await attempt(tasks, 20000);
+      /* 没配自己的服务时，公共线路给 12 秒就够了：再等下去只是让用户干瞪眼 */
+      return await attempt(tasks, bases.length ? 20000 : 9000);
     } catch (e0) {
       /* 被标记「不通」的地址再给一次机会：可能刚换了网络 */
       if (spare.length) {
@@ -876,6 +955,14 @@ window.WJLive = (function () {
       err.detail = (e0 && e0.detail) || (e0 && e0.message);
       err.title = (e0 && e0.title) || titleHint;
       err.code = (e0 && e0.code) || '';
+      /* 没配解析服务、公共线路也没通：这不是「链接坏了」，别让用户以为内容没了 */
+      if (!bases.length) {
+        err.code = 'NO_CHANNEL';
+        err.message = '公共线路这次都没通，正文没取到';
+        err.detail = '浏览器不能直接读别人的网页（跨域限制），公共阅读器也常常限流。\n' +
+          '配一台自己的解析服务最稳（我的 → 解析服务 → 一键部署，约 3 分钟），' +
+          '或者直接把正文粘进来，改写效果一样。';
+      }
       /* 竞速层会把多个通道的失败拼成 detail，code 在这一层丢了，只能从文字里认 */
       if (!err.code && /已经失效|内容不存在|已被删除|分享链接过期/.test(String(err.detail || ''))) {
         err.code = 'DEAD';
@@ -917,6 +1004,8 @@ window.WJLive = (function () {
       }
     }
     if (!p) p = '/v1';
+    /* 少数聚合站把 OpenAI 兼容端点挂在 /openai 这类非版本路径上，补 /v1 反而 404 */
+    else if (/(^|\.)text\.pollinations\.ai$/i.test(u.hostname)) p = p;
     else if (!/\/v\d+$/.test(p)) p += '/v1';
     return u.origin + p;
   }
@@ -929,6 +1018,8 @@ window.WJLive = (function () {
 
   /* ---------------- 常用服务商预设 ---------------- */
   var PRESETS = [
+    { key: 'free', name: '内置免费通道', base: 'https://text.pollinations.ai/openai', tip: '不用注册、不用填 Key，点一下就能写', free: true, presetKey: '', models: ['openai-fast'] },
+    { key: 'polli', name: '内置免费 · 备线', base: 'https://api.llm7.io/v1', tip: '第二备线，主通道忙时自动切过去；Key 固定填 unused', free: true, presetKey: 'unused', models: ['gpt-oss:20b', 'gemma-3-27b'] },
     { key: 'zhipu', name: '智谱 GLM', base: 'https://open.bigmodel.cn/api/paas/v4', tip: 'glm-4-flash / glm-4v-flash 等免费模型' },
     { key: 'deepseek', name: 'DeepSeek', base: 'https://api.deepseek.com/v1', tip: 'deepseek-chat 便宜、中文稳' },
     { key: 'siliconflow', name: '硅基流动', base: 'https://api.siliconflow.cn/v1', tip: '聚合国产开源模型，有免费额度' },
@@ -1593,6 +1684,9 @@ window.WJLive = (function () {
     hostOf: hostOf,
     hasServer: hasServer,
     posts: posts,
+    topic: topic,
+    topicId: topicId,
+    topicSnapshot: topicSnapshot,
     imgUrl: imgUrl,
     listModels: listModels,
     testModel: testModel,

@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI, C = window.WJCreate;
 
-  var VERSION = 'v2.13.0';
+  var VERSION = 'v2.14.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -1094,14 +1094,15 @@
   function paintCover(head, srcId, reason) {
     var slot = document.getElementById('hotCover');
     if (!slot) return;
-    var ph = function () { slot.innerHTML = coverPlaceholder(srcId, reason || '原文没有可用的头图'); };
+    /* 没图就留白——不是留一块白底占位。用户要的是「没有就不显示」。 */
+    var ph = function () { slot.innerHTML = ''; };
     if (!head) return ph();
     var probe = new Image();
     /* 新浪图床认 Referer：带本站 referer 会 403，置空才给图 */
     probe.referrerPolicy = 'no-referrer';
     probe.onload = function () {
       /* 不少站点的 og:image 指向 1px 占位图，尺寸不够宁可不显示 */
-      if (probe.naturalWidth < 400 || probe.naturalHeight < 200) return ph();
+      if (probe.naturalWidth < 300 || probe.naturalHeight < 150) return ph();
       var ratio = probe.naturalHeight / Math.max(1, probe.naturalWidth);
       /* 竖图（榜单话题卡、抖音封面）用模糊底衬完整图，避免被 16:9 裁掉标题 */
       var cls = ratio > 1.08 ? 'hot-cover fit' : 'hot-cover';
@@ -1155,109 +1156,50 @@
      热搜给的是一个话题，话题下面是几十条不同人发的帖子。把几条帖子各截一半
      拼成素材，二创必然跑偏。所以这里先列出帖子，让用户挑一条完整的再解析。 */
 
-  function topicPostHtml(p) {
-    var imgs = (p.images || []).slice(0, 3).map(function (u) {
-      return '<img src="' + esc(L.imgUrl(u)) + '" alt="" loading="lazy">';
-    }).join('');
-    var head = '<div class="tp-head"><span class="tp-a">@' + esc(p.author || '博主') + '</span>' +
-      '<span class="tp-m">' + p.chars + ' 字' +
-      (p.images && p.images.length ? ' · ' + p.images.length + ' 图' : '') +
-      (p.long ? ' · 已补全文' : '') + '</span></div>';
-    return '<div class="tp" data-act="post-open" data-url="' + esc(p.url) + '" data-title="' + esc(String(p.text || '').slice(0, 30)) + '">' +
-      head +
-      '<div class="tp-t">' + esc(String(p.text || '').slice(0, 150)) + (String(p.text || '').length > 150 ? '…' : '') + '</div>' +
-      (imgs ? '<div class="tp-imgs">' + imgs + '</div>' : '') +
-      '<div class="tp-go">解析这条 · 只用它写 ' + U.ic('right', 13) + '</div></div>';
-  }
-
-  function topicBoxHtml(items, all, title) {
-    var show = all ? items.length : 4;
-    var rows = items.slice(0, show).map(topicPostHtml).join('');
-    return '<div class="topic-head"><span class="h2" style="font-size:14px">话题下的原文</span>' +
-      '<span class="sec-sub">' + (items.length ? '共 ' + items.length + ' 条，挑一条完整的' : '暂无') + '</span></div>' +
-      rows +
-      (!all && items.length > show
-        ? '<button class="btn btn-soft btn-block mt-s" data-act="topic-all" data-title="' + esc(title) + '">查看全部 ' + items.length + ' 条</button>'
-        : '');
-  }
-
-  async function loadTopicPosts(title, all) {
-    var box = document.getElementById('topicBox');
-    if (!box || !title) return;
-    box.innerHTML = '<div class="topic-head"><span class="h2" style="font-size:14px">话题下的原文</span>' +
-      '<span class="sec-sub"><span class="spin"></span> 正在取…</span></div>' +
-      '<div class="sk" style="height:52px;border-radius:10px;margin-bottom:8px"></div>' +
-      '<div class="sk" style="height:52px;border-radius:10px"></div>';
-    try {
-      var items = await L.posts('weibo', title, all ? 20 : 8);
-      if (!items.length) throw new Error('empty');
-      box.innerHTML = topicBoxHtml(items, all, title);
-    } catch (e) {
-      box.innerHTML = '<div class="note mt-s">' + U.ic('info', 14) +
-        '<div>这个话题下暂时取不到帖子列表（接口限流，或这个话题没有公开博文）。可以直接点下面「仍然试一次」，或者复制标题去搜。</div></div>';
-    }
-  }
-
-  function openTopicSheet(title) {
-    openSheet(
-      '<div id="topicBox"><div class="topic-head"><span class="h2" style="font-size:14px">话题下的原文</span>' +
-      '<span class="sec-sub"><span class="spin"></span> 正在取…</span></div></div>',
-      { title: '#' + title + '#', foot: '' }
-    );
-    loadTopicPosts(title, true);
-  }
-
   function openHotItem(srcId, i) {
     var s = state.hot.bySrc[srcId];
     if (!s || !s.items || !s.items[i]) return;
     var it = s.items[i];
     var url = it.url || '';
     var kind = L.urlKind(url);
+    var host = L.hostOf(url);
     var isSearch = kind === 'search';
     var isBlocked = kind === 'blocked';
-    /* 百度的「搜索页」里其实带了大图（内嵌 JSON 的 poster），微博/抖音的搜索页要登录或纯前端渲染，取不到 */
-    var isBaidu = /(^|\.)baidu\.com$/.test(L.hostOf(url));
-    var canMeta = !!url && (!isSearch || isBaidu);
-    /* 搜索页 / 强风控站点：正文页拿不到图，还可以回头问榜单要官方封面 */
-    var canCover = !!url && !isBaidu && (isSearch || isBlocked);
-    /* 微博话题页：下面就是帖子清单，每条自带配图，不必再占一块大图 */
-    var isTopicEarly = !!url && srcId === 'weibo' && isSearch;
-    var willTry = !isTopicEarly && (canMeta || canCover);
+    /* 「话题」和「文章」是两种东西：
+       - 微博热搜给的是 s.weibo.com 的话题页，下面是一堆博文；
+       - 头条热榜给的是 /trending/{id}/，下面是一堆微头条。
+       这两种都要二级页；只有真正的文章页才去抓正文。 */
+    var tid = srcId === 'toutiao' ? L.topicId(url) : '';
+    var isTopic = (srcId === 'weibo' && isSearch) || (srcId === 'toutiao' && !!tid);
+    var isBaidu = /(^|\.)baidu\.com$/.test(host);
+    var canMeta = !!url && !isTopic && (!isSearch || isBaidu);
 
     var cat = U.catOf(it.title, srcId);
     var stamp = s.at ? U.fmtTime(s.at) : '';
     var when = stamp ? '上榜 ' + stamp : '';
 
-    var html = (isTopicEarly ? '' : '<div id="hotCover">' +
-      (willTry
-        ? '<div class="hot-cover sk' + (isSearch ? ' slim' : '') + '"></div>'
-        : coverPlaceholder(srcId, isSearch ? '这个榜单没有配图' : '没有原文链接，无配图')) +
-      '</div>') +
+    /* 封面不再占位：拿不到图就整个不显示，免得一片白 */
+    var html = '<div id="hotCover"></div>' +
       '<h2 style="font-size:18px;line-height:1.45;font-weight:640;letter-spacing:-.02em;margin:12px 0 9px">' + esc(it.title) + '</h2>' +
       '<div id="hotMeta">' + metaChips(cat, when, it.hot, '') + '</div>';
 
-    /* 微博热搜点进来的是话题页：帖子清单放在最前面，挑一条完整的再解析 */
-    if (url && srcId === 'weibo' && isSearch) {
+    if (isTopic) {
       html += '<div id="topicBox" class="topic-box"><div class="topic-head">' +
-        '<span class="h2" style="font-size:14px">话题下的原文</span>' +
+        '<span class="h2" style="font-size:14px">' + (srcId === 'toutiao' ? '话题下的内容' : '话题下的原文') + '</span>' +
         '<span class="sec-sub"><span class="spin"></span> 正在取…</span></div></div>';
-    }
-
-    var isTopic = !!url && srcId === 'weibo' && isSearch;
-
-    if (url && !isTopic) {
+    } else if (url) {
       html += '<div class="field mt-m"><div class="field-head"><span class="lbl">' +
         (isSearch ? '榜单页' : '原文链接') + '</span>' +
-        '<span class="sec-sub">' + esc(L.hostOf(url)) + '</span></div>' +
+        '<span class="sec-sub">' + esc(host) + '</span></div>' +
         '<div class="urlbox" data-url="' + esc(url) + '">' + esc(url) + '</div></div>';
       html += isSearch
         ? '<div class="note mt-s">' + U.ic('info', 14) +
-          '<div>这个榜单给的是<b>搜索页</b>，不是文章正文。想看全文，点「打开链接」或把标题复制去搜。</div></div>'
+          '<div>这个榜单只给了一个搜索页，没有正文。可以打开链接在浏览器里看，或者复制标题去搜。</div></div>'
         : isBlocked
           ? '<div class="note mt-s">' + U.ic('info', 14) +
-            '<div>这个站点对非浏览器访问有<b>强风控</b>（知乎、B站、36氪、头条热搜都这样），解析基本取不到正文。建议点「打开链接」在浏览器里读，复制正文后粘到创作页，效果一样。</div></div>'
+            '<div>这个站点对非浏览器访问有<b>强风控</b>（知乎、B站、36氪都这样）。点「打开链接」读原文，复制正文粘到创作页，改写效果一样。</div></div>'
           : '';
-    } else if (!url) {
+    } else {
       html += '<div class="note mt-m">' + U.ic('info', 14) +
         '<div>这个源只提供标题，没有原文链接。可以复制标题去搜，或者直接用它当选题自己写。</div></div>';
     }
@@ -1268,6 +1210,8 @@
         '<button class="btn btn-soft" data-act="open-url" data-url="' + esc(url) + '">' + U.ic('external', 15) + ' 打开话题页</button>' +
         '<button class="btn btn-soft" data-act="copy" data-text="' + esc(it.title) + '">' + U.ic('copy', 15) + ' 复制标题</button>' +
         '</div>';
+      foot += '<button class="btn btn-soft btn-block" data-act="hot-write" data-src="' + srcId + '" data-i="' + i + '">' +
+        U.ic('edit', 15) + ' 用这个选题自己写</button>';
     } else {
       if (url && !isBlocked) {
         foot += '<button class="btn btn-primary btn-block" data-act="hot-parse" data-url="' + esc(url) + '" data-title="' + esc(it.title) + '">' +
@@ -1288,11 +1232,102 @@
       foot += '<button class="btn btn-ghost btn-block" data-act="copy" data-text="' + esc(it.title) + '">复制标题</button>';
     }
 
+    lastTopic = { src: srcId, title: it.title, id: tid, url: url };
     openSheet(html, { title: '这条热榜', foot: foot });
-    if (url && srcId === 'weibo' && isSearch) loadTopicPosts(it.title, false);
-    if (isTopicEarly) { /* 话题页不画封面 */ }
+    if (isTopic) loadTopic(srcId, it.title, tid, url);
     else if (canMeta) fillHotMeta(url, srcId, it, cat);
-    else if (canCover) coverFallback(srcId, it.title, isSearch ? '这个榜单没有配图' : '这个站点没有可用的头图');
+  }
+
+  /* ---------------- 话题二级页 ----------------
+     数据来自两处：配了解析服务就实时读；没配就读 Action 每 15 分钟生成的
+     data/topics.json（同目录，不存在跨域）。所以点开一定有东西，不再是空白框。 */
+  function topicPostHtml(p, idx) {
+    var imgs = (p.images || []).slice(0, 3);
+    var pics = imgs.map(function (u) {
+      return '<img src="' + esc(L.imgUrl(u)) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">';
+    }).join('');
+    var meta = [];
+    if (p.at) meta.push(fmtPublished(p.at) || U.fmtTime(p.at));
+    if (p.likes) meta.push('赞 ' + U.fmtHot(p.likes));
+    if (p.comments) meta.push('评 ' + U.fmtHot(p.comments));
+    var av = p.avatar
+      ? '<img class="tp-av" src="' + esc(L.imgUrl(p.avatar)) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">'
+      : '<span class="tp-av tp-av-t">' + esc(String(p.author || '网').slice(0, 1)) + '</span>';
+    return '<div class="tp" data-act="post-view" data-idx="' + idx + '">' +
+      '<div class="tp-head">' + av +
+      '<span class="tp-a">' + esc(p.author || '网友') + '</span>' +
+      '<span class="tp-m">' + esc(meta.join(' · ')) + '</span></div>' +
+      '<div class="tp-t">' + esc(String(p.text || '').replace(/\s+/g, ' ').slice(0, 140)) +
+      (String(p.text || '').length > 140 ? '…' : '') + '</div>' +
+      (pics ? '<div class="tp-imgs' + (imgs.length === 1 ? ' one' : '') + '">' + pics + '</div>' : '') +
+      '<div class="tp-go">用这条写 ' + U.ic('right', 13) + '</div></div>';
+  }
+
+  function topicBoxHtml(t, all) {
+    var items = t.items || [];
+    var show = all ? items.length : 5;
+    var rows = items.slice(0, show).map(topicPostHtml).join('');
+    var via = t.via === 'snapshot'
+      ? '快照 · ' + (t.at ? U.fmtTime(new Date(t.at).toISOString()) : '稍早')
+      : '实时';
+    var head = (t.header && t.header.banner)
+      ? '<div class="topic-cover"><img src="' + esc(L.imgUrl(t.header.banner)) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></div>'
+      : '';
+    var nums = t.header && (t.header.readCount || t.header.talkCount)
+      ? '<div class="topic-nums">阅读 ' + U.fmtHot(t.header.readCount) + ' · 讨论 ' + U.fmtHot(t.header.talkCount) + '</div>'
+      : '';
+    return head + '<div class="topic-head"><span class="h2" style="font-size:14px">' +
+      (items.length ? '大家在这个话题下发的' : '这个话题还没有公开内容') + '</span>' +
+      '<span class="sec-sub">' + (items.length ? items.length + ' 条 · ' + via : via) + '</span></div>' + nums + rows +
+      (!all && items.length > show
+        ? '<button class="btn btn-soft btn-block mt-s" data-act="topic-all">查看全部 ' + items.length + ' 条</button>'
+        : '');
+  }
+
+  function openPostSheet(p) {
+    if (!p) return;
+    var idx = (topicCache.data.items || []).indexOf(p);
+    var meta = [];
+    if (p.author) meta.push('@' + p.author);
+    if (p.at) meta.push(fmtPublished(p.at) || U.fmtTime(p.at));
+    if (p.likes) meta.push('赞 ' + U.fmtHot(p.likes));
+    if (p.comments) meta.push('评 ' + U.fmtHot(p.comments));
+    var pics = (p.images || []).map(function (u) {
+      return '<img src="' + esc(L.imgUrl(u)) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">';
+    }).join('');
+    var html = '<div class="pv-meta">' + esc(meta.join(' · ')) + '</div>' +
+      '<div class="pv-text">' + esc(String(p.text || '')).replace(/\n/g, '<br>') + '</div>' +
+      (pics ? '<div class="pv-imgs">' + pics + '</div>' : '');
+    var foot = '<button class="btn btn-primary btn-block" data-act="post-write" data-idx="' + (idx > -1 ? idx : 0) + '">' +
+      U.ic('wand', 16) + ' 用这条写</button>' +
+      (p.url ? '<button class="btn btn-soft btn-block" data-act="open-url" data-url="' + esc(p.url) + '">' + U.ic('external', 15) + ' 打开原帖</button>' : '') +
+      '<button class="btn btn-ghost btn-block" data-act="copy" data-text="' + esc(String(p.text || '')) + '">复制这段文字</button>';
+    openSheet(html, { title: '这条帖子', foot: foot });
+  }
+
+  var topicCache = { src: '', title: '', id: '', data: null };
+  var lastTopic = { src: '', title: '', id: '', url: '' };
+
+  async function loadTopic(srcId, title, id, url, all) {
+    var box = document.getElementById('topicBox');
+    if (!box) return;
+    box.innerHTML = '<div class="topic-head"><span class="h2" style="font-size:14px">正在取话题内容</span>' +
+      '<span class="sec-sub"><span class="spin"></span> 稍等</span></div>' +
+      '<div class="sk" style="height:56px;border-radius:10px;margin-bottom:8px"></div>' +
+      '<div class="sk" style="height:56px;border-radius:10px"></div>';
+    try {
+      var t = topicCache.data && topicCache.src === srcId && topicCache.title === title
+        ? topicCache.data
+        : await L.topic(srcId, id || L.topicId(url), title, 20);
+      topicCache = { src: srcId, title: title, id: id, data: t };
+      box.innerHTML = topicBoxHtml(t, all);
+    } catch (e) {
+      var hint = e && e.code === 'NO_RELAY'
+        ? '这个话题下的内容要从服务器抓（微博、头条都不给浏览器跨域权限）。到「我的 → 解析服务」配一台就行，配好这里会自动变成实时。'
+        : '这次没取到：' + ((e && e.message) || '接口没响应') + '。可以直接打开话题页看，或者用标题自己写。';
+      box.innerHTML = '<div class="note mt-s">' + U.ic('info', 14) + '<div>' + esc(hint) + '</div></div>' +
+        '<button class="btn btn-soft btn-block mt-s" data-act="topic-retry">再试一次</button>';
+    }
   }
 
   /* 额度 */
@@ -1373,6 +1408,44 @@
       '</div></div>';
   }
 
+  /* 内置免费通道：不注册、不填 Key、装上就能写。
+     主通道 LLM7（OpenAI 兼容，匿名 Key 用 unused），备线 Pollinations。
+     两个都支持浏览器直连，不需要任何中转。 */
+  var FREE_PROVIDERS = [
+    { name: '内置免费通道', base: 'https://text.pollinations.ai/openai', key: '', models: ['openai-fast'] },
+    { name: '内置免费备线', base: 'https://api.llm7.io/v1', key: 'unused', models: ['gpt-oss:20b', 'gemma-3-27b'] }
+  ];
+
+  function ensureFreeProviders() {
+    var ps = providers();
+    var added = [];
+    FREE_PROVIDERS.forEach(function (f) {
+      var nb = L.normBase(f.base);
+      if (ps.some(function (p) { return L.normBase(p.base) === nb; })) return;
+      var models = f.models.map(function (id) {
+        var a = L.annotate(id, { free: true });
+        return { id: id, kind: a.kind, tags: a.tags, family: a.family, good: a.good, free: true, owned: '', status: '' };
+      });
+      var p = {
+        id: uid(),
+        name: f.name,
+        base: f.base,
+        key: f.key,
+        model: f.models[0],
+        imageModel: '',
+        models: models,
+        imgNote: ''
+      };
+      ps.push(p);
+      added.push(p);
+    });
+    if (added.length) {
+      if (!state.settings.activeId) state.settings.activeId = added[0].id;
+      save();
+    }
+    return added;
+  }
+
   function openModelSheet() {
     var ps = providers();
     var act = activeProvider();
@@ -1383,7 +1456,9 @@
       html += '<div class="provs mt-m">' + ps.map(providerCard).join('') + '</div>';
     } else {
       html += '<div class="note mt-m">' + U.ic('cpu', 14) +
-        '<div>还没接服务商。接上以后，改写用你自己的额度，生成的稿子质量比本机引擎高一个档。</div></div>';
+        '<div>还没接服务商。不想折腾 Key 的话，先用<b>内置免费通道</b>：不注册、不填 Key，点一下就能写。' +
+        '以后想用更好的模型，再加自己的服务商，随时切换。</div></div>' +
+        '<button class="btn btn-primary btn-block mt-m" data-act="free-provider">' + U.ic('zap', 16) + ' 一键启用内置免费通道</button>';
     }
 
     html += '<button class="btn btn-soft btn-block mt-m" data-act="provider-add">' +
@@ -1692,7 +1767,8 @@
     var head = (st ? 'HTTP ' + st + ' · ' : '') + msg;
     return '<div class="note warn">' + U.ic('alert', 14) + '<div><b>' + esc(head) + '</b><br>' + tips.join('<br>') +
       '<div class="mt-s"><button class="mbtn" data-act="fix-base">用 ' + esc(base) + ' 重试</button>' +
-      '<button class="mbtn" data-act="relay-set">换个中转通道</button></div></div></div>';
+      '<button class="mbtn" data-act="relay-set">换个中转通道</button></div>' +
+      '<div class="mt-s"><button class="mbtn" data-act="free-provider">先用内置免费通道</button></div></div></div>';
   }
 
   /* 逐个真测：并发 4，随时可停 */
@@ -1884,14 +1960,15 @@
     var list = L.parseBases();
     var key = L.parseKey ? L.parseKey() : '';
     var html =
-      '<p style="color:var(--ink-2)">浏览器读不了别人的网页（跨域限制），取正文必须有一台服务器代抓。' +
-      '可以用仓库里的 Cloudflare Worker，也可以用自己的 VPS；填多个地址时并行竞速，一条挂了自动换下一条。</p>' +
+      '<p style="color:var(--ink-2)">浏览器读不了别人的网页（跨域限制），取正文要有服务器代抓。' +
+      '不配也能试：内置了 3 条公共阅读线路（Jina Reader / AllOrigins / CodeTabs），能通就直接用；' +
+      '它们不受我们控制，限流或下线时就得靠自己那台。填多个地址时并行竞速，一条挂了自动换下一条。</p>' +
       (list.length
         ? '<div class="note mt-s" style="border-color:rgba(217,255,75,.28)">' + U.ic('check', 13) +
           '<div>已配置 <b>' + list.length + '</b> 条通道。解析和联网取证都走它。</div></div>'
         : '<div class="note mt-s" style="border-color:rgba(255,176,32,.3)">' + U.ic('alert', 13) +
-          '<div><b>现在没有可用的解析服务。</b>贴链接取正文、创作板块的联网取证都用不了；' +
-          '可以先在「新建 → 链接」里直接粘全文，不影响改写。</div></div>') +
+          '<div><b>还没配自己的解析服务。</b>现在走公共线路，常见文章页有机会取到，遇到强风控站点就会失败；' +
+          '创作板块的联网取证也需要一台自己的服务。<b>热榜的二级页不受影响</b>——那部分由定时快照供内容。</div></div>') +
       '<div class="field mt-m"><div class="field-head"><span class="lbl">服务地址</span>' +
       '<span class="sec-sub">一行一个，留空 = 关闭</span></div>' +
       '<textarea data-field="parsebases" rows="4" spellcheck="false" placeholder="https://wenjiang-parse.你的账号.workers.dev">' +
@@ -2517,8 +2594,10 @@
     openSheet(
       '<p>原创稿必须由模型来写：它要先读资料、再组织语言。本机引擎只会换词，写不出这个。</p>' +
       '<div class="note mt-s">' + U.ic('cpu', 14) +
-      '<div>到「我的 → 模型服务」加一个 OpenAI 兼容服务商（通义、智谱、DeepSeek、Kimi 都行），填 Base URL 和 Key，选一个对话模型。</div></div>',
-      { title: '还差一个模型', foot: '<button class="btn btn-primary btn-block" data-act="cr-to-model">去配置模型</button>' }
+      '<div>不想折腾 Key 的话，直接用<b>内置免费通道</b>：不注册、不填任何信息，点一下就能写。' +
+      '想用更好的模型，再去「我的 → 模型服务」加自己的服务商。</div></div>',
+      { title: '还差一个模型', foot: '<button class="btn btn-primary btn-block" data-act="free-provider">' + U.ic('zap', 16) + ' 一键启用内置免费通道</button>' +
+        '<button class="btn btn-ghost btn-block" data-act="cr-to-model">我有 Key，自己配</button>' }
     );
   }
 
@@ -3084,15 +3163,40 @@
       }
 
       case 'topic-all':
-        openTopicSheet(t.dataset.title || '');
+        loadTopic(lastTopic.src, lastTopic.title, lastTopic.id, lastTopic.url, true);
         break;
 
-      case 'post-open': {
-        var pu2 = t.dataset.url || '';
-        var pt2 = t.dataset.title || '';
-        if (!pu2) break;
+      case 'topic-retry':
+        topicCache = { src: '', title: '', id: '', data: null };
+        loadTopic(lastTopic.src, lastTopic.title, lastTopic.id, lastTopic.url);
+        break;
+
+      case 'post-view': {
+        var tp = topicCache.data && topicCache.data.items && topicCache.data.items[Number(t.dataset.idx)];
+        if (!tp) break;
+        openPostSheet(tp);
+        break;
+      }
+
+      case 'post-write': {
+        var pw = topicCache.data && topicCache.data.items && topicCache.data.items[Number(t.dataset.idx)];
         closeSheet();
-        await parseAndGo(pu2, pt2);
+        var arr = (topicCache.data && topicCache.data.items) || [];
+        var body = pw ? String(pw.text || '') : '';
+        /* 单条帖子常常只有一两句（「愿平安」），拿它当素材写不出东西。
+           不足 80 字时，把同话题下另外两条完整描述一起带上，作为「现场说法」。 */
+        if (body.length < 80) {
+          var more = arr.filter(function (x) { return x !== pw && String(x.text || '').length > 30; }).slice(0, 2);
+          if (more.length) body += '\n\n同话题下其他人的描述：\n' + more.map(function (x) { return String(x.text || ''); }).join('\n');
+        }
+        state.compose.mode = 'text';
+        state.compose.text1 = body;
+        state.compose.sourceTitle = lastTopic.title || (pw ? String(pw.text || '').slice(0, 24) : '');
+        go('compose', { nav: 'push' });
+        setTimeout(function () {
+          var ta = document.querySelector("[data-field='text1']");
+          if (ta) ta.focus();
+        }, 260);
         break;
       }
 
@@ -3190,6 +3294,18 @@
         openProviderSheet(null);
         break;
 
+      case 'free-provider': {
+        var added = ensureFreeProviders();
+        if (added.length && !state.settings.activeId) state.settings.activeId = added[0].id;
+        save();
+        openModelSheet();
+        render('same');
+        toast(added.length
+          ? '内置免费通道已启用：不用 Key，直接去写'
+          : '免费通道已经在列表里，直接选它当默认就行', 3600);
+        break;
+      }
+
       case 'provider-edit':
         openProviderSheet(t.dataset.id);
         break;
@@ -3234,6 +3350,16 @@
         draft.base = pr.base;
         var bi = document.querySelector("[data-mfield='base']");
         if (bi) bi.value = pr.base;
+        if (pr.free) {
+          draft.key = pr.presetKey || '';
+          var ki = document.querySelector("[data-mfield='key']");
+          if (ki) ki.value = draft.key;
+          draft.models = (pr.models || []).map(function (id) {
+            var a = L.annotate(id, { free: true });
+            return { id: id, kind: a.kind, tags: a.tags, family: a.family, good: a.good, free: true, owned: '', status: '' };
+          });
+          draft.model = (pr.models || [])[0] || '';
+        }
         var ni = document.querySelector("[data-mfield='name']");
         if (ni && !ni.value) { ni.value = pr.name; draft.name = pr.name; }
         toast(pr.tip || pr.name, 2800);

@@ -3,6 +3,7 @@
  * 由 GitHub Actions 每 15 分钟执行一次；也可以本地手动跑：node scripts/fetch-hot.mjs
  */
 import { writeFile, mkdir } from 'node:fs/promises';
+import { buildTopics } from './fetch-topics.mjs';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36';
@@ -42,7 +43,7 @@ async function get(url, type = 'json', ms = 15000) {
 }
 
 const BLOCK =
-  /(习近平|李强|王毅|政治局|中央委员会|国务院|全国人大|政协|外交部|国防部|解放军|军队|军事|战争|停火|制裁|外交|峰会|会见|会晤|国事访问|特朗普|普京|拜登|泽连斯基|内塔尼亚胡|总统|首相|大选|选举|投票|台湾|台独|香港|新疆|西藏|疫情|核酸|封控|脱贫|党建|纪委|反腐|落马|双开|巡视|两会|党章|国旗|阅兵|主权|领土|总书记|共同体|一带一路|中国贡献|中国机遇|大国担当|APEC|G20|G7|上合|金砖|联合国|中方|我方|美方|外交部|发言人|大使|领馆|使馆|国事|会谈|磋商|白宫|克里姆林宫|欧盟委员会|会见|接见|访华|出访|致辞|贺信|批示|委员长|总理|外长|防长|军委|部队|导弹|演习|反制|政要|领导人|亚太合作|元首|国宴|使节|参赞|国际关系|地缘|制裁|军演|航母|战机|外交部|驻华)/;
+  /(习近平|李强|王毅|政治局|中央委员会|国务院|全国人大|政协|外交部|国防部|解放军|军队|军事|战争|停火|制裁|外交|峰会|会见|会晤|国事访问|特朗普|普京|拜登|泽连斯基|内塔尼亚胡|总统|首相|大选|选举|投票|台湾|台独|香港|新疆|西藏|疫情|核酸|封控|脱贫|党建|纪委|反腐|落马|双开|巡视|两会|党章|国旗|阅兵|主权|领土|总书记|共同体|一带一路|中国贡献|中国机遇|大国担当|APEC|G20|G7|上合|金砖|联合国|中方|我方|美方|外交部|发言人|大使|领馆|使馆|国事|会谈|磋商|白宫|克里姆林宫|欧盟委员会|会见|接见|访华|出访|致辞|贺信|批示|委员长|总理|外长|防长|军委|部队|导弹|演习|反制|政要|领导人|亚太合作|元首|国宴|使节|参赞|国际关系|地缘|制裁|军演|航母|战机|外交部|驻华|全军|军采|军需|台海|两岸|动武|军售|涉台)/;
 
 function num(v) {
   const s = String(v ?? '');
@@ -63,9 +64,19 @@ function tidy(list) {
     if (BLOCK.test(title)) continue;
     if (seen.has(title)) continue;
     seen.add(title);
-    out.push({ title, hot: num(it?.hot ?? it?.HotValue ?? it?.hotValue), url: it?.url || it?.Url || '' });
+    /* 头条的分享链接带一大串 log_pb / impr_id，一条就 700 字符；
+       这些参数只影响它的埋点，去掉不影响打开，快照能小一半 */
+    let url = String(it?.url || it?.Url || '');
+    if (url) {
+      try {
+        const u = new URL(url);
+        ['log_pb', 'hot_board_impr_id', 'impr_id'].forEach((k) => u.searchParams.delete(k));
+        url = u.toString();
+      } catch (e) { /* 原样保留 */ }
+    }
+    out.push({ title, hot: num(it?.hot ?? it?.HotValue ?? it?.hotValue), url });
   }
-  return out.slice(0, 50);
+  return out.slice(0, 40);
 }
 
 /* ---------- 通道 1：聚合接口（CORS 友好，字段统一） ---------- */
@@ -75,6 +86,37 @@ async function viaAgg(id) {
   if (!arr.length) throw new Error('聚合接口无数据');
   return tidy(arr);
 }
+
+/* ---------- 通道 1.5：60s 与 codelife（两家都给 CORS，国内可达） ---------- */
+async function via60s(id) {
+  const d = await get('https://60s.viki.moe/v2/' + id, 'json', 10000);
+  const arr = Array.isArray(d?.data) ? d.data : [];
+  if (!arr.length) throw new Error('60s 无数据');
+  return tidy(arr.map((x) => ({ title: x.title, hot: x.hot_value, url: x.link || x.url })));
+}
+
+async function viaCodelife(id) {
+  const r = await fetch('https://api.codelife.cc/api/top/list?lang=cn', {
+    method: 'POST',
+    signal: timeout(12000),
+    headers: { 'Content-Type': 'application/json', 'User-Agent': UA },
+    body: JSON.stringify({ id, page: 1, size: 50 })
+  });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const d = await r.json();
+  const arr = (d && d.data) || [];
+  if (!arr.length) throw new Error('codelife 无数据');
+  return tidy(arr.map((x) => ({ title: x.title, hot: x.hotValue, url: x.link })));
+}
+
+const ALT = {
+  weibo: [() => via60s('weibo'), () => viaCodelife('KqndgxeLl9')],
+  zhihu: [() => via60s('zhihu'), () => viaCodelife('mproPpoq6O')],
+  douyin: [() => via60s('douyin'), () => viaCodelife('WnBe01o371')],
+  bilibili: [() => viaCodelife('Jb0vmloB1G'), () => via60s('bili')],
+  toutiao: [() => via60s('toutiao'), () => viaCodelife('nIFi0r9b6N')],
+  baidu: [() => via60s('baidu')]
+};
 
 /* ---------- 通道 2：官方接口直连 ---------- */
 async function viaToutiao() {
@@ -219,6 +261,12 @@ async function one(id) {
   } catch (e) {
     /* 继续尝试直连 */
   }
+  for (const alt of ALT[id] || []) {
+    try {
+      const items = await alt();
+      if (items.length) return { ok: true, via: 'mirror', items };
+    } catch (e) { /* 换下一家 */ }
+  }
   if (RSS[id]) {
     try {
       const items = await viaRss(RSS[id]);
@@ -255,12 +303,23 @@ if (ok === 0) {
   process.exit(0);
 }
 
+/* 二级页内容（话题下的帖子）一起抓，塞进同一份文件：
+   Action 只需要提交 data/hot.json 一个文件，不用改 workflow。 */
+let topics = { weibo: {}, toutiao: {} };
+try {
+  topics = (await buildTopics({ sources })) || topics;
+} catch (e) {
+  console.error('话题抓取失败（不影响热榜）：', e.message);
+}
+
 const payload = {
   updatedAt: new Date().toISOString(),
   okCount: ok,
-  sources
+  sources,
+  topics
 };
 
 await mkdir('data', { recursive: true });
-await writeFile('data/hot.json', JSON.stringify(payload, null, 2) + '\n', 'utf8');
+/* 不缩进：这份文件每 15 分钟提交一次，体积直接决定仓库增长速度 */
+await writeFile('data/hot.json', JSON.stringify(payload) + '\n', 'utf8');
 console.log(`\n写入 data/hot.json，可用源 ${ok}/${SOURCES.length}`);

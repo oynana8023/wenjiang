@@ -814,7 +814,7 @@ window.WJUI = (function () {
       : (_pbs.length === 1 && _pbs[0] === window.WJLive.CLOUD_DEFAULT ? '默认节点'
         : _pbs.length + ' 条通道');
     h += '<button class="row" data-act="parse-service"><span class="ri">' + ic('wand', 15) + '</span>' +
-      '<span class="rt"><b>解析服务</b><small>' + (_pbs.length ? '粘贴链接取正文用的后端' : '没配后端，贴链接取不到正文') + '</small></span>' +
+      '<span class="rt"><b>解析服务</b><small>' + (_pbs.length ? '粘贴链接取正文用的后端' : '没配后端，现在走公共线路') + '</small></span>' +
       '<span class="rv"' + (_pbs.length ? '' : ' style="color:var(--warn)"') + '>' + _pbName + '</span>' +
       '<span class="chev">' + ic('right', 15) + '</span></button>';
 

@@ -711,55 +711,101 @@ async function weiboStatus(id) {
 async function weiboPostList(title, limit) {
   const t = String(title || '').replace(/^#+|#+$/g, '').replace(/\s+/g, ' ').trim();
   if (!t) return [];
-  const cid = '100103type=1&t=10&q=#' + t + '#';
-  const j = await wbJson('/api/container/getIndex?containerid=' + encodeURIComponent(cid) + '&page_type=searchall');
+  const j = await wbAjax('/ajax/statuses/search?q=' + encodeURIComponent(t) + '&page=1');
   const out = [];
   const seen = new Set();
-  for (const c of (j.data && j.data.cards) || []) {
-    const mb = c && c.card_type === 9 && c.mblog;
-    if (!mb) continue;
-    const rawTxt = tidyText(stripTags(String(mb.text || '')));
-    let txt = rawTxt.replace(/…全文$|...全文$/, '').trim();
-    if (txt.length < 12 || seen.has(txt.slice(0, 24))) continue;
+  for (const s of (j && j.statuses) || []) {
+    if (!s || !s.text_raw) continue;
+    const txt = tidyText(stripTags(String(s.text_raw))).replace(/…全文$/, '').trim();
+    if (txt.length < 16 || seen.has(txt.slice(0, 24))) continue;
     seen.add(txt.slice(0, 24));
-    /* 搜索卡片里 isLongText 经常是空的，只能看结尾：没句号、带「全文」都算截断 */
-    const cut = mb.isLongText || /…全文|...全文/.test(rawTxt) || !/[。！？…”』】)）!?]$/.test(txt);
-    let long = false;
-    if (cut && out.length < 6) {
-      /* 先试 extend；还短就直接问单条接口，那条给的是完整原文 */
-      let full = await weiboLong(mb.id, txt);
-      if (!full) {
-        try {
-          const st = await weiboStatus(mb.id);
-          if (st && st.text.length > txt.length + 10) {
-            full = st.text.replace(/^[^：]{1,20}：/, '');
-          }
-        } catch (e) { /* 用原来的 */ }
-      }
-      if (full && full.length > txt.length) { txt = full; long = true; }
-    }
     const pics = [];
-    for (const p of (mb.pics || [])) {
+    for (const p of (s.pics || [])) {
       const u = (p && (p.large && p.large.url || p.url)) || '';
       if (u) pics.push(u.replace(/^http:/, 'https:'));
     }
+    for (const pid of (s.pic_ids || [])) {
+      if (pid) pics.push('https://wx1.sinaimg.cn/large/' + pid + '.jpg');
+    }
+    const pi = s.page_info || {};
+    const cover = (pi.page_pic && pi.page_pic.url) || (pi.media_info && (pi.media_info.big_pic_url || pi.media_info.cover_image)) || '';
+    if (!pics.length && cover) pics.push(String(cover).replace(/^http:/, 'https:'));
     out.push({
-      id: String(mb.id || ''),
-      url: 'https://m.weibo.cn/detail/' + mb.id,
-      author: (mb.user && mb.user.screen_name) || '',
-      text: txt.slice(0, 4000),
+      id: String(s.mid || s.id || ''),
+      url: s.mblogid ? 'https://m.weibo.cn/detail/' + s.mblogid : 'https://m.weibo.cn/detail/' + s.mid,
+      author: (s.user && s.user.screen_name) || '',
+      avatar: ((s.user && s.user.profile_image_url) || '').replace(/^http:/, 'https:'),
+      text: txt.slice(0, 1600),
       chars: txt.length,
-      long: long,
+      long: false,
       images: pics.slice(0, 9),
-      at: mb.created_at || '',
-      reposts: (mb.reposts_count || 0),
-      comments: (mb.comments_count || 0),
-      likes: (mb.attitudes_count || 0),
-      source: (mb.source || '').replace(/<[^>]+>/g, '')
+      at: (() => { const d = new Date(s.created_at || ''); return isNaN(d.getTime()) ? '' : d.toISOString(); })(),
+      reposts: s.reposts_count || 0,
+      comments: s.comments_count || 0,
+      likes: s.attitudes_count || 0,
+      source: tidyText(stripTags(String(s.source || '')))
     });
     if (out.length >= (limit || 12)) break;
   }
   return out;
+}
+
+/* 头条话题：/trending/{id}/ 是话题页，不是文章页。
+   头图与阅读量在 /api/trending/topic/{id}/，话题下的微头条在 topic_innerflow。
+   两个接口都不要登录，只是不给浏览器 CORS 头。 */
+async function toutiaoTopic(id, limit) {
+  if (!id) return null;
+  const H = { 'User-Agent': UA_MOBILE, Referer: 'https://api.toutiaoapi.com/' };
+  let head = null;
+  try {
+    const r = await fetch('https://api.toutiaoapi.com/api/trending/topic/' + id + '/?rank=', { headers: H });
+    if (r.ok) head = await r.json();
+  } catch (e) { /* 头图拿不到不影响帖子 */ }
+  const feedUrl = 'https://api.toutiaoapi.com/api/feed/topic_innerflow/v1/?query_id=' + id +
+    '&offset=0&count=20&aid=13&category=topic_innerflow&ttfrom=amos_land_normal' +
+    '&stream_api_version=88&client_extra_params=' + encodeURIComponent('{"is_webview":"1"}');
+  const r2 = await fetch(feedUrl, { headers: H });
+  if (!r2.ok) throw new Error('HTTP ' + r2.status);
+  const feed = await r2.json();
+  const items = [];
+  for (const row of (feed && feed.data) || []) {
+    let c = row && row.content;
+    if (typeof c === 'string') { try { c = JSON.parse(c); } catch (e) { c = null; } }
+    if (!c) continue;
+    const text = tidyText(String(c.content || c.abstract || ''));
+    const title2 = tidyText(String(c.title || ''));
+    if (!text && !title2) continue;
+    const imgs = [];
+    for (const im of (c.detail_cover_list || [])) {
+      const u = im && (im.url || (im.url_list && im.url_list[0] && im.url_list[0].url));
+      if (u) imgs.push(String(u).replace(/^http:/, 'https:'));
+    }
+    const gid = String(c.group_id || '');
+    items.push({
+      id: gid,
+      url: gid ? 'https://www.toutiao.com/w/' + gid + '/' : '',
+      author: (c.user && c.user.name) || tidyText(String(c.source || '')),
+      avatar: ((c.user && c.user.avatar_url) || '').replace(/^http:/, 'https:'),
+      title: title2,
+      text: (text || title2).slice(0, 1200),
+      chars: text.length,
+      images: imgs.slice(0, 9),
+      at: c.create_time ? new Date(c.create_time * 1000).toISOString() : '',
+      likes: c.digg_count || 0,
+      comments: c.comment_count || 0,
+      reposts: c.share_count || 0
+    });
+    if (items.length >= (limit || 12)) break;
+  }
+  return {
+    header: {
+      title: (head && head.topic_title) || '',
+      banner: (head && head.banner_urls && head.banner_urls[0]) || '',
+      readCount: (head && head.read_count) || 0,
+      talkCount: (head && head.talk_count) || 0
+    },
+    items
+  };
 }
 
 /* 站点名尾巴去掉，剩下的才有资格当标题去搜同题报道 */
@@ -1230,35 +1276,58 @@ const wbCache = new Map();
 
 async function wbCookie(force) {
   if (!force && wbVisitor.ck && Date.now() - wbVisitor.at < 30 * 60 * 1000) return wbVisitor.ck;
-  const H = { 'User-Agent': UA_MOBILE, Referer: 'https://m.weibo.cn/' };
-  /* 注意域名：m.weibo.cn 认的是 .weibo.cn 的访客票，走 visitor.passport.weibo.cn 才对，
-     用 passport.weibo.com 签出来的票会被 302 到登录页 */
-  const g = await fetch('https://visitor.passport.weibo.cn/visitor/genvisitor2', {
+  /* 2026 年起 m.weibo.cn 的搜索接口对匿名 IP 一律 302 到登录页，
+     改用 passport.weibo.com 的 genvisitor2：它给的是 .weibo.com 的访客票，
+     带上就能读 weibo.com/ajax 下的公开搜索，不需要登录。 */
+  const fp = JSON.stringify({ os: '1', browser: 'Chrome126', fonts: 'undefined', screenInfo: '1920*1080*24', plugins: '' });
+  const g = await fetch('https://passport.weibo.com/visitor/genvisitor2', {
     method: 'POST',
-    headers: { ...H, 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      cb: 'visitor_gray_callback',
-      ver: '20250916',
-      request_id: 'd410864507027615f10f72d7165434e4',
-      tid: '',
-      from: 'weibo',
-      webdriver: 'false',
-      rid: String(Date.now()),
-      return_url: 'https://m.weibo.cn/'
-    }).toString()
+    headers: {
+      'User-Agent': UA_DESKTOP,
+      Referer: 'https://passport.weibo.com/visitor/visitor',
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: 'cb=gen_callback&fp=' + encodeURIComponent(fp)
   });
   const gt = await g.text();
-  const tid = (gt.match(/"tid":"([^"]+)"/) || [])[1] || '';
-  if (!tid) throw new Error('微博访客凭证获取失败');
-  const inc = await fetch('https://visitor.passport.weibo.cn/visitor/visitor?a=incarnate&t=' +
-    encodeURIComponent(tid) + '&w=2&c=095&gc=&cb=cross_domain&from=weibo&_rand=0.5', { headers: H });
-  const it = await inc.text();
-  const sub = (it.match(/"sub":"([^"]+)"/) || [])[1] || '';
-  const subp = (it.match(/"subp":"([^"]+)"/) || [])[1] || '';
+  const sub = (gt.match(/"sub":"([^"]+)"/) || [])[1] || '';
+  const subp = (gt.match(/"subp":"([^"]+)"/) || [])[1] || '';
   if (!sub) throw new Error('微博访客凭证换取失败');
-  const ck = 'SUB=' + sub + (subp ? '; SUBP=' + subp : '');
+  const ck = 'SUB=' + sub + (subp ? '; SUBP=' + subp : '') + '; WEIBOCN_FROM=1110003030';
   wbVisitor = { ck, at: Date.now() };
   return ck;
+}
+
+async function wbAjax(path) {
+  let last = '';
+  for (let i = 0; i < 2; i += 1) {
+    const ck = await wbCookie(i > 0);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 13000);
+    try {
+      const res = await fetch('https://weibo.com' + path, {
+        signal: ctrl.signal,
+        redirect: 'manual',
+        headers: {
+          'User-Agent': UA_DESKTOP,
+          Accept: 'application/json, text/plain, */*',
+          Referer: 'https://weibo.com/',
+          'X-Requested-With': 'XMLHttpRequest',
+          Cookie: ck
+        }
+      });
+      if (res.status === 200) {
+        const txt = await res.text();
+        try { return JSON.parse(txt); } catch (e) { throw new Error('微博返回的不是 JSON'); }
+      }
+      last = 'HTTP ' + res.status;
+    } catch (e) {
+      last = e.message;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw new Error(last || '微博接口不可用');
 }
 
 async function wbJson(path) {
@@ -1297,26 +1366,24 @@ async function weiboCover(title) {
   if (hit && Date.now() - hit.at < COVER_TTL) return hit.v;
   let out = { ok: false };
   try {
-    const cid = '100103type=1&t=10&q=#' + t + '#';
-    const j = await wbJson('/api/container/getIndex?containerid=' + encodeURIComponent(cid) + '&page_type=searchall');
+    /* 话题页的博文清单里挑一张横图：走 weibo.com 的公开搜索，匿名也能读 */
+    const j = await wbAjax('/ajax/statuses/search?q=' + encodeURIComponent(t) + '&page=1');
     const cands = [];
-    for (const c of (j.data && j.data.cards) || []) {
-      const mb = c && c.card_type === 9 && c.mblog;
-      if (!mb) continue;
-      const add = (u, w, h) => {
-        const s = String(u || '').replace(/^http:/, 'https:');
-        if (s) cands.push({ u: s, w: Number(w) || 0, h: Number(h) || 0 });
-      };
-      for (const p of mb.pics || []) {
-        const lg = p.large || {};
-        const geo = lg.geo || p.geo || {};
-        add(lg.url || p.url, geo.width, geo.height);
+    const add = (u, w, h) => {
+      const s = String(u || '').replace(/^http:/, 'https:');
+      if (s) cands.push({ u: s, w: Number(w) || 0, h: Number(h) || 0 });
+    };
+    for (const st of (j && j.statuses) || []) {
+      for (const pc of st.pics || []) {
+        const lg = pc.large || {};
+        const geo = lg.geo || pc.geo || {};
+        add(lg.url || pc.url, geo.width, geo.height);
       }
-      if (mb.page_info && mb.page_info.page_pic && mb.page_info.page_pic.url) {
-        const pp = mb.page_info.page_pic;
-        add(String(pp.url).replace('/orj480/', '/large/'), pp.width, pp.height);
+      for (const pid of st.pic_ids || []) {
+        if (pid) add('https://wx1.sinaimg.cn/large/' + pid + '.jpg', 0, 0);
       }
-      if (!(mb.pics || []).length && mb.original_pic) add(mb.original_pic, 0, 0);
+      const pp = st.page_info && st.page_info.page_pic;
+      if (pp && pp.url) add(String(pp.url).replace('/orj480/', '/large/'), pp.width, pp.height);
       if (cands.length >= 30) break;
     }
     /* 横图优先：竖版截图裁成 16:9 会很难看，只有实在没有横图才用它 */
@@ -1782,7 +1849,7 @@ const server = http.createServer(async (req, res) => {
 
   if (u.pathname.startsWith('/api/')) {
     try {
-      if (u.pathname === '/api/health') return send(res, 200, { ok: true, version: '3.5.0', runtime: 'node' });
+      if (u.pathname === '/api/health') return send(res, 200, { ok: true, version: '3.6.0', runtime: 'node' });
       if (u.pathname === '/api/llm') {
         if (req.method === 'OPTIONS') {
           res.writeHead(204, {
@@ -1840,16 +1907,21 @@ const server = http.createServer(async (req, res) => {
           });
         }
       }
-      if (u.pathname === '/api/posts') {
+      if (u.pathname === '/api/topic' || u.pathname === '/api/posts') {
         const src = u.searchParams.get('src') || 'weibo';
         const title = u.searchParams.get('title') || '';
-        if (!title) return send(res, 400, { ok: false, error: '缺少 title' });
-        if (src !== 'weibo') return send(res, 200, { ok: false, code: 'NO_LIST', error: '这个源没有公开的帖子列表' });
+        const tid = u.searchParams.get('id') || '';
+        const n = Number(u.searchParams.get('n') || 12);
+        if (!title && !tid) return send(res, 400, { ok: false, error: '缺少 title 或 id' });
         try {
-          const items = await weiboPostList(title, Number(u.searchParams.get('n') || 12));
-          return send(res, 200, { ok: true, src, title, items, total: items.length });
+          if (src === 'toutiao') {
+            const t = await toutiaoTopic(tid, n);
+            return send(res, 200, { ok: !!t, src, id: tid, title, header: (t && t.header) || null, items: (t && t.items) || [], total: (t && t.items.length) || 0 });
+          }
+          const items = await weiboPostList(title, n);
+          return send(res, 200, { ok: true, src, title, header: null, items, total: items.length });
         } catch (e) {
-          return send(res, 200, { ok: false, code: 'POSTS_FAIL', error: e.message || '取不到话题下的帖子' });
+          return send(res, 200, { ok: false, code: 'POSTS_FAIL', error: e.message || '取不到话题下的内容' });
         }
       }
       if (u.pathname === '/api/meta') {
