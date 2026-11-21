@@ -1,0 +1,43 @@
+# 用法：把本文件复制到 .github/workflows/free-models.yml 并提交，GitHub 就会每周自动跑一次。
+# （当前令牌没有 workflow 权限，无法由脚本直接写入该目录。）
+name: sync-free-models
+
+# 每周把免费模型清单真跑一遍：能用留下，不能用剔除，结果写回仓库。
+# App 里点「检查更新」会读这个文件，所以不用发版也能更新清单。
+on:
+  schedule:
+    - cron: "23 19 * * 0"      # 每周一 03:23（北京时间），错开热榜任务
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-free-models
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 逐条真测免费模型
+        run: node scripts/sync-free-models.mjs
+
+      - name: 提交变更
+        run: |
+          git config user.name "wenjiang-bot"
+          git config user.email "bot@users.noreply.github.com"
+          if git diff --quiet -- data/free-models.json; then
+            echo "清单没有变化"
+            exit 0
+          fi
+          git add data/free-models.json
+          git commit -m "chore(free-models): 每周实测更新免费模型清单"
+          git push
