@@ -1543,6 +1543,9 @@
     html += '<button class="btn btn-primary btn-block mt-s" data-act="fetch-models">' +
       U.ic('refresh', 16) + ' 连接并获取模型</button>';
     html += '<div id="modelStatus" class="mstat">' + modelStatHtml() + '</div>';
+    html += '<div class="sec-sub" style="margin:-4px 0 10px;line-height:1.65">' +
+      'NVIDIA NIM 这类海外厂商<b>不给浏览器跨域头</b>，只填地址和 Key 一定会「获取失败」；' +
+      '配一台解析服务当中转才能用，否则先用内置免费通道。</div>';
     html += '<div id="modelToolbar">' + modelToolbarHtml() + '</div>';
     html += '<div id="modelList">' + modelListHtml() + '</div>';
     html += '<div id="modelSel" class="msel">' + modelSelHtml() + '</div>';
