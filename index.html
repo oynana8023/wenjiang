@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- 文匠 AI · 单文件构建 2026-11-21T15:47:22.940Z · 源文件见 src/ 与 assets/ -->
+<!-- 文匠 AI · 单文件构建 2026-11-21T15:53:35.413Z · 源文件见 src/ 与 assets/ -->
 <html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="UTF-8">
@@ -7689,7 +7689,10 @@ window.WJLive = (function () {
     var bases = parseBases();
     if (await hasServer()) bases = [''].concat(bases);
 
-    var tasks = bases.map(function (b) {
+    var deadline = Date.now() + budget;
+
+    /* 第一梯队：配置好的解析服务 + 头条直连。数据最全（正文、配图、互动数）。 */
+    var prefer = bases.map(function (b) {
       return {
         label: '解析服务',
         run: function () {
@@ -7702,27 +7705,43 @@ window.WJLive = (function () {
       };
     });
 
-    /* 头条有公共线路，不配任何东西也能拿到此刻的帖子 */
+    /* 头条有一条公共线路，不配任何东西也能拿到此刻的帖子 */
     if (src === 'toutiao' && id) {
-      tasks.push({ label: '头条实时', run: function () { return ttTopicLive(id, n); } });
+      prefer.push({ label: '头条实时', run: function () { return ttTopicLive(id, n); } });
     }
 
-    /* 微博也有一条「不用部署任何东西」的路：公共 RSSHub 镜像把关键词搜索转成 RSS，
-       再套一层公共通道读回来。镜像是现抓微博的，不是缓存。 */
+    /* 第二梯队：微博镜像。只有文字（微博的图在镜像里被换成了「[图片]」），
+       所以配了解析服务时不让它抢——先让服务端那条跑，它挂了才用镜像。 */
+    var fallback = [];
     if (src === 'weibo' && String(title || '').trim()) {
-      tasks.push({ label: '微博镜像', run: function () { return weiboRssTopic(title, n, 16000); } });
+      fallback.push({
+        label: '微博镜像',
+        run: function () { return weiboRssTopic(title, n, Math.max(8000, deadline - Date.now())); }
+      });
     }
 
     var liveErr = null;
     var lk = localTopicKey(src, id, title);
-    if (tasks.length) {
+
+    async function attempt(list, ms) {
+      var got = await raceAny(list, ms);
+      var live = { items: got.value.items || [], header: got.value.header || null };
+      if (live.items.length) saveLocalTopic(lk, live.items, live.header);
+      return { items: live.items, header: live.header, via: 'live', at: Date.now(), from: got.prov };
+    }
+
+    if (prefer.length) {
       try {
-        var got = await raceAny(tasks, budget);
-        var live = { items: got.value.items || [], header: got.value.header || null };
-        if (live.items.length) saveLocalTopic(lk, live.items, live.header);
-        return { items: live.items, header: live.header, via: 'live', at: Date.now(), from: got.prov };
+        return await attempt(prefer, budget);
       } catch (e) {
         liveErr = e;
+      }
+    }
+    if (fallback.length) {
+      try {
+        return await attempt(fallback, Math.max(8000, deadline - Date.now()));
+      } catch (e2) {
+        if (!liveErr) liveErr = e2;
       }
     }
 
