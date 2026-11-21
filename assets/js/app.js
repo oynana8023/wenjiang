@@ -1338,10 +1338,12 @@
         topicCache = { src: srcId, title: title, id: id, data: wq };
         b0.innerHTML = topicBoxHtml(wq, all);
       } else {
+        var wurl = url || ('https://s.weibo.com/weibo?q=' + encodeURIComponent('#' + title + '#'));
         b0.innerHTML = '<div class="note mt-s" style="border-color:rgba(255,176,32,.3)">' + U.ic('info', 14) +
-          '<div>微博的搜索接口要访客 Cookie，浏览器既拿不到也带不上，这个话题下的帖子只能由服务器代抓。配一台解析服务（免费，1 分钟）这里就变成实时；头条不需要，它是直连的。</div></div>' +
-          '<button class="btn btn-primary btn-block mt-s" data-act="parse-service">' + U.ic('wand', 15) + ' 配一台解析服务（免费）</button>' +
-          '<button class="btn btn-soft btn-block mt-s" data-act="topic-retry">' + U.ic('refresh', 15) + ' 再试一次</button>';
+          '<div>微博的搜索接口要访客 Cookie，浏览器既拿不到也带不上，这个话题下的帖子只能由服务器代抓。想马上看，点下面直接去微博；想在这里看，配一台解析服务（免费，1 分钟）就变成实时。</div></div>' +
+          '<button class="btn btn-primary btn-block mt-s" data-act="open-url" data-url="' + esc(wurl) + '">' + U.ic('external', 15) + ' 在微博里看这个话题</button>' +
+          '<button class="btn btn-soft btn-block mt-s" data-act="parse-service">' + U.ic('wand', 15) + ' 配一台解析服务（免费）</button>' +
+          '<button class="btn btn-ghost btn-block mt-s" data-act="topic-retry">' + U.ic('refresh', 15) + ' 再试一次缓存</button>';
       }
       return;
     }
@@ -1383,6 +1385,7 @@
           (e && e.code === 'NO_RELAY'
             ? '<button class="btn btn-primary btn-block mt-s" data-act="parse-service">' + U.ic('wand', 15) + ' 配一台解析服务（免费）</button>'
             : '') +
+          '<button class="btn btn-primary btn-block mt-s" data-act="open-url" data-url="' + esc(url || '') + '">' + U.ic('external', 15) + ' 打开话题页看</button>' +
           '<button class="btn btn-soft btn-block mt-s" data-act="topic-retry">' + U.ic('refresh', 15) + ' 再试一次</button>';
       }
     }
