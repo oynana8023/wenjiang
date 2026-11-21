@@ -425,16 +425,21 @@ window.WJLive = (function () {
 
   var HOT60 = 'https://60s.viki.moe/v2/';
   var CODELIFE = 'https://api.codelife.cc/api/top/list?lang=cn';
+  /* 通道顺序 = 谁在国内、谁允许浏览器跨域，谁排前面。
+     codelife（api.codelife.cc）走的是火山引擎国内节点（via: cache52.gdfoshan / cache03.hncdct），
+     回显 Origin、不需要 Key，是目前唯一在国内手机网络上稳定可直连的多平台热榜源，
+     所以它做主力；60s.viki.moe 挂在 Cloudflare 后面，国内常被限流（error 1027），退成备用。
+     每个平台的 id 都逐一实测过，抖音/B站/百度 之前填错了别人的 id，会串榜（显示成别的平台内容）。 */
   var HOT_ROUTE = {
-    weibo: [{ k: '60s', p: 'weibo' }, { k: 'codelife', p: 'KqndgxeLl9' }, { k: 'imsyy' }],
-    zhihu: [{ k: '60s', p: 'zhihu' }, { k: 'codelife', p: 'mproPpoq6O' }, { k: 'imsyy' }],
-    douyin: [{ k: '60s', p: 'douyin' }, { k: 'codelife', p: 'WnBe01o371' }, { k: 'imsyy' }],
-    toutiao: [{ k: '60s', p: 'toutiao' }, { k: 'codelife', p: 'nIFi0r9b6N' }, { k: 'imsyy' }],
-    baidu: [{ k: '60s', p: 'baidu/hot' }, { k: 'imsyy' }],
-    bilibili: [{ k: 'codelife', p: 'Jb0vmloB1G' }, { k: 'imsyy' }],
+    weibo: [{ k: 'codelife', p: 'KqndgxeLl9' }, { k: '60s', p: 'weibo' }, { k: 'imsyy' }],
+    zhihu: [{ k: 'codelife', p: 'mproPpoq6O' }, { k: '60s', p: 'zhihu' }, { k: 'imsyy' }],
+    douyin: [{ k: 'codelife', p: 'DpQvNABoNE' }, { k: '60s', p: 'douyin' }, { k: 'imsyy' }],
+    baidu: [{ k: 'codelife', p: 'Jb0vmloB1G' }, { k: '60s', p: 'baidu/hot' }, { k: 'imsyy' }],
+    bilibili: [{ k: 'codelife', p: '74KvxwokxM' }, { k: '60s', p: 'bili' }, { k: 'imsyy' }],
+    '36kr': [{ k: 'codelife', p: 'Q1Vd5Ko85R' }, { k: '36kr' }, { k: 'imsyy' }],
+    ithome: [{ k: 'codelife', p: '74Kvx59dkx' }, { k: '60s', p: 'it-news/rank' }, { k: 'imsyy' }],
+    toutiao: [{ k: '60s', p: 'toutiao' }, { k: 'codelife', p: 'x9ozB4KoXb' }, { k: 'imsyy' }],
     sspai: [{ k: 'sspai' }, { k: 'imsyy' }],
-    '36kr': [{ k: '36kr' }, { k: 'imsyy' }],
-    ithome: [{ k: '60s', p: 'it-news/rank' }, { k: 'imsyy' }],
     geekpark: [{ k: 'geekpark' }, { k: 'imsyy' }]
   };
 
@@ -442,13 +447,24 @@ window.WJLive = (function () {
     return normList(await getJSON(HOT60 + p, 7000));
   }
 
+  /* codelife 有 CDN 缓存，加个时间戳确保拿到的是「此刻」的榜，而不是 CDN 上一版。
+     接口偶发 429，退 400ms 再试一次；两次都空就算这条通道失败，交给下一条。 */
   async function hotCodelife(id) {
-    var d = await getJSON(CODELIFE, 7000, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: id, page: 1, size: 50 })
-    });
-    return normList(d);
+    var url = CODELIFE + '&id=' + encodeURIComponent(id) + '&_t=' + Date.now();
+    var lastErr = null;
+    for (var i = 0; i < 2; i++) {
+      try {
+        var d = await getJSON(url, 6500);
+        var list = normList(d);
+        if (list && list.length) return list;
+        lastErr = new Error('返回空榜单');
+      } catch (e) {
+        lastErr = e;
+        if (!(e.status === 429 || e.status >= 500)) break;
+      }
+      await new Promise(function (r) { setTimeout(r, 400); });
+    }
+    throw (lastErr || new Error('返回空榜单'));
   }
 
   async function hotSspai() {
@@ -555,15 +571,9 @@ window.WJLive = (function () {
       if (d && d.ok) return normList(d);
       throw new Error((d && d.error) || '抓取失败');
     }
-    /* 自己配了解析服务：先问它一句（它抓的是官方接口，还能顺手带封面）。
-       只给 4 秒，不行就立刻转公共接口，不能让一页热榜陪着等。 */
-    var bases = parseBases().filter(function (b) { return !isDeadBase(b); });
-    if (bases.length) {
-      try {
-        var cd = await getJSON(apiUrl(bases[0], '/api/hot', { src: id }), 4000);
-        if (cd && cd.ok && Array.isArray(cd.items) && cd.items.length) return normList(cd.items);
-      } catch (e) { /* 转公共接口 */ }
-    }
+    /* 热榜走的是各平台公开接口，跟自建解析服务没关系。
+       以前这里先拿 4 秒去问解析服务，用户填了打不开的地址时，每个源都要空等 4 秒，
+       十个源排下来首页要卡半分钟——现在直接跳过，一步到位。 */
     var route = HOT_ROUTE[id] || [];
     if (!route.length) throw new Error('这个源没有配置实时通道');
     /* 聚合镜像（imsyy）2026 年 11 月起长期挂掉，别让它跟着一起发请求浪费时间：

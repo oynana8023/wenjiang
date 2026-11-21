@@ -150,7 +150,8 @@ window.WJUI = (function () {
   function liveBadge(src) {
     if (!src || !src.ok) return '<span class="badge plain">未连接</span>';
     if (src.via === 'live') return '<span class="badge live"><i class="dot" style="width:4px;height:4px;box-shadow:none"></i>实时</span>';
-    return '<span class="badge sample">缓存</span>';
+    /* 缓存一定要带上「多久以前」。只写「缓存」两个字，用户没法判断这份榜是十分钟前还是昨天的。 */
+    return '<span class="badge sample">缓存 · ' + (src.at ? ago(src.at) : '时间未知') + '</span>';
   }
 
   function rankRow(item, i, srcId) {
@@ -184,6 +185,15 @@ window.WJUI = (function () {
       '<span>更新 <b>' + (updated ? fmtTime(updated) : '—') + '</b></span>' +
       '<span><b>' + list.length + '</b> 条在榜</span>' +
       '<span>今日 <b>' + state.works.length + '</b> 篇</span></div>';
+
+    /* 当前这个源是缓存时，直接在首屏说清楚「多久以前」，并给一个立刻重取的按钮。
+       以前只把「更新 HH:MM」写小字里，用户根本分不出是刚抓到还是昨天的榜。 */
+    if (src && src.ok && src.via !== 'live') {
+      h += '<div class="note warn" style="margin:10px 0 2px">' + ic('clock', 14) +
+        '<div><b>' + esc(sourceName(active)) + '这版是缓存</b>（' + (src.at ? ago(src.at) : '时间未知') + '）。' +
+        '实时接口这次没通：' + esc(src.error || '被限流') + '。' +
+        '<div class="mt-s"><button class="mini-btn" data-act="hot-reload">' + ic('refresh', 12) + ' 现在重取</button></div></div></div>';
+    }
 
     h += '<div class="entries">';
     h += '<button class="entry primary" data-act="tab" data-tab="create">' +
