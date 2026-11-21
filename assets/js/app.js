@@ -1276,9 +1276,12 @@
     var nums = t.header && (t.header.readCount || t.header.talkCount)
       ? '<div class="topic-nums">阅读 ' + U.fmtHot(t.header.readCount) + ' · 讨论 ' + U.fmtHot(t.header.talkCount) + '</div>'
       : '';
+    var few = items.length === 1
+      ? '<div class="sec-sub" style="margin:-4px 0 8px">刚上榜，讨论还不多；点下面「打开话题页」能看到最新跟帖。</div>'
+      : '';
     return head + '<div class="topic-head"><span class="h2" style="font-size:14px">' +
       (items.length ? '大家在这个话题下发的' : '这个话题还没有公开内容') + '</span>' +
-      '<span class="sec-sub">' + (items.length ? items.length + ' 条 · ' + via : via) + '</span></div>' + nums + rows +
+      '<span class="sec-sub">' + (items.length ? items.length + ' 条 · ' + via : via) + '</span></div>' + nums + rows + few +
       (!all && items.length > show
         ? '<button class="btn btn-soft btn-block mt-s" data-act="topic-all">查看全部 ' + items.length + ' 条</button>'
         : '');
