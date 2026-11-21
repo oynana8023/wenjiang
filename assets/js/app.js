@@ -1369,6 +1369,22 @@
           '<button class="btn btn-ghost btn-block mt-s" data-act="topic-retry">' + U.ic('refresh', 15) + ' 再试一次</button>';
       }
     }
+
+    /* 公共通道时通时不通：第一次没成，隔 2.5 秒自己再要一次。
+       成了就悄悄换掉（缓存变成实时），不成了就算了，按钮还在。 */
+    setTimeout(function () {
+      if (topicRetry > 0) return;
+      if (!document.getElementById('topicBox')) return;
+      if (topicCache.data && topicCache.data.via === 'live') return;
+      topicRetry = 1;
+      L.topic(srcId, tid, title, 20, { budget: 14000 }).then(function (t2) {
+        if (!t2 || t2.via !== 'live' || !t2.items || !t2.items.length) return;
+        var b4 = document.getElementById('topicBox');
+        if (!b4) return;
+        topicCache = { src: srcId, title: title, id: id, data: t2 };
+        b4.innerHTML = topicBoxHtml(t2, all);
+      }).catch(function () { /* ignore */ });
+    }, 2500);
   }
 
   /* 额度 */
