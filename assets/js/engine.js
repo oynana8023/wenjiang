@@ -339,6 +339,11 @@ window.WJEngine = (function () {
     var k2 = secondTopic(kws, k1);
     var has2 = !!k2;
     var head = headlineOf(sents || [core]);
+    /* 首句以时间开头时，headlineOf 只截到「2023 年秋天」，
+       当标题等于没标题，退回关键词型。 */
+    if (!head || head.replace(/[^\u4e00-\u9fa5A-Za-z0-9]/g, '').length < 8) {
+      head = has2 ? (k1 + '与' + k2 + '，变量在哪') : (k1 + '正在被重新定价');
+    }
     var numM = String(text).match(/\d+(?:\.\d+)?\s*(?:%|万|亿|元|倍|天|小时|克|公里)/);
     var num = numM ? numM[0].replace(/\s/g, '') : '';
 
@@ -466,6 +471,13 @@ window.WJEngine = (function () {
 
   /* 没选字数时的默认值：短稿按原样，长稿留一半到八成。
      5000 字留 2500，不是为了凑篇幅，是因为再压就只剩结论了。 */
+  /* 「车间主任周建国」这种，是人物不是议题，不能拿来做标题主语或第二关键词 */
+  function isPersonName(w, text) {
+    if (!w || !/^[\u4e00-\u9fa5]{2,4}$/.test(w)) return false;
+    var role = '(主任|经理|负责人|总监|工程师|教授|记者|主席|总裁|创始人|厂长|老板|主管|组长|司机|医生|律师|院长|校长)';
+    return new RegExp(role + w).test(String(text)) || new RegExp(w + '(说|表示|认为|回忆|介绍)').test(String(text));
+  }
+
   function autoWords(srcLen) {
     var n = Number(srcLen) || 0;
     if (n <= 700) return Math.max(300, n);
@@ -542,6 +554,9 @@ window.WJEngine = (function () {
       .replace(/毋庸置疑，?/g, '')
       .replace(/不难看出，?/g, '')
       .replace(/带带到/g, '带到')
+      .replace(/(上|中|里)与看/g, '$1写着')
+      .replace(/与看(?=\s*\d)/g, '显示')
+      .replace(/(上|中|里)与说/g, '$1写着')
       .replace(/赋能|闭环|抓手|组合拳|颗粒度/g, function (m) {
         return { '赋能': '帮助', '闭环': '完整流程', '抓手': '切入点', '组合拳': '一套做法', '颗粒度': '细致程度' }[m];
       })
@@ -992,6 +1007,10 @@ window.WJEngine = (function () {
     if (!t2 || t2 === t1) t2 = (kws[1] && kws[1] !== t1) ? kws[1] : (kws[2] || t1);
     /* 把整句标题当关键词，会拼出「把良率和一条光学模组产线的三年放在一起看」这种病句 */
     if (t2 && (t2.length > 10 || /[，。、；]/.test(t2))) t2 = '';
+    /* 主角是人名时，「真正的变量在周建国」是病句 */
+    var subj0 = subjectOf(sents[0] || '');
+    if (t2 && subj0 && (t2 === subj0 || subj0.indexOf(t2) === 0 || t2.indexOf(subj0) > -1)) t2 = '';
+    if (t2 && isPersonName(t2, sents.join(''))) t2 = '';
     var catTags = (D.TAG_BY_CAT[opts.cat] || []).slice(0, 2);
     var center = a.center || sents[0] || '';
     var seed = Math.abs(ctx.seed || 0);
@@ -1488,7 +1507,7 @@ window.WJEngine = (function () {
       seed: seed
     };
 
-    var kws = keywords(input, 6);
+    var kws = keywords(input, 6).filter(function (k) { return !isPersonName(k, input); });
     /* 标题主语优先，避免把「供应链」「AI」当成文章主角 */
     var ent = entityOf((opts && opts.sourceTitle) || sents[0] || '');
     if (ent) {
@@ -1505,6 +1524,8 @@ window.WJEngine = (function () {
     /* 长稿里每三句一个「更关键的是」会很吵，拉开到五六句 */
     ctx.connGap = ctx.plan.target > 2400 ? 7 : ctx.plan.target > 1400 ? 5 : 3;
     var body = humanize(buildBody(style, sents, kws, ctx, opts));
+    /* 同义替换用的 \u0001/\u0002 占位符，极端情况下可能没还原干净 */
+    body = body.replace(/\u0001\d*\u0001?|\u0002\d*\u0002?/g, '');
     var titles = buildTitles(style, kws, core, input, sents, opts.platform).filter(function (t, i, arr) {
       return t && arr.indexOf(t) === i;
     });
