@@ -435,7 +435,7 @@ window.WJLive = (function () {
   function isDeadBase(b) {
     var k = String(b || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
     var t = deadBases()[k];
-    return !!(t && Date.now() - t < 18e5);
+    return !!(t && Date.now() - t < 8 * 60000);
   }
 
   async function fetchSource(id) {
@@ -771,7 +771,7 @@ window.WJLive = (function () {
       try { var m = JSON.parse(localStorage.getItem('wj.base.dead') || '{}'); return (m && typeof m === 'object') ? m : {}; } catch (e) { return {}; }
     }
     function baseKey(b) { return hostOf(b) || b; }
-    function isDead(b) { var t = deadMap()[baseKey(b)]; return !!(t && Date.now() - t < 18e5); }
+    function isDead(b) { var t = deadMap()[baseKey(b)]; return !!(t && Date.now() - t < 8 * 60000); }
     function markBase(b, dead) {
       try {
         var m = deadMap();
@@ -810,6 +810,17 @@ window.WJLive = (function () {
         return { title: parsed.title, text: parsed.text.slice(0, 12000), chars: parsed.text.length };
       } });
     });
+
+    /* 地址填了但全被标成「不通」：不能骗用户说「没配置」。单独给一个错误码，
+       界面提示「连不上，去检测一下」，并提供粘贴全文的退路。 */
+    if (!tasks.length && bases.length) {
+      var deadErr = new Error('解析服务连不上，这次没取到正文');
+      deadErr.code = 'DEAD_BASE';
+      deadErr.detail = bases.map(function (b) { return (hostOf(b) || b) + '：最近一次请求超时或被网络拦截'; }).join('\n') +
+        '\n到「我的 → 解析服务」点「保存并检测」看它是否还在线；地址失效就重新部署一个（页面里有一键部署）。';
+      deadErr.url = url;
+      throw deadErr;
+    }
 
     if (!tasks.length) {
       var none = new Error('没有配置解析服务，取不到网页正文');
@@ -1253,9 +1264,10 @@ window.WJLive = (function () {
   function bestChat(models, exclude) {
     var best = null, bs = -1e9;
     (models || []).forEach(function (m) {
-      if (m.kind !== 'chat' || m.status === 'missing' || m.status === 'paid' || m.status === 'auth') return;
+      if (m.kind !== 'chat' || m.status === 'missing' || m.status === 'paid' || m.status === 'auth' || m.status === 'error') return;
       if (exclude && exclude.indexOf(m.id) > -1) return;
-      var s = rankOf(m) + (m.status === 'ok' ? 100 : 0);
+      /* 识图模型能聊，但写长稿通常更差，同等条件下排在纯文本模型后面 */
+      var s = rankOf(m) + (m.status === 'ok' ? 100 : 0) - (VISION_RE.test(String(m.id).toLowerCase()) ? 30 : 0);
       if (s > bs) { bs = s; best = m; }
     });
     return best;

@@ -1681,7 +1681,7 @@
     } else if (st === 404 || /404|not found|不存在/i.test(msg)) {
       tips.push('地址少了一段。这家正确的写法是 <b>' + esc(base) + '</b>。');
     } else if (e && e.code === 'RELAY_DOWN') {
-      tips.push('厂商不允许浏览器直连，自动中转也失败了。云端实例可能在重启，等十几秒再试；或在下面填自己的 Worker 地址。');
+      tips.push('厂商不允许浏览器直连，自动中转也失败了。解析服务可能刚重启或被限流，等十几秒再试；或在下面填自己的 Worker 地址。');
     } else if (/Failed to fetch|跨域|Network|Load failed|连不上/i.test(msg)) {
       tips.push('厂商不允许浏览器直连（NVIDIA 就是这样），点下面的「换个中转通道」再试。');
     } else if (/超时|timeout|abort/i.test(msg)) {
@@ -2092,13 +2092,18 @@
 
     var dead = (err && err.code) === 'DEAD';
     var noCh = (err && err.code) === 'NO_CHANNEL';
+    var deadBase = (err && err.code) === 'DEAD_BASE';
     var why = noCh
       ? '这台设备上还没有配置解析服务。填一个地址后，贴链接就能自动取正文；在那之前可以先粘全文。'
-      : dead
+      : deadBase
+        ? '地址是填了的，但这次连不上：可能是 Worker 被删了、地址写错，或当前网络拦了 workers.dev。' +
+          '点下面的「去检测」看一眼，绿的说明只是刚才超时，红的就重新部署一个。'
+        : dead
       ? '这条链接本身已经打不开了（作者删除、内容下架，或分享链接过期）。换一条新分享出来的链接最稳；' +
         '也可以长按把正文复制下来，走「直接粘全文」，改写效果一样。'
       : offline
-        ? '解析服务这一次没响应（免费沙盒实例每隔一阵会重启，重启的十几秒里就会这样）。点<b>再试一次</b>通常就恢复。'
+        ? '解析服务这一次没响应：地址失效、Worker 被删，或当前网络拦了 workers.dev。点<b>再试一次</b>；' +
+          '还是不行就到「我的 → 解析服务」点「保存并检测」，红的就重新部署一个。'
         : '服务是在线的，是这一页本身不给正文：微博、抖音、快手这些页面由脚本渲染，知乎有风控，服务器拿到的常常是空壳。' +
           '换成文章页链接最稳；只有标题也能先写起来。';
 
@@ -2106,6 +2111,8 @@
 
     var msg = String((err && err.message) || '');
     var lead = noCh ? '贴链接取正文需要一台解析服务器，现在还没配。'
+      : deadBase ? '解析服务的地址在，但这次没连上。'
+      : offline ? '解析服务没连上，不是这一页的问题。'
       : (msg && msg !== '这个链接没取到正文') ? msg : '服务器连上了，但这一页没把正文交出来。';
 
     openSheet(
@@ -2124,7 +2131,8 @@
             ? '<button class="btn btn-soft btn-block" data-act="copy" data-text="' + esc(err.url) + '">' + U.ic('copy', 15) + ' 复制链接</button>' +
               '<button class="btn btn-soft btn-block" data-act="open-url" data-url="' + esc(err.url) + '">' + U.ic('external', 15) + ' 用浏览器打开</button>'
             : '') +
-          (noCh ? '<button class="btn btn-primary btn-block" data-act="parse-service">' + U.ic('wand', 15) + ' 去配置解析服务</button>' : '') +
+          (noCh || deadBase || offline ? '<button class="btn btn-primary btn-block" data-act="parse-service">' + U.ic('wand', 15) + ' ' +
+            (noCh ? '去配置解析服务' : '去检测解析服务') + '</button>' : '') +
           '<button class="btn btn-ghost btn-block" data-act="to-text">改成粘贴全文（照样能改写）</button>'
       }
     );
