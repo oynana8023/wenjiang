@@ -345,7 +345,8 @@ window.WJUI = (function () {
       h += '<div class="field mt-m"><div class="field-head"><span class="lbl">Raw text</span>' +
         '<span class="cnt"><span data-cnt="text1">0</span> 字</span></div>' +
         '<textarea class="tall" data-field="text1" placeholder="把原文粘进来，至少 30 字。观点、数据、案例都可以。">' + esc(c.text1) + '</textarea>' +
-        '<div class="foot"><button class="mini-btn" data-act="example">' + ic('sparkle', 12) + ' 用示例素材</button>' +
+        '<div class="foot"><button class="mini-btn" data-act="paste-clip">' + ic('copy', 12) + ' 读剪贴板</button>' +
+        '<button class="mini-btn" data-act="example">' + ic('sparkle', 12) + ' 用示例素材</button>' +
         (c.text1 ? '<button class="mini-btn" data-act="clear-compose">' + ic('close', 12) + ' 清空</button>' : '') +
         '<div class="spacer"></div><span class="sec-sub">不会上传到任何服务器</span></div></div>';
     if (c.sourceImages && c.sourceImages.length) {

@@ -664,6 +664,84 @@ window.WJLive = (function () {
     { id: 'codetabs', label: '公共代理 B', wrap: function (u) { return 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u); } }
   ];
 
+  /* ---------------- DeepSeek 官方「网页抓取」直连 ----------------
+     2026 年 10 月起，DeepSeek 提供 POST /v1/tools/fetch：丢一个 URL，回 { title, content }，
+     content 是洗干净的正文字（Markdown），公众号也能抓。
+     关键是这家给浏览器发 CORS 头（预检回 Access-Control-Allow-Origin），
+     所以不用部署任何中转就能在手机浏览器里直接解析——这正是这个 App 一直缺的那一环。
+     计费：每 1000 次成功请求约 5 元，失败、没正文的不计费。 */
+  var DS_KEY = 'wj.ds.key';
+  var DS_API = 'https://api.deepseek.com/v1/tools/fetch';
+
+  function dsKey() {
+    try { return String(localStorage.getItem(DS_KEY) || '').trim(); } catch (e) { return ''; }
+  }
+  function setDsKey(k) {
+    try {
+      if (k) localStorage.setItem(DS_KEY, String(k).trim());
+      else localStorage.removeItem(DS_KEY);
+    } catch (e) { /* ignore */ }
+  }
+
+  /* Markdown → 纯文本 + 图片地址。抓回来是 "# 标题\n\n正文![](图)" 这种，
+     直接喂给改写提示词会带一堆 # 和 **，先转干净。 */
+  function mdToText(md) {
+    var imgs = [];
+    var t = String(md || '');
+    t = t.replace(/!\[[^\]]*\]\(([^)\s]+)[^)]*\)/g, function (_, u) {
+      if (u && !/^data:/.test(u) && imgs.indexOf(u) < 0) imgs.push(u);
+      return '';
+    });
+    t = t.replace(/\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, '$1');
+    t = t.replace(/^#{1,6}\s*/gm, '');
+    t = t.replace(/^\s*[-*+]\s+/gm, '· ');
+    t = t.replace(/^\s*>\s?/gm, '');
+    t = t.replace(/(\*\*|__)(.*?)\1/g, '$2');
+    t = t.replace(/`{1,3}([^`]*)`{1,3}/g, '$1');
+    t = t.replace(/^\s*[-*_]{3,}\s*$/gm, '');
+    return { text: clean(t), images: imgs.slice(0, 8) };
+  }
+
+  async function dsFetch(url, ms) {
+    var k = dsKey();
+    if (!k) {
+      var e0 = new Error('没有填 DeepSeek Key');
+      e0.code = 'NO_DS';
+      throw e0;
+    }
+    var tk = timeout(ms || 45000);
+    var r, d;
+    try {
+      r = await fetch(DS_API, {
+        method: 'POST',
+        signal: tk.signal,
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + k },
+        cache: 'no-store',
+        body: JSON.stringify({ url: url })
+      });
+      d = await r.json().catch(function () { return null; });
+    } finally { tk.done(); }
+    if (!r.ok) {
+      var msg = (d && d.error && (d.error.message || d.error.code)) || ('HTTP ' + r.status);
+      var e = new Error(msg);
+      e.status = r.status;
+      if (r.status === 401) e.message = 'DeepSeek Key 无效或已失效';
+      else if (r.status === 402) e.message = 'DeepSeek 余额不足（抓取 1000 次约 5 元）';
+      else if (r.status === 403) e.message = '被目标站点安全策略拒绝（' + msg + '）';
+      else if (r.status === 404) e.message = '这个页面抓不到内容（可能要登录，或页面没有正文）';
+      else if (r.status === 429) e.message = '抓取太频繁（每秒 5 次上限），缓一下再试';
+      throw e;
+    }
+    var content = String((d && d.content) || '');
+    if (content.replace(/\s/g, '').length < 30) {
+      var e2 = new Error('页面抓回来几乎是空的（可能要登录，或是纯图片页）');
+      e2.status = 404;
+      throw e2;
+    }
+    var conv = mdToText(content);
+    return { title: String((d && d.title) || ''), text: conv.text.slice(0, 20000), chars: conv.text.length, images: conv.images, via: 'deepseek' };
+  }
+
   /* 把底层错误翻译成人话：502 是解析服务掉线，abort 是超时，Failed to fetch 多半被网络拦了 */
   function errMsg(e) {
     var m = String((e && e.message) || '失败');
@@ -1995,6 +2073,27 @@ window.WJLive = (function () {
 
     var tasks = [];
     var bases = parseBases();
+    var dsErr = null;
+
+    /* 0) DeepSeek 官方抓取：不依赖中转，公众号也稳，配了 Key 就先走这条。
+          它一家通，就不必再等公共通道那堆不确定的东西。 */
+    if (dsKey()) {
+      if (onStep) onStep('正在用 DeepSeek 抓取正文', 1, 1);
+      try {
+        var dsf = await dsFetch(url, 22000);
+        return shape({ title: dsf.title, text: dsf.text, chars: dsf.chars, images: dsf.images, via: 'deepseek' }, 'deepseek');
+      } catch (e) {
+        dsErr = e;
+        /* 401/402 是 Key 本身的问题，继续用别的通道也没意义，直接告诉用户 */
+        if (e.status === 401 || e.status === 402) {
+          var ke = new Error(e.message);
+          ke.code = e.status === 401 ? 'DS_AUTH' : 'DS_PAID';
+          ke.detail = '到「我的 → 解析服务」重新填 DeepSeek Key（platform.deepseek.com/api_keys 生成）。';
+          ke.url = url;
+          throw ke;
+        }
+      }
+    }
 
     /* 连不上过一次的地址，先记 30 分钟别再等它。
        国内直连 workers.dev 基本必超时，每次失败都花 18 秒等一个注定不通的地址，是最伤的体验。 */
@@ -2106,15 +2205,19 @@ window.WJLive = (function () {
       }
       var err = new Error((e0 && e0.code === 'DEAD' && e0.message) || '这个链接没取到正文');
       err.detail = (e0 && e0.detail) || (e0 && e0.message);
+      if (dsErr) err.detail = 'DeepSeek 抓取：' + dsErr.message + '\n' + (err.detail || '');
       err.title = (e0 && e0.title) || titleHint;
       err.code = (e0 && e0.code) || '';
-      /* 没配解析服务、公共线路也没通：这不是「链接坏了」，别让用户以为内容没了 */
-      if (!bases.length) {
+      /* 没有任何一条能用的通道：先把「最省事的办法」摆在最前面 */
+      if (!bases.length && !dsKey()) {
         err.code = 'NO_CHANNEL';
-        err.message = '公共线路这次都没通，正文没取到';
-        err.detail = '浏览器不能直接读别人的网页（跨域限制），公共阅读器也常常限流。\n' +
-          '配一台自己的解析服务最稳（我的 → 解析服务 → 一键部署，约 3 分钟），' +
-          '或者直接把正文粘进来，改写效果一样。';
+        err.message = '这次没取到正文';
+        err.detail = '三条路，按省事程度排：\n' +
+          '① 填一个 DeepSeek Key（我的 → 解析服务）：官方抓取接口，公众号也能抓，1000 次约 5 元，不用部署任何东西；\n' +
+          '② 部署一个自己的解析 Worker（同页有一键部署，约 1 分钟）；\n' +
+          '③ 直接点「粘贴全文」，把正文复制进来，改写效果完全一样。';
+      } else if (!bases.length && dsErr) {
+        err.message = 'DeepSeek 这次没抓到：' + dsErr.message;
       }
       /* 竞速层会把多个通道的失败拼成 detail，code 在这一层丢了，只能从文字里认 */
       if (!err.code && /已经失效|内容不存在|已被删除|分享链接过期/.test(String(err.detail || ''))) {
@@ -2203,20 +2306,53 @@ window.WJLive = (function () {
     } catch (e) { /* ignore */ }
   }
 
+  /* v2.17 修掉的死结：旧版把「直连被跨域拦」永久写进 localStorage（存裸 0，永不过期）。
+     手机切一次 Wi-Fi、开一次 VPN，某个厂商就被判死刑，之后所有请求都改道中转；
+     中转一挂，全站模型「配置好了却全部不能用」，而且永远自愈不了。
+     现在两条都改：失败只冷却 90 秒，成功记 12 小时；旧格式一律作废重新试。 */
+  var DIRECT_OK_TTL = 12 * 3600e3;
+  var DIRECT_BAD_TTL = 90e3;
+
   function directMap() {
     try { return JSON.parse(localStorage.getItem(DIRECT_KEY) || '{}') || {}; } catch (e) { return {}; }
   }
   function directOk(host) {
-    var m = directMap();
-    return m[host] === 0 ? false : m[host] === 1 ? true : null;
+    var r = directMap()[host];
+    if (r == null) return null;
+    if (typeof r === 'number') return null;   /* 旧格式（裸 0/1）不可信，重新探测 */
+    var age = Date.now() - (Number(r.t) || 0);
+    if (age > (r.ok ? DIRECT_OK_TTL : DIRECT_BAD_TTL)) return null;
+    return !!r.ok;
   }
   function markDirect(host, ok) {
     try {
       var m = directMap();
-      m[host] = ok ? 1 : 0;
+      m[host] = { ok: ok ? 1 : 0, t: Date.now() };
       localStorage.setItem(DIRECT_KEY, JSON.stringify(m));
     } catch (e) { /* ignore */ }
   }
+  function clearDirect() {
+    try { localStorage.removeItem(DIRECT_KEY); } catch (e) { /* ignore */ }
+  }
+
+  /* 明确不给浏览器跨域头的厂商：预检（OPTIONS）不回 Access-Control-Allow-Origin，
+     浏览器连请求都发不出去。命中这几家的，直接告诉用户「要用必须配中转」，
+     别再让他反复点「重试」白等。 */
+  var CORS_BLOCKED = [
+    { re: /(^|\.)bigmodel\.cn$/i, name: '智谱' },
+    { re: /(^|\.)openai\.com$/i, name: 'OpenAI' },
+    { re: /(^|\.)anthropic\.com$/i, name: 'Anthropic' },
+    { re: /(^|\.)nvidia\.com$/i, name: 'NVIDIA NIM' },
+    { re: /(^|\.)openrouter\.ai$/i, name: 'OpenRouter' }
+  ];
+  function corsBlockedName(base) {
+    var h = hostOf(base);
+    for (var i = 0; i < CORS_BLOCKED.length; i++) if (CORS_BLOCKED[i].re.test(h)) return CORS_BLOCKED[i].name;
+    return '';
+  }
+
+  /* 这几家实测允许浏览器直连（OPTIONS 回 ACAO），配了就能用，不需要中转 */
+  var CORS_FRIENDLY = /(^|\.)(deepseek\.com|siliconflow\.cn|moonshot\.cn|aliyuncs\.com|llm7\.io|pollinations\.ai)$/i;
 
   function relayList() {
     var out = [];
@@ -2259,7 +2395,9 @@ window.WJLive = (function () {
     return readLLMData(r.status, data, raw);
   }
 
-  /* 一次模型请求：先直连，跨域失败自动换中转并记住结果 */
+  /* 一次模型请求：直连优先 → 中转 → 再给直连一次机会。
+     关键改动（v2.17）：任何一步失败都不再永久封死直连，冷却 90 秒后自动重试，
+     所以「换网 / 开关 VPN / 厂商恢复」之后不用用户手动清缓存也能自己好。 */
   async function llmFetch(base, path, opts) {
     opts = opts || {};
     var b = normBase(base);
@@ -2269,9 +2407,10 @@ window.WJLive = (function () {
     var body = opts.body ? JSON.stringify(opts.body) : null;
     var ms = opts.ms || 60000;
     var lastErr = null;
+    var directTries = 0;
 
-    if (directOk(host) !== false) {
-      var tk = timeout(ms);
+    async function once(ms2) {
+      var tk = timeout(ms2);
       try {
         var r = await fetch(b + path, {
           method: method,
@@ -2286,11 +2425,21 @@ window.WJLive = (function () {
         if (!isNetErr(e)) { markDirect(host, true); throw e; }
         markDirect(host, false);
         lastErr = e;
+        return null;
       } finally {
         tk.done();
       }
     }
 
+    /* 1) 直连。只有「90 秒内刚失败过」才跳过，其余情况一律先试，
+          因为绝大多数国产厂商其实都允许浏览器直连。 */
+    if (directOk(host) !== false || !relayList().length) {
+      directTries++;
+      var r1 = await once(ms);
+      if (r1) return r1;
+    }
+
+    /* 2) 中转（用户配的解析服务 / 同源服务） */
     var list = relayList();
     for (var i = 0; i < list.length; i++) {
       var rb = list[i];
@@ -2314,10 +2463,30 @@ window.WJLive = (function () {
         tk2.done();
       }
     }
-    var msg = list.length ? '直连被跨域拦下，中转通道也没通' : ((lastErr && lastErr.message) || '模型接口连不上');
+
+    /* 3) 中转全挂：再给直连一次（可能只是刚才在切网 / 服务在唤醒）。
+          以前少了这一步，用户只要曾经失败过一次就再也没有直连机会。 */
+    if (!directTries || directOk(host) === false) {
+      var r3 = await once(Math.min(ms, 30000));
+      if (r3) return r3;
+    }
+
+    var blocked = corsBlockedName(b);
+    var msg, code;
+    if (blocked) {
+      msg = blocked + ' 不给浏览器发跨域头（预检就被拦），直连必然失败，必须经中转，或换一家允许直连的厂商';
+      code = 'CORS_BLOCKED';
+    } else if (list.length) {
+      msg = '直连被跨域拦下，中转通道也没通';
+      code = 'RELAY_DOWN';
+    } else {
+      msg = '模型接口连不上（' + (host || '地址') + '）：网络不通，或这家不允许浏览器直连';
+      code = 'NET_DOWN';
+    }
     var err = new Error(msg);
-    err.code = list.length ? 'RELAY_DOWN' : 'NET_DOWN';
+    err.code = code;
     err.relayTried = list.length;
+    err.host = host;
     err.detail = String((lastErr && lastErr.message) || '');
     throw err;
   }
@@ -2590,7 +2759,7 @@ window.WJLive = (function () {
           });
         }
         var msg = (d && d.choices && d.choices[0] && d.choices[0].message) || {};
-        var txt = String(msg.content || '').trim();
+        var txt = msgText(msg);
         /* 只回一个「在」不算可用：必须真的按题目写出成句的中文。
            这一步是「可用」这个标签的唯一依据——标了可用，就一定能出内容。 */
         var cn = (txt.match(/[\u4e00-\u9fa5]/g) || []).length;
@@ -2730,6 +2899,20 @@ window.WJLive = (function () {
     throw err;
   }
 
+  /* 推理模型（gpt-oss / o 系 / R1 / GLM-Z1）经常把正文写进 reasoning_content，
+     content 留空。旧版直接判「模型没有返回内容」，于是这类模型全被标成「写不出内容」
+     从列表里删掉——用户看到的就是「配好的模型全不能用」。这里统一取文。 */
+  function msgText(m) {
+    if (!m) return '';
+    var t = String(m.content == null ? '' : m.content).trim();
+    if (t) return t;
+    var r = String(m.reasoning_content || m.reasoning || '').trim();
+    if (!r) return '';
+    /* 推理过程常混着英文自问自答，只取中文起始的一段 */
+    var cn = r.match(/[\u4e00-\u9fa5][\s\S]*$/);
+    return (cn ? cn[0] : r).trim();
+  }
+
   async function chat(cfg, messages, opts) {
     var base = normBase(cfg.base);
     var model = (opts && opts.model) || cfg.model;
@@ -2759,8 +2942,13 @@ window.WJLive = (function () {
         }
       });
     }
-    var txt = d && d.choices && d.choices[0] && (d.choices[0].message || {}).content;
-    if (!txt) throw new Error('模型没有返回内容');
+    var ch = (d && d.choices && d.choices[0]) || {};
+    var txt = msgText(ch.message || {}) || String(ch.text || '').trim();
+    if (!txt) {
+      var e2 = new Error(ch.finish_reason === 'length' ? '模型输出被长度限制截断，没写出正文' : '模型没有返回内容');
+      e2.code = 'EMPTY';
+      throw e2;
+    }
     return String(txt);
   }
 
@@ -2867,6 +3055,13 @@ window.WJLive = (function () {
     genImage: genImage,
     visionAsk: visionAsk,
     annotate: annotate,
-    normBase: normBase
+    normBase: normBase,
+    dsKey: dsKey,
+    setDsKey: setDsKey,
+    dsFetch: dsFetch,
+    mdToText: mdToText,
+    corsBlockedName: corsBlockedName,
+    CORS_FRIENDLY: CORS_FRIENDLY,
+    clearDirect: clearDirect
   };
 })();

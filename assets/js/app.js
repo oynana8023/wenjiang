@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI, C = window.WJCreate;
 
-  var VERSION = 'v2.16.0';
+  var VERSION = 'v2.17.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -175,7 +175,10 @@
   /* 调用顺序：默认服务商优先，其余按添加顺序排队当备用 */
   function providerChain(kind) {
     var act = activeProvider();
-    var localNoKey = /^https?:\/\/(localhost|127\.|\[::1\]|0\.0\.0\.0)/i;
+    /* 本地 Ollama 本来就没有 Key；内置免费通道（pollinations）也是无 Key 直连。
+       以前只放行 localhost，结果「内置免费通道」被当成没配 Key 直接剔掉，
+       用户点了一键启用却还是掉进本机引擎——这就是「模型全部不能用」的第二个原因。 */
+    var localNoKey = /^https?:\/\/(localhost|127\.|\[::1\]|0\.0\.0\.0)|text\.pollinations\.ai/i;
     return providers().filter(function (p) {
       if (!p.base) return false;
       /* 本地 Ollama 这类本来就没有 Key，不能因为空 Key 被剔掉 */
@@ -485,6 +488,22 @@
     if (ta && c1) c1.textContent = ta.value.trim().length;
   }
 
+  /* 从公众号/网页复制出来的正文常带一堆壳：引导关注、二维码提示、点赞在看、
+     「预览时标签不可点」、版权声明。这些进了提示词只会污染改写结果，先清掉。 */
+  var JUNK_LINE = /^(点击上方|点击蓝字|关注我们|关注【|长按|识别二维码|扫码|扫描二维码|预览时标签不可点|阅读原文|往期推荐|相关阅读|责任编辑|免责声明|版权归|如有侵权|本文来自|—+\s*(END|end)\s*—+|（*完）*$|点赞|在看|分享|收藏|写留言|留言)/;
+  function dejunk(txt) {
+    var lines = String(txt || '').replace(/\r/g, '').split('\n');
+    var out = [];
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i].replace(/[ \t\u00a0]+/g, ' ').trim();
+      if (!l) { out.push(''); continue; }
+      if (JUNK_LINE.test(l)) continue;
+      if (l.length < 4 && !/[。！？.!?]/.test(l)) continue;
+      out.push(l);
+    }
+    return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+
   /* ---------------- 加载态 ---------------- */
 
   var STEPS = ['读取素材', '拆句与关键词', '结构重组', '语体适配', '原创度自检'];
@@ -735,6 +754,15 @@
   async function build(src) {
     var c = state.compose;
     var chain = providerChain('chat');
+
+    /* 自有服务商全挂时的兜底：内置免费通道（不需要 Key、允许浏览器直连）。
+       以前这种情况直接掉到本机引擎，用户看到的就是「模型白配了、整个软件在摆烂」。
+       现在先让免费模型把稿写出来，并在结果里标明是谁写的。 */
+    var freeFallback = null;
+    var hasFree = chain.some(function (p) { return /pollinations/i.test(String(p.base || '')); });
+    if (!hasFree) {
+      freeFallback = { id: 'free-auto', name: '内置免费通道', base: 'https://text.pollinations.ai/openai', key: '', model: 'openai-fast' };
+    }
     /* 目标字数：用户选的优先；没选就按原文长度换算。两边算法都在 engine 里，
        避免 UI、提示词、自检三处各写一套数字。 */
     var srcLen0 = String(src || '').replace(/\s/g, '').length;
@@ -748,7 +776,7 @@
         var msgs = aiPrompt(src, c);
         var res, o, check, tries = 0;
         while (true) {
-          res = await L.chatChain(chain, msgs);
+          res = await L.chatChain(chain.concat(freeFallback ? [freeFallback] : []), msgs);
           if (res.switched && !tries) toast('默认服务商没响应，已自动切到 ' + (res.provider.name || '备用'), 3000);
           o = parseAI(res.text);
           /* 自检要带上标签一起看：标签在单独字段里，不然小红书永远被判「缺话题标签」 */
@@ -1450,6 +1478,9 @@
 
   function providerCard(p) {
     var isActive = p.id === state.settings.activeId;
+    var blocked = L.corsBlockedName ? L.corsBlockedName(p.base) : '';
+    var direct = blocked ? ('浏览器直连：不可（' + blocked + ' 不发跨域头，要中转）')
+      : (L.CORS_FRIENDLY && L.CORS_FRIENDLY.test(hostName(p.base) || '') ? '浏览器直连：可用（实测允许跨域）' : '');
     return '<div class="prov' + (isActive ? ' on' : '') + '">' +
       '<div class="pv-top">' +
       '<div class="pv-name">' + esc(p.name || hostName(p.base) || '未命名') +
@@ -1457,6 +1488,7 @@
       '<div class="pv-host">' + esc(hostName(p.base) || '未填地址') + '</div>' +
       '</div>' +
       '<div class="pv-meta">' + esc(provSummary(p)) + '</div>' +
+      (direct ? '<div class="pv-note" style="color:' + (blocked ? 'var(--warn)' : 'var(--acc)') + '">' + esc(direct) + '</div>' : '') +
       (p.imgNote ? '<div class="pv-note">' + esc(p.imgNote) + '</div>' : '') +
       '<div class="pv-acts">' +
       (isActive ? '' : '<button data-act="provider-default" data-id="' + p.id + '">设为默认</button>') +
@@ -1472,6 +1504,13 @@
     { name: '内置免费通道', base: 'https://text.pollinations.ai/openai', key: '', models: ['openai-fast'] },
     { name: '内置免费备线', base: 'https://api.llm7.io/v1', key: 'unused', models: ['gpt-oss:20b', 'gemma-3-27b'] }
   ];
+
+  function freeCatalogMeta() {
+    try {
+      var m = JSON.parse(localStorage.getItem('wj.free.meta') || 'null');
+      return m && m.at ? m : { at: '', n: 0 };
+    } catch (e) { return { at: '', n: 0 }; }
+  }
 
   function ensureFreeProviders() {
     var ps = providers();
@@ -1520,6 +1559,13 @@
 
     html += '<button class="btn btn-soft btn-block mt-m" data-act="provider-add">' +
       U.ic('plus', 15) + ' 添加服务商</button>';
+
+    var fm = freeCatalogMeta();
+    html += '<div class="note mt-s">' + U.ic('zap', 14) +
+      '<div><b>免费模型清单</b>（不用 Key、浏览器直连）：' +
+      (fm.at ? '更新于 ' + esc(fm.at.slice(0, 10)) + ' · 已收录 ' + fm.n + ' 个' : '还没同步') +
+      '<div class="mt-s"><button class="mbtn" data-act="sync-free">检查更新</button>' +
+      '<span class="sec-sub" style="margin-left:8px">与 GitHub 仓库里的 data/free-models.json 同步，每周自动跑一次真测</span></div></div></div>';
 
     html += '<div class="note mt-s">' + U.ic('key', 14) +
       '<div>Key 只存在这台设备的浏览器里，不会上传。请求直接发给你填的服务商；' +
@@ -1601,8 +1647,9 @@
       U.ic('refresh', 16) + ' 连接并获取模型</button>';
     html += '<div id="modelStatus" class="mstat">' + modelStatHtml() + '</div>';
     html += '<div class="sec-sub" style="margin:-4px 0 10px;line-height:1.65">' +
-      'NVIDIA NIM 这类海外厂商<b>不给浏览器跨域头</b>，只填地址和 Key 一定会「获取失败」；' +
-      '配一台解析服务当中转才能用，否则先用内置免费通道。</div>';
+      '允许浏览器直连的（<b>DeepSeek / 硅基流动 / 阿里百炼 / Kimi / 内置免费</b>）填完就能用；' +
+      '<b>智谱 GLM、OpenAI、NVIDIA</b> 这几家不发跨域头，必须经中转——要么配解析服务，要么换上面那几家。' +
+      '卡片上会直接标出这一家能不能直连。</div>';
     html += '<div id="modelToolbar">' + modelToolbarHtml() + '</div>';
     html += '<div id="modelList">' + modelListHtml() + '</div>';
     html += '<div id="modelSel" class="msel">' + modelSelHtml() + '</div>';
@@ -1651,14 +1698,19 @@
     }).join('') + '</div>';
     h += '<div class="msearch">' + U.ic('search', 14) +
       '<input data-msearch value="' + esc(draft.q || '') + '" placeholder="搜模型名：glm / deepseek / free" autocapitalize="off" spellcheck="false"></div>';
+    var untested = (draft.models || []).filter(function (m) { return m.kind === 'chat' && !m.status; }).length;
     h += '<div class="macts">' +
-      '<button class="mbtn" data-act="probe-top">试前 20</button>' +
-      '<button class="mbtn" data-act="probe-all">全测一遍</button>' +
+      '<button class="mbtn" data-act="probe-top">' + (untested ? '测 20 个未测' : '试前 20') + '</button>' +
+      '<button class="mbtn" data-act="probe-all">分批测（每次 20）</button>' +
       '<button class="mbtn' + (draft.onlyOk ? ' on' : '') + '" data-act="filter-ok">只看可用</button>' +
       '<button class="mbtn' + (draft.onlyFree ? ' on' : '') + '" data-act="filter-free">只看免费</button>' +
       (s.bad ? '<button class="mbtn' + (!draft.hideBad ? ' on' : '') + '" data-act="filter-bad">' +
         (draft.hideBad ? '查看已剔除 ' + s.bad : '收起已剔除') + '</button>' : '') +
       '</div>';
+    if (untested) {
+      h += '<div class="mhint">还有 <b>' + untested + '</b> 个没测。一次只测 20 个，避免几百个模型一起发请求把页面卡死；' +
+        '测完一批再点一次就行，测过的结果都会留着。</div>';
+    }
     if (s.bad) {
       h += '<div class="mhint">已把 ' + s.bad + ' 个确认不能用的（要充值 / 无此模型 / Key 无效 / 写不出内容）从列表里收起。' +
         '<button class="mlink" data-act="purge-bad">彻底删掉</button></div>';
@@ -1799,7 +1851,7 @@
         toast('列表拿到了，但调用要 Key：填好 Key 再点「试前 20」', 3800);
         return;
       }
-      await runProbe(10, true);
+      await runProbe(6, true);
     } catch (e) {
       if (st) st.innerHTML = '<span style="color:var(--danger)">获取失败</span>';
       if (ls) ls.innerHTML = fetchFailHtml(e);
@@ -2015,24 +2067,37 @@
   }
 
   /* 解析失败 */
-  /* 解析服务：多地址 + 口令 + 一键检测 */
+  /* 解析服务：DeepSeek 直连（首选） + 自建 Worker + 口令 + 一键检测 */
   function openParseService() {
     var list = L.parseBases();
     var key = L.parseKey ? L.parseKey() : '';
+    var dsk = L.dsKey ? L.dsKey() : '';
     var html =
-      '<p style="color:var(--ink-2)">浏览器读不了别人的网页（跨域限制），抓正文要有一台服务器代抓。' +
-      '<b>不配也能用</b>：热榜直连各平台接口，话题二级页走公共线路和微博镜像，都是实时的；' +
-      '这一项只影响两件事——微博话题的完整度、以及任意网页正文的抓取（那里内置了 3 条公共阅读线路兜底）。' +
-      '填多个地址会并行竞速，一条挂了自动换下一条。</p>' +
+      '<p style="color:var(--ink-2)">浏览器读不了别人的网页（跨域限制），抓正文要有东西代抓。' +
+      '现在有两档，<b>第一档不用部署、一分钟配完</b>。</p>' +
+      '<div class="note mt-s" style="border-color:rgba(217,255,75,.32)">' + U.ic('zap', 13) +
+      '<div><b>① DeepSeek 直连解析（推荐）</b><br>' +
+      'DeepSeek 官方的网页抓取接口允许浏览器直连，公众号文章也能抓，正文直接是干净的 Markdown。' +
+      '每 1000 次约 5 元，抓失败不计费。Key 只存在这台设备，不上传。</div></div>' +
+      '<div class="field mt-s"><div class="field-head"><span class="lbl">DeepSeek Key</span>' +
+      '<span class="sec-sub">platform.deepseek.com/api_keys</span></div>' +
+      '<input data-field="dskey" value="' + esc(dsk) + '" spellcheck="false" placeholder="sk-…（留空 = 不用这一档）"></div>' +
+      '<div class="dock-row" style="margin-top:8px">' +
+      '<button class="btn btn-primary" style="flex:1" data-act="save-ds">保存并抓一个网页试试</button>' +
+      '</div>' +
+      '<div class="sec-sub" style="margin-top:6px;line-height:1.6">这一档同时也让 AI 模型可用：DeepSeek 是少数允许浏览器直连的厂商。' +
+      '填了 Key 后到「模型服务商」加一家 DeepSeek（地址 <code>https://api.deepseek.com/v1</code>，模型 <code>deepseek-chat</code>）即可。</div>' +
+
+      '<div class="note mt-m" style="border-color:rgba(255,255,255,.14)">' + U.ic('server', 13) +
+      '<div><b>② 自建解析服务（可选，1 分钟，免费）</b><br>' +
+      '想完全不花钱、或者要抓别的站点，就部署仓库里那个 Worker。填多个地址会并行竞速，一条挂了自动换下一条。</div></div>' +
       (list.length
         ? '<div class="note mt-s" style="border-color:rgba(217,255,75,.28)">' + U.ic('check', 13) +
           '<div>已配置 <b>' + list.length + '</b> 条通道。解析和联网取证都走它。</div></div>'
-        : '<div class="note mt-s" style="border-color:rgba(255,176,32,.3)">' + U.ic('alert', 13) +
-          '<div><b>还没配自己的解析服务。</b>现在走公共线路：文章正文常见站点能取到，强风控站点会失败；' +
-          '微博话题走公共镜像，能通但会被限流。<b>配一台就稳了</b>——热榜本身一直不受影响，它直连接口。</div></div>') +
+        : '') +
       '<div class="field mt-m"><div class="field-head"><span class="lbl">服务地址</span>' +
       '<span class="sec-sub">一行一个，留空 = 关闭</span></div>' +
-      '<textarea data-field="parsebases" rows="4" spellcheck="false" placeholder="https://wenjiang-parse.你的账号.workers.dev">' +
+      '<textarea data-field="parsebases" rows="3" spellcheck="false" placeholder="https://wenjiang-parse.你的账号.workers.dev">' +
       esc(list.join('\n')) + '</textarea></div>' +
       '<div class="field mt-s"><div class="field-head"><span class="lbl">访问口令</span>' +
       '<span class="sec-sub">Worker 设了 PARSE_KEY 才需要填</span></div>' +
@@ -3501,8 +3566,9 @@
         runProbe(20);
         break;
 
+      /* 分批：每次最多 20 个，测完提示还剩多少。绝不再一次性把几百个模型全发出去。 */
       case 'probe-all':
-        runProbe(0);
+        runProbe(20);
         break;
 
       case 'probe-stop':
@@ -3632,6 +3698,7 @@
       case 'reset-parse':
         L.setParseBases([]);
         if (L.setParseKey) L.setParseKey('');
+        if (L.setDsKey) L.setDsKey('');
         if (L.invalidateProbe) L.invalidateProbe();
         closeSheet();
         toast('已清空解析地址');
@@ -3646,6 +3713,94 @@
           break;
         }
         runParseTest(tf.list);
+        break;
+      }
+
+      case 'sync-free': {
+        toast('正在同步免费模型清单…');
+        var urls = [
+          'https://raw.githubusercontent.com/oynana8023/wenjiang/main/data/free-models.json',
+          'https://cdn.jsdelivr.net/gh/oynana8023/wenjiang@main/data/free-models.json'
+        ];
+        (async function () {
+          var doc = null, lastE = null;
+          for (var i = 0; i < urls.length; i++) {
+            try {
+              var r = await fetch(urls[i], { cache: 'no-store' });
+              if (!r.ok) throw new Error('HTTP ' + r.status);
+              doc = await r.json();
+              break;
+            } catch (e) { lastE = e; }
+          }
+          if (!doc || !Array.isArray(doc.models)) throw (lastE || new Error('清单格式不对'));
+          var added = 0, merged = 0;
+          var ps = providers();
+          doc.models.forEach(function (m) {
+            if (!m || !m.base || !m.id) return;
+            var nb = L.normBase(m.base);
+            var p = ps.filter(function (x) { return L.normBase(x.base) === nb; })[0];
+            if (!p) {
+              var a = L.annotate(m.id, { free: true });
+              p = {
+                id: uid(), name: m.name || hostName(m.base), base: m.base, key: m.key || '',
+                model: m.id, imageModel: '',
+                models: [{ id: m.id, kind: 'chat', tags: a.tags, family: a.family, good: a.good, free: true, owned: '', status: '' }],
+                imgNote: ''
+              };
+              ps.push(p); added++;
+            } else {
+              var has = (p.models || []).some(function (x) { return x.id === m.id; });
+              if (!has) {
+                var a2 = L.annotate(m.id, { free: true });
+                p.models = (p.models || []).concat([{ id: m.id, kind: 'chat', tags: a2.tags, family: a2.family, good: a2.good, free: true, owned: '', status: '' }]);
+                merged++;
+              }
+            }
+          });
+          try { localStorage.setItem('wj.free.meta', JSON.stringify({ at: doc.updatedAt || '', n: doc.models.length })); } catch (e) { /* ignore */ }
+          save();
+          closeSheet();
+          openModelSheet();
+          toast('清单已同步：新增 ' + added + ' 家 · 补 ' + merged + ' 个模型', 3200);
+        })().catch(function (e) {
+          toast('同步失败：' + (e.message || '网络不通') + '（离线也能用已内置的免费通道）', 4000);
+        });
+        break;
+      }
+
+      case 'save-ds': {
+        var dv = document.querySelector('[data-field="dskey"]');
+        var dk = dv ? String(dv.value || '').trim() : '';
+        if (L.setDsKey) L.setDsKey(dk);
+        if (!dk) { toast('已清空 DeepSeek Key'); break; }
+        var db = document.getElementById('parse-test');
+        if (db) db.innerHTML = '<div style="width:100%" class="sec-sub">正在用 DeepSeek 抓一个网页验证 Key…</div>';
+        toast('正在验证…');
+        L.dsFetch('https://api-docs.deepseek.com/', 30000).then(function (r) {
+          if (db) db.innerHTML = '<div style="width:100%"><b style="color:var(--acc)">Key 可用</b>：抓到《' + esc(r.title || '无标题') + '》' + r.chars + ' 字。' +
+            '现在粘公众号/头条/新闻链接都能直接解析了。</div>';
+          toast('DeepSeek 解析已就绪');
+          /* 顺手把 DeepSeek 加成模型服务商，一次配置解决解析和写作两件事 */
+          var has = providers().some(function (p) { return /api\.deepseek\.com/i.test(p.base || ''); });
+          if (!has) {
+            var a0 = L.annotate('deepseek-chat', {});
+            var p0 = {
+              id: uid(), name: 'DeepSeek', base: 'https://api.deepseek.com/v1', key: dk,
+              model: 'deepseek-chat', imageModel: '',
+              models: [{ id: 'deepseek-chat', kind: 'chat', tags: a0.tags, family: a0.family, good: a0.good, free: false, owned: '', status: '' }],
+              imgNote: ''
+            };
+            providers().push(p0);
+            if (!state.settings.activeId) state.settings.activeId = p0.id;
+            save();
+            toast('已顺带添加 DeepSeek 模型服务商', 3200);
+          }
+          render('tab');
+        }).catch(function (e) {
+          if (db) db.innerHTML = '<div style="width:100%"><b style="color:var(--danger)">没通过</b>：' + esc(e.message || '抓取失败') +
+            '<br>检查 Key 是否复制完整（以 sk- 开头）、账户是否有余额。</div>';
+          toast('验证没通过：' + (e.message || ''), 3600);
+        });
         break;
       }
 
@@ -3720,6 +3875,26 @@
         state.compose.mode = 'text';
         render('push');
         break;
+
+      /* 免费、零依赖的一条路：正文在剪贴板里就直接读进来，不经过任何服务器。 */
+      case 'paste-clip': {
+        var clip = (navigator.clipboard && navigator.clipboard.readText)
+          ? navigator.clipboard.readText()
+          : Promise.reject(new Error('no clipboard'));
+        clip.then(function (txt) {
+          var t = dejunk(txt);
+          if (!t || t.length < 10) { toast('剪贴板里没读到正文，长按输入框手动粘一次'); return; }
+          state.compose.text1 = t;
+          var ta = document.querySelector("[data-field='text1']");
+          if (ta) { ta.value = t; }
+          syncCounters();
+          autosize();
+          toast('已读入 ' + t.length + ' 字，可以直接生成');
+        }).catch(function () {
+          toast('读不到剪贴板（浏览器限制）：长按输入框粘贴一次就行', 3600);
+        });
+        break;
+      }
 
       /* 正文取不到时不要把人堵在死胡同：有标题就先按标题写，用户再补两句细节 */
       case 'title-write': {

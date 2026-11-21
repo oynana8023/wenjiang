@@ -1,0 +1,57 @@
+{
+  "updatedAt": "2026-11-21T18:00:28.596Z",
+  "source": "https://github.com/oynana8023/wenjiang",
+  "note": "只收录「不需要 Key、浏览器可直连」的免费模型。每条都经过 scripts/sync-free-models.mjs 实跑一次中文短句验证，写不出内容的会被自动剔除。",
+  "models": [
+    {
+      "id": "openai-fast",
+      "name": "内置免费通道",
+      "base": "https://text.pollinations.ai/openai",
+      "key": "",
+      "browser": true,
+      "checked": "2026-11-21",
+      "note": "无 Key 直连，中文成句稳定，实测 2~4 秒出稿",
+      "ms": 9602,
+      "said": "杭州，西湖美景，茶香四溢，古今交融。"
+    },
+    {
+      "id": "gpt-oss:20b",
+      "name": "内置免费备线",
+      "base": "https://api.llm7.io/v1",
+      "key": "unused",
+      "browser": true,
+      "checked": "2026-11-21",
+      "note": "主通道限流时切过去；推理型，正文可能写在 reasoning 字段，已做兼容",
+      "ms": 10253,
+      "said": "The user: \"用一句通顺的中文介绍杭州，20 字以内。\" They wa"
+    },
+    {
+      "id": "gemma-3-27b",
+      "name": "内置免费备线 2",
+      "base": "https://api.llm7.io/v1",
+      "key": "unused",
+      "browser": true,
+      "checked": "2026-11-21",
+      "note": "同为 llm7 免费池，主模型不可用时轮换",
+      "ms": 14976,
+      "said": "杭州，山水秀丽，历史文化悠久，是著名的旅游胜地。"
+    }
+  ],
+  "droppedThisRun": [],
+  "upstream": [
+    {
+      "name": "OpenCode Zen",
+      "status": 429,
+      "cors": "无",
+      "browser": false,
+      "sample": "{\"type\":\"error\",\"error\":{\"type\":\"FreeUsageLimitError\",\"message\":\"Free usage limit reached. Free models work in OpenCode (https://opencode.ai); subscribe to Open"
+    },
+    {
+      "name": "Kilo 免费池",
+      "status": 200,
+      "cors": "无",
+      "browser": false,
+      "sample": "{\"id\":\"gen-1795284026-pSfTMvSbygr0JL42S6jG\",\"object\":\"chat.completion\",\"created\":1795284026,\"model\":\"baidu/ernie-5.5-flash-preview:free\",\"provider\":\"Baidu\",\"sys"
+    }
+  ]
+}
