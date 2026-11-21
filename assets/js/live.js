@@ -1320,15 +1320,25 @@ window.WJLive = (function () {
       var host = h.replace(/^https?:\/\//, '');
       var left = deadline - Date.now();
       if (left < 2500) break;
+      var url = h + '/weibo/keyword/' + encodeURIComponent(word);
+      var r = null;
+      /* 第一跳只给 cors.lol 一次机会（它是目前唯一能连到镜像的一条），4.5 秒不回就换人 */
       try {
-        var r = await pxGet(h + '/weibo/keyword/' + encodeURIComponent(word), {
-          kind: 'xml', ms: Math.min(6500, left), budget: left, ttl: 120000, width: 2
-        });
+        r = await pxGet(url, { kind: 'xml', ms: 4500, budget: 5000, ttl: 120000, width: 1 });
+      } catch (e1) {
+        detail.push('主通道 ' + (e1.detail || e1.message || '没通'));
+      }
+      if (!r) {
+        try {
+          r = await pxGet(url, { kind: 'xml', ms: 5000, budget: Math.max(3000, Math.min(6500, left - 5000)), ttl: 120000, width: 3 });
+        } catch (e2) {
+          detail.push('备用 ' + (e2.detail || e2.message || '没通'));
+        }
+      }
+      if (r) {
         var out = weiboFromRss(r.data, word, n);
         out.from = '微博镜像 · ' + host;
         return out;
-      } catch (e) {
-        detail.push(host + '：' + (e.detail || e.message || '没通'));
       }
     }
     var err = new Error(detail.join('；').slice(0, 100) || '微博镜像没通');
@@ -1841,7 +1851,7 @@ window.WJLive = (function () {
     if (src === 'weibo' && String(title || '').trim()) {
       fallback.push({
         label: '微博镜像',
-        run: function () { return weiboRssTopic(title, n, Math.max(7000, Math.min(13000, deadline - Date.now()))); }
+        run: function () { return weiboRssTopic(title, n, Math.max(7000, Math.min(11000, deadline - Date.now()))); }
       });
     }
 
