@@ -171,29 +171,14 @@ window.WJUI = (function () {
   /* ---------------- 首页 ---------------- */
 
   function home(state) {
-    var active = state.hot.active || 'weibo';
-    var src = state.hot.bySrc[active];
-    var list = (src && src.items) || [];
-    var updated = state.hot.updatedAt;
-
+    /* 首页只做一件事：把「这个 App 能做什么」摆清楚，点一下就进。
+       热榜、作品库都走底部导航，不在首页铺内容。 */
     var h = '<div class="hero">';
-    h += '<div class="hero-row"><i class="dot ' + (src && src.ok ? 'pulse' : 'off') + '"></i>' +
-      '<span class="eyebrow">' + (state.hot.loading ? '正在抓取热榜' : '实时热榜 · 已接入 ' + (state.hot.okCount || 0) + ' 个源') + '</span></div>';
-    h += '<h1 class="h1">把热榜<br>写成<em>你的</em>稿</h1>';
+    h += '<div class="hero-row"><i class="dot pulse"></i>' +
+      '<span class="eyebrow">文匠 · 二创工作台</span></div>';
+    h += '<h1 class="h1">把一条链接<br>写成<em>你的</em>稿</h1>';
     h += '<p class="lead">粘一条链接，选一种语气，拿到可以直接发布的成稿。原文、观点、配图，一次给全。</p>';
-    h += '<div class="hero-stat">' +
-      '<span>更新 <b>' + (updated ? fmtTime(updated) : '—') + '</b></span>' +
-      '<span><b>' + list.length + '</b> 条在榜</span>' +
-      '<span>今日 <b>' + state.works.length + '</b> 篇</span></div>';
-
-    /* 当前这个源是缓存时，直接在首屏说清楚「多久以前」，并给一个立刻重取的按钮。
-       以前只把「更新 HH:MM」写小字里，用户根本分不出是刚抓到还是昨天的榜。 */
-    if (src && src.ok && src.via !== 'live') {
-      h += '<div class="note warn" style="margin:10px 0 2px">' + ic('clock', 14) +
-        '<div><b>' + esc(sourceName(active)) + '这版是缓存</b>（' + (src.at ? ago(src.at) : '时间未知') + '）。' +
-        '实时接口这次没通：' + esc(src.error || '被限流') + '。' +
-        '<div class="mt-s"><button class="mini-btn" data-act="hot-reload">' + ic('refresh', 12) + ' 现在重取</button></div></div></div>';
-    }
+    h += '</div>';
 
     h += '<div class="entries">';
     h += '<button class="entry primary" data-act="tab" data-tab="create">' +
@@ -202,7 +187,7 @@ window.WJUI = (function () {
       '<span class="arrow">' + ic('right', 16) + '</span></button>';
     h += '<button class="entry" data-act="start" data-mode="link">' +
       '<div class="ico">' + ic('link', 16) + '</div>' +
-      '<div class="etxt"><b>链接二创</b><span>公众号、头条、新闻链接</span></div></button>';
+      '<div class="etxt"><b>链接二创</b><span>公众号、头条、新闻链接，抓正文改写</span></div></button>';
     h += '<button class="entry" data-act="start" data-mode="text">' +
       '<div class="ico">' + ic('text', 16) + '</div>' +
       '<div class="etxt"><b>文案改写</b><span>已有稿子，换风格换平台</span></div></button>';
@@ -212,53 +197,12 @@ window.WJUI = (function () {
     h += '<button class="entry" data-act="comment-start">' +
       '<div class="ico">' + ic('message', 16) + '</div>' +
       '<div class="etxt"><b>写条评论</b><span>贴链接或正文，只出评论，挑一条就发</span></div></button>';
-    h += '</div></div>';
+    h += '</div>';
 
-    /* 热榜 */
-    h += '<section class="sec">';
-    h += '<div class="sec-head"><div class="h2">此刻在榜</div>' +
-      liveBadge(src) +
-      '<button class="sec-more" data-act="tab" data-tab="rank">全部 ' + ic('right', 12) + '</button></div>';
-
-    h += '<div class="hscroll" style="margin-bottom:10px">' +
-      window.WJLive.SOURCES.map(function (s) {
-        return '<button class="chip' + (s.id === active ? ' on' : '') + '" data-act="hot-src" data-src="' + s.id + '">' +
-          esc(s.name) + '</button>';
-      }).join('') + '</div>';
-
-    if (state.hot.loading && !list.length) {
-      h += '<div class="panel" style="padding:16px">' +
-        '<div class="sk" style="width:82%;margin-bottom:12px"></div>' +
-        '<div class="sk" style="width:64%;margin-bottom:12px"></div>' +
-        '<div class="sk" style="width:74%;margin-bottom:12px"></div>' +
-        '<div class="sk" style="width:56%"></div></div>';
-    } else if (list.length) {
-      h += '<div class="panel stagger">' +
-        list.slice(0, 6).map(function (it, i) { return rankRow(it, i, active); }).join('') + '</div>';
-    } else {
-      h += emptyState('alert', '这个源暂时没抓到',
-        '可能是接口限流或网络不通。换个源，或点右上角刷新。',
-        '<button class="btn btn-soft mt-m" data-act="hot-reload">' + ic('refresh', 15) + ' 重新抓取</button>');
-    }
-    h += '</section>';
-
-    /* 最近作品 */
-    if (state.works.length) {
-      h += '<section class="sec"><div class="sec-head"><div class="h2">最近</div>' +
-        '<button class="sec-more" data-act="tab" data-tab="works">作品库 ' + ic('right', 12) + '</button></div>';
-      h += '<div class="rows stagger">' + state.works.slice(0, 3).map(function (w, i) {
-        return '<button class="row" data-act="open-work" data-id="' + w.id + '" style="--i:' + i + '">' +
-          '<span class="ri">' + ic('book', 15) + '</span>' +
-          '<span class="rt"><b>' + esc(w.title || '未命名') + '</b>' +
-          '<small>' + esc(w.styleName) + ' · ' + w.words + ' 字 · ' + ago(w.at) + '</small></span>' +
-          '<span class="chev">' + ic('right', 15) + '</span></button>';
-      }).join('') + '</div></section>';
-    }
-
-    h += '<div class="note mt-l">' + ic('shield', 14) +
-      '<div>热榜每 60 秒自动刷新，<b>每一条都是接口此刻返回的值</b>；全部通道都挂掉时才会用缓存，并标明时间。时政类条目不进入榜单' +
-      (src && src.blocked ? '（本页已过滤 <b>' + src.blocked + '</b> 条）' : '') +
-      '，站内没有编造的新闻。</div></div>';
+    h += '<button class="entry mt-m" data-act="tab" data-tab="rank">' +
+      '<div class="ico">' + ic('fire', 16) + '</div>' +
+      '<div class="etxt"><b>看实时热榜</b><span>微博、抖音、知乎等平台当下热搜，点底部「热榜」也可进入</span></div>' +
+      '<span class="arrow">' + ic('right', 16) + '</span></button>';
 
     h += '<div class="ver">WENJIANG · ' + (state.version || 'v2.0') + '</div>';
     return '<div class="screen">' + h + '</div>';
@@ -304,6 +248,27 @@ window.WJUI = (function () {
         '<button class="btn btn-soft mt-m" data-act="hot-reload">' + ic('refresh', 15) + ' 重试</button>');
     }
 
+    /* 其它平台实时热榜速览：一次把已接通的平台都摊开，不再只盯着一个源。
+       每个平台给前 6 条，点标题直接用那条去写；点平台名切过去看完整榜。 */
+    var others = (window.WJLive.SOURCES || []).filter(function (s) {
+      var o = state.hot.bySrc[s.id];
+      return s.id !== active && o && o.ok && o.items && o.items.length && o.via === 'live';
+    });
+    if (others.length) {
+      h += '<section class="sec mt-l"><div class="sec-head"><div class="h2">其他平台实时榜</div>' +
+        '<span class="sec-sub">' + others.length + ' 个平台</span></div>';
+      others.forEach(function (s) {
+        var o = state.hot.bySrc[s.id];
+        h += '<div class="pt-block"><div class="pt-head">' +
+          '<button data-act="hot-src" data-src="' + s.id + '"><b>' + esc(s.name) + ' · ' + esc(s.nick || '热榜') + '</b>' + ic('right', 13) + '</button>' +
+          '<span class="sec-sub">' + fmtClock(o.at) + ' · ' + o.items.length + ' 条</span></div>' +
+          '<div class="rank-list compact">' + o.items.slice(0, 6).map(function (it, i) {
+            return rankRow(it, i, s.id);
+          }).join('') + '</div></div>';
+      });
+      h += '</section>';
+    }
+
     h += '<div class="note mt-l">' + ic('globe', 14) +
       '<div>数据来自微博、知乎、头条、百度、抖音、B 站等公开榜单接口，仅保留标题与热度值，不做任何加工。抓取失败会明确显示，不会用假数据填充。</div></div>';
 
@@ -339,8 +304,9 @@ window.WJUI = (function () {
         '<div class="foot"><button class="mini-btn" data-act="paste">' + ic('copy', 12) + ' 从剪贴板</button>' +
         (c.link1 ? '<button class="mini-btn" data-act="clear-compose">' + ic('close', 12) + ' 清空</button>' : '') +
         '<button class="mini-btn" data-act="preview-link">' + ic('search', 12) + ' 先解析看看</button>' +
+        '<button class="mini-btn" data-act="grab-from-link">' + ic('external', 12) + ' 打开原文读回</button>' +
         '<button class="mini-btn" data-act="start" data-mode="text">' + ic('text', 12) + ' 直接粘全文</button>' +
-        '<div class="spacer"></div><span class="sec-sub">支持多数服务端渲染页面</span></div></div>';
+        '<div class="spacer"></div><span class="sec-sub">解析不通就用「打开原文读回」，任何链接都有效</span></div></div>';
     if (c.preview) {
       h += '<div class="pv">' +
         '<div class="pv-h"><b>' + esc(c.preview.title || '已取到正文') + '</b>' +

@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI, C = window.WJCreate;
 
-  var VERSION = 'v2.20.0';
+  var VERSION = 'v2.21.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -3974,6 +3974,14 @@
         openGrab(t.dataset.url || '');
         break;
 
+      case 'grab-from-link': {
+        /* 从 compose 链接框读当前值（不依赖渲染时的快照，用户可能刚粘进来还没重渲染） */
+        var gl = String(state.compose.link1 || '').trim();
+        if (!/https?:\/\//.test(gl)) { toast('先在上面粘一条以 http 开头的链接'); break; }
+        openGrab(gl);
+        break;
+      }
+
       case 'grab-read':
         readClip().then(function (txt) {
           if (!grabToCompose(txt)) toast('剪贴板里没读到成段的正文，长按输入框粘一次', 3800);
@@ -4238,10 +4246,27 @@
 
   /* ---------------- 启动 ---------------- */
 
+  /* iOS/微信里地址栏收起、软键盘弹出时，visualViewport 会比布局视口矮，
+     底部导航会被顶到可视区上方；把实际高度写进 --app-h，让 .app 跟着可视区走。
+     刷新后浏览器会重算，所以用户看到的是「刷新就归位」——这里主动兜住，不用他刷新。 */
+  function pinViewport() {
+    var vv = window.visualViewport;
+    var h = vv ? vv.height : window.innerHeight;
+    if (h > 0) document.documentElement.style.setProperty('--app-h', h + 'px');
+  }
+
   function boot() {
     load();
     applyTheme();
     watchSystemTheme();
+
+    pinViewport();
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', pinViewport);
+      window.visualViewport.addEventListener('scroll', pinViewport);
+    }
+    window.addEventListener('resize', pinViewport);
+    window.addEventListener('orientationchange', function () { setTimeout(pinViewport, 120); });
 
     app.addEventListener('click', function (e) {
       var t = e.target.closest('[data-act]');
