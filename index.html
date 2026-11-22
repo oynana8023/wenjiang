@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- 文匠 AI · 单文件构建 2026-11-22T05:39:06.599Z · 源文件见 src/ 与 assets/ -->
+<!-- 文匠 AI · 单文件构建 2026-11-22T14:50:08.990Z · 源文件见 src/ 与 assets/ -->
 <html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="UTF-8">
@@ -6789,10 +6789,8 @@ window.WJLive = (function () {
 
   /* 给被墙域名配一句「该怎么办」，避免用户以为是自己的配置错 */
   var WALLED_ADVICE =
-    '这个域名在国内被按域名拦掉了（SNI 阻断），换 DNS、改 hosts、固定 IP 都没用。三条路：' +
-    '① 给 Worker 绑一个自己的域名（代码不用改，10 分钟）；' +
-    '② 挪到阿里云函数计算，国内节点直连、免备案（仓库 worker/aliyun-fc/，约 15 分钟）；' +
-    '③ 这条留空不用，改走公共阅读器或 DeepSeek 抓取。';
+    '这个域名在国内被按域名拦掉了（SNI 阻断），换 DNS、改 hosts、固定 IP 都没用。' +
+    '清空这个地址，改用 App 内置的解析通道就行。';
 
   /* 连不上过一次的解析服务，8 分钟内先不排队等它：国内直连 workers.dev 常常必超时，
      每次失败都花 14 秒等一个注定不通的地址，是最伤的体验。 */
@@ -11083,7 +11081,7 @@ window.WJCreate = (function () {
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI, C = window.WJCreate;
 
-  var VERSION = 'v2.19.1';
+  var VERSION = 'v2.20.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -13277,71 +13275,24 @@ window.WJCreate = (function () {
   function openParseService() {
     var list = L.parseBases();
     var key = L.parseKey ? L.parseKey() : '';
-    var dsk = L.dsKey ? L.dsKey() : '';
     var html =
-      '<p style="color:var(--ink-2)">浏览器读不了别人的网页（跨域限制），抓正文要有东西代抓。' +
-      '现在有两档，<b>第一档不用部署、一分钟配完</b>。</p>' +
-      '<div class="note mt-s" style="border-color:rgba(217,255,75,.32)">' + U.ic('zap', 13) +
-      '<div><b>① DeepSeek 直连解析（推荐）</b><br>' +
-      'DeepSeek 官方的网页抓取接口允许浏览器直连，公众号文章也能抓，正文直接是干净的 Markdown。' +
-      '每 1000 次约 5 元，抓失败不计费。Key 只存在这台设备，不上传。</div></div>' +
-      '<div class="field mt-s"><div class="field-head"><span class="lbl">DeepSeek Key</span>' +
-      '<span class="sec-sub">platform.deepseek.com/api_keys</span></div>' +
-      '<input data-field="dskey" value="' + esc(dsk) + '" spellcheck="false" placeholder="sk-…（留空 = 不用这一档）"></div>' +
-      '<div class="dock-row" style="margin-top:8px">' +
-      '<button class="btn btn-primary" style="flex:1" data-act="save-ds">保存并抓一个网页试试</button>' +
-      '</div>' +
-      '<div class="sec-sub" style="margin-top:6px;line-height:1.6">这一档同时也让 AI 模型可用：DeepSeek 是少数允许浏览器直连的厂商。' +
-      '填了 Key 后到「模型服务商」加一家 DeepSeek（地址 <code>https://api.deepseek.com/v1</code>，模型 <code>deepseek-chat</code>）即可。</div>' +
+      '<p style="color:var(--ink-2);line-height:1.6">浏览器读不了别人的网页（跨域限制），抓正文要有个接口代抓。' +
+      'App 内置了解析通道，下面留空就能用；要更稳可以填自己的服务地址。</p>' +
 
-      '<div class="note mt-m" style="border-color:rgba(255,255,255,.14)">' + U.ic('server', 13) +
-      '<div><b>② 自建解析服务（可选，1 分钟，免费）</b><br>' +
-      '想完全不花钱、或者要抓别的站点，就部署仓库里那个 Worker。填多个地址会并行竞速，一条挂了自动换下一条。</div></div>' +
-
-      '<div class="note mt-s" style="border-color:rgba(255,107,107,.34)">' + U.ic('alert', 13) +
-      '<div><b>如果地址是 xxx.workers.dev，国内基本打不开 —— 这不是你配错了</b><br>' +
-      '这个域名在国内被按域名拦掉了（SNI 阻断）。换 DNS、改 hosts、把域名固定到 Cloudflare 的真实 IP，全都没用，' +
-      '被拦的是名字本身。移动网络最严重。三条解法：' +
-      '<div style="margin-top:8px;display:grid;gap:7px;font-size:12.5px;line-height:1.55">' +
-      '<div><b>① 换个名字（10 分钟，代码不动）</b>　给这个 Worker 绑一个自己的域名：' +
-      'Cloudflare → Workers 和 Pages → 选中它 → Settings → Domains &amp; Routes → Add → Custom Domain。' +
-      '域名可以白嫖（eu.org、DNSHE 的免费二级域），NS 指到 Cloudflare 免费版就行。</div>' +
-      '<div><b>② 换个地方（15 分钟，国内最快）</b>　同一份代码挪到阿里云函数计算，' +
-      '拿到 <code>xxx.cn-hangzhou.fcapp.run</code>，国内节点直连、免备案。' +
-      '<b>费用说清楚</b>：只有前 3 个月试用额度（约 190 万次），之后按量、个人用每月几毛到两块；' +
-      '<b>最小实例数一定保持 0，否则不用也扣费</b>。仓库里 <code>worker/aliyun-fc/</code> 已写好适配层，照着点几下就行。</div>' +
-      '<div><b>③ 什么都不配（0 分钟）</b>　这条地址留空，App 会自动走内置公共阅读器；' +
-      '或者填一个 DeepSeek Key，官方抓取接口能直连、能抓公众号。</div>' +
-      '</div></div></div>' +
-      '<div class="dock-row" style="margin-top:8px">' +
-      '<button class="btn btn-soft" style="flex:1" data-act="open-url" data-url="https://github.com/oynana8023/wenjiang/blob/main/worker/aliyun-fc/README.md">' +
-      U.ic('external', 14) + ' 阿里云部署步骤</button>' +
-      '<button class="btn" style="flex:1;background:var(--surface-2);color:var(--ink-2)" data-act="open-url" data-url="https://github.com/oynana8023/wenjiang/blob/main/worker/README.md">' +
-      U.ic('external', 14) + ' 绑域名怎么做</button>' +
-      '</div>' +
       (list.length
         ? '<div class="note mt-s" style="border-color:rgba(217,255,75,.28)">' + U.ic('check', 13) +
-          '<div>已配置 <b>' + list.length + '</b> 条通道。解析和联网取证都走它。</div></div>'
+          '<div>已配置 <b>' + list.length + '</b> 条服务地址，解析时优先用它们。</div></div>'
         : '') +
       '<div class="field mt-m"><div class="field-head"><span class="lbl">服务地址</span>' +
-      '<span class="sec-sub">一行一个，留空 = 关闭</span></div>' +
-      '<textarea data-field="parsebases" rows="3" spellcheck="false" placeholder="https://wenjiang-parse.你的账号.workers.dev">' +
+      '<span class="sec-sub">一行一个，留空 = 用内置通道</span></div>' +
+      '<textarea data-field="parsebases" rows="2" spellcheck="false" placeholder="https://你的解析接口（可留空）">' +
       esc(list.join('\n')) + '</textarea></div>' +
       '<div class="field mt-s"><div class="field-head"><span class="lbl">访问口令</span>' +
-      '<span class="sec-sub">Worker 设了 PARSE_KEY 才需要填</span></div>' +
+      '<span class="sec-sub">接口设了口令才填，可留空</span></div>' +
       '<input data-field="parsekey" value="' + esc(key) + '" spellcheck="false" placeholder="可留空"></div>' +
-      '<button class="btn btn-soft btn-block mt-s" data-act="open-url" data-url="https://deploy.workers.cloudflare.com/?url=https://github.com/oynana8023/wenjiang/tree/main/worker">' +
-      U.ic('external', 15) + ' 一键部署解析服务（浏览器打开）</button>' +
-      '<div class="sec-sub" style="margin-top:6px;line-height:1.6">免费，不用信用卡；登录 Cloudflare 点 Deploy，1 分钟拿到地址，' +
-      '形如 <code>https://wenjiang-parse.xxx.workers.dev</code>。<b>别的网址填进来一律检测不过</b>——' +
-      '包括本页自己的预览链接（那种地址对外是 403「链接不完整」）。</div>' +
       '<div id="parse-test" class="note mt-s">' + U.ic('info', 14) +
-      '<div><b>也可以命令行部署：</b><br>' +
-      '1. <code>cd worker</code><br>' +
-      '2. <code>npx wrangler login</code>，再 <code>npx wrangler deploy</code><br>' +
-      '3. 把打印出来的 <code>https://xxx.workers.dev</code> 填到上面，点「保存并检测」。<br>' +
-      '接口只要支持 <b>GET /api/health</b>（返回 {ok:true}）和 <b>GET /api/parse?url=</b>（返回 {ok,title,text}）就行，' +
-      '自己的服务器也能接。</div></div>';
+      '<div>接口格式：<b>GET /api/health</b>（返回 {ok:true}）和 <b>GET /api/parse?url=</b>（返回 {ok,title,text}）。' +
+      '详细文档看仓库说明。</div></div>';
     openSheet(html, {
       title: '解析服务',
       foot: '<button class="btn btn-primary btn-block" data-act="save-parse">保存并检测</button>' +
@@ -13358,7 +13309,7 @@ window.WJCreate = (function () {
     var wh = L.walledHost ? L.walledHost(r.base || '') : '';
     if (wh) {
       return '国内连不上 · ' + wh + ' 被按域名拦了（SNI 阻断），换 DNS / 改 hosts / 固定 IP 都没用。' +
-        '三条路：① 给 Worker 绑自己的域名；② 挪到阿里云函数计算（worker/aliyun-fc/）；③ 这条留空，走公共阅读器。';
+        '清空这个地址，改用 App 内置解析通道。';
     }
     if (s0 === 401) return 'HTTP 401 · 这服务设了口令，把 PARSE_KEY 填到上面「访问口令」再检测';
     if (s0 === 403) return 'HTTP 403 · 被这个地址挡了。它多半不是解析服务——' +
@@ -13554,23 +13505,22 @@ window.WJCreate = (function () {
     var noCh = (err && err.code) === 'NO_CHANNEL';
     var deadBase = (err && err.code) === 'DEAD_BASE';
     var why = noCh
-      ? '这台设备上还没有配置解析服务。填一个地址后，贴链接就能自动取正文；在那之前可以先粘全文。'
+      ? '这台设备上没有可用的解析通道。可以先粘全文；要更稳就到「解析服务」填一个服务地址。'
       : deadBase
-        ? '地址是填了的，但这次连不上：可能是 Worker 被删了、地址写错，或当前网络拦了 workers.dev。' +
-          '点下面的「去检测」看一眼，绿的说明只是刚才超时，红的就重新部署一个。'
+        ? '地址是填了的，但这次连不上：可能服务地址失效或当前网络拦了它。' +
+          '点下面「去检测」看一眼，绿的只是刚才超时，红的就清空地址改用内置通道。'
         : dead
       ? '这条链接本身已经打不开了（作者删除、内容下架，或分享链接过期）。换一条新分享出来的链接最稳；' +
         '也可以长按把正文复制下来，走「直接粘全文」，改写效果一样。'
       : offline
-        ? '解析服务这一次没响应：地址失效、Worker 被删，或当前网络拦了 workers.dev。点<b>再试一次</b>；' +
-          '还是不行就到「我的 → 解析服务」点「保存并检测」，红的就重新部署一个。'
-        : '服务是在线的，是这一页本身不给正文：微博、抖音、快手这些页面由脚本渲染，知乎有风控，服务器拿到的常常是空壳。' +
+        ? '解析通道这一次没响应。点<b>再试一次</b>；还是不行就到「我的 → 解析服务」清空地址改用内置通道。'
+        : '通道是通的，是这一页本身不给正文：微博、抖音、快手这些页面由脚本渲染，知乎有风控，常常只拿到空壳。' +
           '换成文章页链接最稳；只有标题也能先写起来。';
 
     var detail = d ? '<div class="sec-sub" style="margin-top:10px;word-break:break-all;line-height:1.8;white-space:pre-line">' + esc(d) + '</div>' : '';
 
     var msg = String((err && err.message) || '');
-    var lead = noCh ? '这条链接没取到正文：现在既没填 DeepSeek Key，也没有自己的解析服务。'
+    var lead = noCh ? '这条链接没取到正文：现在没有可用的解析通道，可以粘全文或到解析服务里填一个地址。'
       : deadBase ? '解析服务的地址在，但这次没连上。'
       : offline ? '解析服务没连上，不是这一页的问题。'
       : (msg && msg !== '这个链接没取到正文') ? msg : '服务器连上了，但这一页没把正文交出来。';
@@ -15000,42 +14950,6 @@ window.WJCreate = (function () {
           toast('清单已同步：新增 ' + added + ' 家 · 补 ' + merged + ' 个模型', 3200);
         })().catch(function (e) {
           toast('同步失败：' + (e.message || '网络不通') + '（离线也能用已内置的免费通道）', 4000);
-        });
-        break;
-      }
-
-      case 'save-ds': {
-        var dv = document.querySelector('[data-field="dskey"]');
-        var dk = dv ? String(dv.value || '').trim() : '';
-        if (L.setDsKey) L.setDsKey(dk);
-        if (!dk) { toast('已清空 DeepSeek Key'); break; }
-        var db = document.getElementById('parse-test');
-        if (db) db.innerHTML = '<div style="width:100%" class="sec-sub">正在用 DeepSeek 抓一个网页验证 Key…</div>';
-        toast('正在验证…');
-        L.dsFetch('https://api-docs.deepseek.com/', 30000).then(function (r) {
-          if (db) db.innerHTML = '<div style="width:100%"><b style="color:var(--acc)">Key 可用</b>：抓到《' + esc(r.title || '无标题') + '》' + r.chars + ' 字。' +
-            '现在粘公众号/头条/新闻链接都能直接解析了。</div>';
-          toast('DeepSeek 解析已就绪');
-          /* 顺手把 DeepSeek 加成模型服务商，一次配置解决解析和写作两件事 */
-          var has = providers().some(function (p) { return /api\.deepseek\.com/i.test(p.base || ''); });
-          if (!has) {
-            var a0 = L.annotate('deepseek-chat', {});
-            var p0 = {
-              id: uid(), name: 'DeepSeek', base: 'https://api.deepseek.com/v1', key: dk,
-              model: 'deepseek-chat', imageModel: '',
-              models: [{ id: 'deepseek-chat', kind: 'chat', tags: a0.tags, family: a0.family, good: a0.good, free: false, owned: '', status: '' }],
-              imgNote: ''
-            };
-            providers().push(p0);
-            if (!state.settings.activeId) state.settings.activeId = p0.id;
-            save();
-            toast('已顺带添加 DeepSeek 模型服务商', 3200);
-          }
-          render('tab');
-        }).catch(function (e) {
-          if (db) db.innerHTML = '<div style="width:100%"><b style="color:var(--danger)">没通过</b>：' + esc(e.message || '抓取失败') +
-            '<br>检查 Key 是否复制完整（以 sk- 开头）、账户是否有余额。</div>';
-          toast('验证没通过：' + (e.message || ''), 3600);
         });
         break;
       }
