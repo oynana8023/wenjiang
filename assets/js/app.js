@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI, C = window.WJCreate;
 
-  var VERSION = 'v2.18.0';
+  var VERSION = 'v2.19.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -619,9 +619,17 @@
     var keep = rows.filter(function (r) { return r.ok; }).map(function (r) { return r.base; });
     if (keep.length === list.length) return;
     L.setParseBases(keep);
-    var d0 = rows.filter(function (r) { return !r.ok; })[0] || {};
-    toast('已移除 ' + (list.length - keep.length) + ' 条打不开的解析地址（' +
-      (d0.status ? 'HTTP ' + d0.status : '连不上') + '）', 4600);
+    var dead = rows.filter(function (r) { return !r.ok; });
+    var walled = dead.filter(function (r) { return L.walledHost && L.walledHost(r.base || ''); });
+    if (walled.length) {
+      /* 被墙的地址留着只会让每次解析都白等 4 秒，直接摘掉，并把「为什么」说清楚 */
+      toast('已停用 ' + walled.length + ' 条国内打不开的解析地址（' +
+        (L.hostOf(walled[0].base) || '') + ' 被墙）。到「我的 → 解析服务」看替代方案', 5200);
+    } else {
+      var d0 = dead[0] || {};
+      toast('已移除 ' + (list.length - keep.length) + ' 条打不开的解析地址（' +
+        (d0.status ? 'HTTP ' + d0.status : '连不上') + '）', 4600);
+    }
     render('tab');
   }
 
@@ -2212,6 +2220,27 @@
       '<div class="note mt-m" style="border-color:rgba(255,255,255,.14)">' + U.ic('server', 13) +
       '<div><b>② 自建解析服务（可选，1 分钟，免费）</b><br>' +
       '想完全不花钱、或者要抓别的站点，就部署仓库里那个 Worker。填多个地址会并行竞速，一条挂了自动换下一条。</div></div>' +
+
+      '<div class="note mt-s" style="border-color:rgba(255,107,107,.34)">' + U.ic('alert', 13) +
+      '<div><b>如果地址是 xxx.workers.dev，国内基本打不开 —— 这不是你配错了</b><br>' +
+      '这个域名在国内被按域名拦掉了（SNI 阻断）。换 DNS、改 hosts、把域名固定到 Cloudflare 的真实 IP，全都没用，' +
+      '被拦的是名字本身。移动网络最严重。三条解法：' +
+      '<div style="margin-top:8px;display:grid;gap:7px;font-size:12.5px;line-height:1.55">' +
+      '<div><b>① 换个名字（10 分钟，代码不动）</b>　给这个 Worker 绑一个自己的域名：' +
+      'Cloudflare → Workers 和 Pages → 选中它 → Settings → Domains &amp; Routes → Add → Custom Domain。' +
+      '域名可以白嫖（eu.org、DNSHE 的免费二级域），NS 指到 Cloudflare 免费版就行。</div>' +
+      '<div><b>② 换个地方（15 分钟，国内最快）</b>　同一份代码挪到阿里云函数计算，' +
+      '拿到 <code>xxx.cn-hangzhou.fcapp.run</code>，国内节点直连、免备案、每月 100 万次免费。' +
+      '仓库里 <code>worker/aliyun-fc/</code> 已经写好了适配层，照着点几下就行。</div>' +
+      '<div><b>③ 什么都不配（0 分钟）</b>　这条地址留空，App 会自动走内置公共阅读器；' +
+      '或者填一个 DeepSeek Key，官方抓取接口能直连、能抓公众号。</div>' +
+      '</div></div></div>' +
+      '<div class="dock-row" style="margin-top:8px">' +
+      '<button class="btn btn-soft" style="flex:1" data-act="open-url" data-url="https://github.com/oynana8023/wenjiang/blob/main/worker/aliyun-fc/README.md">' +
+      U.ic('external', 14) + ' 阿里云部署步骤</button>' +
+      '<button class="btn" style="flex:1;background:var(--surface-2);color:var(--ink-2)" data-act="open-url" data-url="https://github.com/oynana8023/wenjiang/blob/main/worker/README.md">' +
+      U.ic('external', 14) + ' 绑域名怎么做</button>' +
+      '</div>' +
       (list.length
         ? '<div class="note mt-s" style="border-color:rgba(217,255,75,.28)">' + U.ic('check', 13) +
           '<div>已配置 <b>' + list.length + '</b> 条通道。解析和联网取证都走它。</div></div>'
@@ -2227,11 +2256,7 @@
       U.ic('external', 15) + ' 一键部署解析服务（浏览器打开）</button>' +
       '<div class="sec-sub" style="margin-top:6px;line-height:1.6">免费，不用信用卡；登录 Cloudflare 点 Deploy，1 分钟拿到地址，' +
       '形如 <code>https://wenjiang-parse.xxx.workers.dev</code>。<b>别的网址填进来一律检测不过</b>——' +
-      '包括本页自己的预览链接（那种地址对外是 403「链接不完整」）。' +
-      '<br><b>注意：</b><code>*.workers.dev</code> 在国内手机网络上经常整个连不上（不是你的配置错）。' +
-      '如果你填了却在手机上一直「超时没响应」，说明这条被网络拦了——换成下面任意一条路：' +
-      '① 给 Worker 绑一个自己的域名；② 填 DeepSeek Key，用官方抓取接口（能直连、能抓公众号）；' +
-      '③ 什么都不配，取正文时用「打开原文 · 复制后自动读回」，两步，稳。</div>' +
+      '包括本页自己的预览链接（那种地址对外是 403「链接不完整」）。</div>' +
       '<div id="parse-test" class="note mt-s">' + U.ic('info', 14) +
       '<div><b>也可以命令行部署：</b><br>' +
       '1. <code>cd worker</code><br>' +
@@ -2252,6 +2277,11 @@
   /* 把探活结果说成人话：403 不是「连不上」，是「这个地址根本不让我读」 */
   function baseFailText(r) {
     var s0 = r.status || 0;
+    var wh = L.walledHost ? L.walledHost(r.base || '') : '';
+    if (wh) {
+      return '国内连不上 · ' + wh + ' 被按域名拦了（SNI 阻断），换 DNS / 改 hosts / 固定 IP 都没用。' +
+        '三条路：① 给 Worker 绑自己的域名；② 挪到阿里云函数计算（worker/aliyun-fc/）；③ 这条留空，走公共阅读器。';
+    }
     if (s0 === 401) return 'HTTP 401 · 这服务设了口令，把 PARSE_KEY 填到上面「访问口令」再检测';
     if (s0 === 403) return 'HTTP 403 · 被这个地址挡了。它多半不是解析服务——' +
       '比如把本页的预览链接、或者别的网站填进来了；Worker 地址长这样：wenjiang-xxx.你的账号.workers.dev';

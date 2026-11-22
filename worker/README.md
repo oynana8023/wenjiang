@@ -3,6 +3,34 @@
 浏览器有同源策略，静态页面（GitHub Pages）读不了别人的网页。要「粘贴链接取正文」，
 就必须有一台服务器代抓——这个目录就是那台服务器，一个文件、零依赖。
 
+## 先看这一节：国内打不开 `*.workers.dev`
+
+如果你部署完，在手机上一直「连不上 / 转圈到超时」，**不是配置错了，是域名被拦了**。
+
+`workers.dev`（以及 `pages.dev`、`vercel.app`、`netlify.app`）在国内被按域名做 SNI 阻断：
+DNS 会被污染成假 IP，就算你手动固定到 Cloudflare 的真实 IP，TLS 握手时 SNI 里带着
+`workers.dev` 也会被立刻重置。所以换 DNS（8.8.8.8 / DoH）、改 hosts、换 IP、开热点，
+**一个都没用**。移动网络最严重，因为国际出口最紧张。
+
+三条解法，按「改动量」排：
+
+| 方案 | 改什么 | 花多久 | 花钱 | 国内速度 |
+| --- | --- | --- | --- | --- |
+| ① 给这个 Worker 绑自己的域名 | 代码一行不改，只加一条 Custom Domain | 10 分钟（域名 NS 生效可能要几小时） | 域名可以白嫖（`eu.org`、DNSHE 的免费二级域） | 电信 80–150ms / 联通 120–200ms / 移动 200–400ms，晚高峰会抖 |
+| ② 挪到阿里云函数计算 | 代码不动，换部署位置，见 [`aliyun-fc/`](aliyun-fc/) | 10–20 分钟 | 每月 100 万次免费 | 国内节点直连，30–80ms，最稳 |
+| ③ 什么都不部署 | App 里地址留空 | 0 分钟 | 免费（公共阅读器）或约 5 元/1000 次（DeepSeek） | 看公共通道脸色 |
+
+**方案①怎么做**：Cloudflare 控制台 → Workers 和 Pages → 选中这个 Worker → Settings →
+Domains & Routes → **Add → Custom Domain** → 填 `parse.你的域名`。前提是这个域名的 NS
+已经托管在 Cloudflare（免费版就行）。加完地址就从 `xxx.workers.dev` 变成
+`https://parse.你的域名`，App 里换掉即可。
+
+**方案②怎么做**：见 [`aliyun-fc/README.md`](aliyun-fc/README.md)，拿到
+`https://xxx.cn-hangzhou.fcapp.run`，免备案、国内直连。
+
+> 顺带提醒：微信内置浏览器对**未备案的境外域名**更严格，容易白屏或折叠。
+> 如果这个 App 要发给别人用，方案②（国内节点）比方案①体验好。
+
 ## 它能做什么
 
 | 接口 | 说明 |

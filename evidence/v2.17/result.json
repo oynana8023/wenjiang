@@ -1,0 +1,36 @@
+{
+  "steps": [],
+  "errors": [],
+  "home": {
+    "chars": 482,
+    "hasHot": true
+  },
+  "hot": {
+    "count": -1,
+    "live": true
+  },
+  "topic": {
+    "clickable": true,
+    "chars": 1758,
+    "real": true
+  },
+  "provider": {
+    "corsLabel": true,
+    "freeCatalog": true,
+    "freeEnabled": true,
+    "syncToast": "清单已同步：新增 0 家 · 补 0 个模型"
+  },
+  "generate": {
+    "done": true,
+    "engine": "",
+    "selfCheck": true,
+    "words": "220/184",
+    "head": "成稿\n47\n改写幅度\n中等\n47% 的文字与原文不重合；另有 53% 是连续 12 字以上的重合片段。本机统计，与平台判定无关。\n字数\n220/184\n重合率\n53%\n重复句\n0\nAI 生成\n资讯通稿 · 今日头条 · 内置免费通道 · openai-fast\n原文 118 字 · 选了 300 字，原文只够 184 字 · 信息覆盖 100%（成稿比原文长，属扩写）（人物、时间线、因果不删）\n平"
+  },
+  "parseFail": {
+    "sheet": false,
+    "threeWays": false
+  },
+  "overflow320": 0,
+  "overflow430": 0
+}

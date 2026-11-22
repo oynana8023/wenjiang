@@ -902,6 +902,24 @@ window.WJLive = (function () {
   function hostOf(u) {
     try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return ''; }
   }
+
+  /* 国内被「按域名」拦掉的一类共享域名。拦的是 TLS 握手里的 SNI，所以：
+     换 DNS、改 hosts、把域名固定到真实 IP，全都没用——只能换名字或换地方。
+     在这里集中认出来，界面才能说人话，而不是笼统回一句「连不上」。 */
+  var WALLED_HOST = /(^|\.)(workers\.dev|pages\.dev|vercel\.app|netlify\.app|deno\.dev|onrender\.com)$/i;
+
+  function walledHost(u) {
+    var h = hostOf(/^https?:\/\//i.test(String(u || '')) ? u : 'https://' + String(u || ''));
+    return h && WALLED_HOST.test(h) ? h : '';
+  }
+
+  /* 给被墙域名配一句「该怎么办」，避免用户以为是自己的配置错 */
+  var WALLED_ADVICE =
+    '这个域名在国内被按域名拦掉了（SNI 阻断），换 DNS、改 hosts、固定 IP 都没用。三条路：' +
+    '① 给 Worker 绑一个自己的域名（代码不用改，10 分钟）；' +
+    '② 挪到阿里云函数计算，国内节点直连、免备案（仓库 worker/aliyun-fc/，约 15 分钟）；' +
+    '③ 这条留空不用，改走公共阅读器或 DeepSeek 抓取。';
+
   /* 连不上过一次的解析服务，8 分钟内先不排队等它：国内直连 workers.dev 常常必超时，
      每次失败都花 14 秒等一个注定不通的地址，是最伤的体验。 */
   function baseDeadMap() {
@@ -2124,7 +2142,9 @@ window.WJLive = (function () {
     bases.forEach(function (b) {
       if (isDead(b)) { spare.push(b); return; }
       tasks.push({ label: hostOf(b) || '解析服务', via: 'cloud', run: function () {
-        return callBase(b, url, minLen, 9000, titleHint).then(
+        /* 被墙域名只给 4 秒：SNI 阻断通常在握手阶段就失败，等 9 秒纯粹是让用户干瞪眼 */
+        var budget = walledHost(b) ? 4000 : 9000;
+        return callBase(b, url, minLen, budget, titleHint).then(
           function (r) { markBase(b, false); return r; },
           /* 只有网络层失败（超时/连不上）才记「不通」；业务失败说明服务是活的 */
           function (e) { if (!(e && e.status) && !(e && e.code)) markBase(b, true); throw e; }
@@ -2154,10 +2174,15 @@ window.WJLive = (function () {
     /* 地址填了但全被标成「不通」：不能骗用户说「没配置」。单独给一个错误码，
        界面提示「连不上，去检测一下」，并提供粘贴全文的退路。 */
     if (!tasks.length && bases.length) {
-      var deadErr = new Error('解析服务连不上，这次没取到正文');
+      var walled = bases.filter(function (b) { return !!walledHost(b); });
+      var deadErr = new Error(walled.length ? '解析地址被国内网络拦了，这次没取到正文'
+                                           : '解析服务连不上，这次没取到正文');
       deadErr.code = 'DEAD_BASE';
-      deadErr.detail = bases.map(function (b) { return (hostOf(b) || b) + '：最近一次请求超时或被网络拦截'; }).join('\n') +
-        '\n到「我的 → 解析服务」点「保存并检测」看它是否还在线；地址失效就重新部署一个（页面里有一键部署）。';
+      deadErr.detail = bases.map(function (b) {
+        return (hostOf(b) || b) + '：' + (walledHost(b) ? '域名在国内不可达（SNI 阻断）' : '最近一次请求超时或被网络拦截');
+      }).join('\n') +
+        (walled.length ? '\n' + WALLED_ADVICE : '\n到「我的 → 解析服务」点「保存并检测」看它是否还在线；地址失效就重新部署一个（页面里有一键部署）。');
+      deadErr.walled = !!walled.length;
       deadErr.url = url;
       throw deadErr;
     }
@@ -2215,6 +2240,13 @@ window.WJLive = (function () {
       }
       var err = new Error((e0 && e0.code === 'DEAD' && e0.message) || '这个链接没取到正文');
       err.detail = (e0 && e0.detail) || (e0 && e0.message);
+      /* 配了 workers.dev 这类国内不可达的地址：把「为什么」写在最前面，别让用户去猜配置 */
+      var walledAll = bases.filter(function (b) { return !!walledHost(b); });
+      if (walledAll.length) {
+        err.detail = '配置的 ' + (hostOf(walledAll[0]) || walledAll[0]) + ' 在国内连不上。\n' + WALLED_ADVICE +
+          (err.detail ? '\n\n其他通道：' + err.detail : '');
+        err.walled = true;
+      }
       if (dsErr) err.detail = 'DeepSeek 抓取：' + dsErr.message + '\n' + (err.detail || '');
       err.title = (e0 && e0.title) || titleHint;
       err.code = (e0 && e0.code) || '';
@@ -3033,6 +3065,8 @@ window.WJLive = (function () {
     CLOUD_DEFAULT: CLOUD_DEFAULT,
     urlKind: urlKind,
     hostOf: hostOf,
+    walledHost: walledHost,
+    WALLED_ADVICE: WALLED_ADVICE,
     hasServer: hasServer,
     posts: posts,
     topic: topic,
