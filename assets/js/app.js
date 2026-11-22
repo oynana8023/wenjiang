@@ -2196,13 +2196,14 @@
   }
 
   /* 解析失败 */
-  /* 解析服务：DeepSeek 直连（首选） + 自建 Worker + 口令 + 一键检测 */
+  /* 解析服务：自建 Worker + 口令 + 一键检测 */
   function openParseService() {
     var list = L.parseBases();
     var key = L.parseKey ? L.parseKey() : '';
     var html =
       '<p style="color:var(--ink-2);line-height:1.6">浏览器读不了别人的网页（跨域限制），抓正文要有个接口代抓。' +
-      'App 内置了解析通道，下面留空就能用；要更稳可以填自己的服务地址。</p>' +
+      '内置通道只适合简单静态页；公众号、微博、小红书这类站点，最稳的通用办法是「打开原文读回」——贴链接、打开、复制正文、切回来自动读进编辑框，任何链接都有效。' +
+      '要自动抓正文，可在下面填自己的服务地址，留空则用内置通道。</p>' +
 
       (list.length
         ? '<div class="note mt-s" style="border-color:rgba(217,255,75,.28)">' + U.ic('check', 13) +
