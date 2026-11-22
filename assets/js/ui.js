@@ -304,9 +304,8 @@ window.WJUI = (function () {
         '<div class="foot"><button class="mini-btn" data-act="paste">' + ic('copy', 12) + ' 从剪贴板</button>' +
         (c.link1 ? '<button class="mini-btn" data-act="clear-compose">' + ic('close', 12) + ' 清空</button>' : '') +
         '<button class="mini-btn" data-act="preview-link">' + ic('search', 12) + ' 先解析看看</button>' +
-        '<button class="mini-btn" data-act="grab-from-link">' + ic('external', 12) + ' 打开原文读回</button>' +
         '<button class="mini-btn" data-act="start" data-mode="text">' + ic('text', 12) + ' 直接粘全文</button>' +
-        '<div class="spacer"></div><span class="sec-sub">解析不通就用「打开原文读回」，任何链接都有效</span></div></div>';
+        '<div class="spacer"></div><span class="sec-sub">解析不通就直接粘全文，改写效果一样</span></div></div>';
     if (c.preview) {
       h += '<div class="pv">' +
         '<div class="pv-h"><b>' + esc(c.preview.title || '已取到正文') + '</b>' +
@@ -800,7 +799,7 @@ window.WJUI = (function () {
       : (_pbs.length === 1 && _pbs[0] === window.WJLive.CLOUD_DEFAULT ? '默认节点'
         : _pbs.length + ' 条通道');
     h += '<button class="row" data-act="parse-service"><span class="ri">' + ic('wand', 15) + '</span>' +
-      '<span class="rt"><b>解析服务</b><small>' + (_pbs.length ? '粘贴链接取正文用的后端' : '未配置 · 取正文请用「打开原文读回」') + '</small></span>' +
+      '<span class="rt"><b>解析服务</b><small>' + (_pbs.length ? '内置节点 · 粘贴链接即可抓正文' : '未配置') + '</small></span>' +
       '<span class="rv"' + (_pbs.length ? '' : ' style="color:var(--warn)"') + '>' + _pbName + '</span>' +
       '<span class="chev">' + ic('right', 15) + '</span></button>';
 

@@ -504,107 +504,6 @@
     return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
   }
 
-  /* ---------------- 「打开原文 · 自动读回」 ----------------
-     浏览器读不了别人的网页（同源策略），而国内网络基本打不通公共代理、workers.dev 这类境外中转，
-     所以最靠得住的一条路是：用系统浏览器打开原文 → 全选复制 → 切回来，我们自己把剪贴板读进正文框。
-     两步，不需要服务器、不需要 Key，公众号 / 头条 / 小红书 / 知乎 都一样有效。 */
-  var GRAB_KEY = 'wj.grab';
-
-  function grabState() {
-    try {
-      var g = JSON.parse(localStorage.getItem(GRAB_KEY) || 'null');
-      if (!g || !g.at || Date.now() - g.at > 10 * 60000) return null;
-      return g;
-    } catch (e) { return null; }
-  }
-  function armGrab(url) {
-    try { localStorage.setItem(GRAB_KEY, JSON.stringify({ url: url, at: Date.now() })); } catch (e) { /* ignore */ }
-  }
-  function clearGrab() {
-    try { localStorage.removeItem(GRAB_KEY); } catch (e) { /* ignore */ }
-    var bar = document.getElementById('grabBar');
-    if (bar) bar.remove();
-  }
-
-  function grabBar(text) {
-    var old = document.getElementById('grabBar');
-    if (old) old.remove();
-    var el = document.createElement('div');
-    el.id = 'grabBar';
-    el.setAttribute('style', 'position:fixed;left:12px;right:12px;bottom:18px;z-index:9999;' +
-      'background:var(--acc,#d9ff4b);color:#12140f;border-radius:16px;padding:13px 15px;display:flex;' +
-      'align-items:center;gap:10px;box-shadow:0 12px 34px rgba(0,0,0,.45);font-size:14px;font-weight:600');
-    el.innerHTML = '<span style="flex:1;line-height:1.45">' + U.esc(text) + '</span>' +
-      '<button data-act="grab-read" style="border:0;background:#12140f;color:#d9ff4b;border-radius:10px;' +
-      'padding:9px 13px;font-size:13px;font-weight:700">读进来</button>';
-    /* 必须挂在 app 里面：点击是委托到 app 上处理的，挂到 body 上的按钮点了没反应。 */
-    (document.getElementById('app') || document.body).appendChild(el);
-  }
-
-  function grabToCompose(txt) {
-    var t = dejunk(txt);
-    if (!t || t.length < 30) return false;
-    state.compose.mode = 'text';
-    state.compose.text1 = t;
-    clearGrab();
-    closeSheet();
-    go('compose', { nav: 'push' });
-    setTimeout(function () {
-      var ta = document.querySelector("[data-field='text1']");
-      if (ta) { ta.value = t; }
-      syncCounters();
-      autosize();
-    }, 40);
-    toast('已读回 ' + t.length + ' 字，直接点生成就行', 3600);
-    return true;
-  }
-
-  function readClip() {
-    if (!(navigator.clipboard && navigator.clipboard.readText)) return Promise.reject(new Error('no clipboard'));
-    return navigator.clipboard.readText();
-  }
-
-  function openGrab(url) {
-    if (!url) { toast('没有拿到链接'); return; }
-    armGrab(url);
-    /* 用 <a target=_blank> 点一下，比 window.open 更不容易被拦截；
-       万一真被拦了，也不要把当前页面跳走（跳走就丢了正在编的内容），
-       改成把链接复制到剪贴板，让用户自己去浏览器打开。 */
-    var opened = false;
-    try {
-      var a = document.createElement('a');
-      a.href = url;
-      a.target = '_blank';
-      a.rel = 'noopener';
-      a.style.display = 'none';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      opened = true;
-    } catch (e) { opened = false; }
-
-    if (!opened) {
-      try { navigator.clipboard.writeText(url); } catch (e2) { /* ignore */ }
-      grabBar('链接已复制：去浏览器打开原文，复制正文后回来点这里');
-      return;
-    }
-    grabBar('在原文里长按全选 → 复制，然后切回这里');
-    toast('复制完正文切回来，会自动读进输入框', 4200);
-  }
-
-  /* 从原文切回来：先静默试一次自动读；浏览器不给读就留一条按钮，点一下就能读 */
-  function grabOnReturn() {
-    var g = grabState();
-    if (!g) return;
-    setTimeout(function () {
-      readClip().then(function (txt) {
-        if (!grabToCompose(txt)) grabBar('已切回：点这里把正文读进来');
-      }).catch(function () {
-        grabBar('已切回：点这里把正文读进来');
-      });
-    }, 450);
-  }
-
   /* 老配置里可能留着打不开的地址（预览链接、已删的 Worker）。
      启动后静默体检一次，把连不上的从配置里摘掉，别让它一直拖慢解析。 */
   async function scrubBases() {
@@ -2202,8 +2101,8 @@
     var key = L.parseKey ? L.parseKey() : '';
     var html =
       '<p style="color:var(--ink-2);line-height:1.6">浏览器读不了别人的网页（跨域限制），抓正文要有个接口代抓。' +
-      '内置通道只适合简单静态页；公众号、微博、小红书这类站点，最稳的通用办法是「打开原文读回」——贴链接、打开、复制正文、切回来自动读进编辑框，任何链接都有效。' +
-      '要自动抓正文，可在下面填自己的服务地址，留空则用内置通道。</p>' +
+      'App 已内置一个免费解析节点，粘贴链接即可自动抓正文，无需配置。' +
+      '想用更稳的自家服务，可在下面填自己的地址，填了就优先用你的。</p>' +
 
       (list.length
         ? '<div class="note mt-s" style="border-color:rgba(217,255,75,.28)">' + U.ic('check', 13) +
@@ -2456,12 +2355,8 @@
       '<div class="note mt-s">' + U.ic('info', 14) + '<div>' + why + '</div></div>' + detail,
       {
         title: '这个链接没取到正文',
-        foot: (err && err.url
-          ? '<button class="btn btn-primary btn-block" data-act="open-grab" data-url="' + esc(err.url) + '">' +
-            U.ic('external', 15) + ' 打开原文 · 复制后自动读回</button>'
-          : '') +
-          (hint
-            ? '<button class="btn ' + (err && err.url ? 'btn-soft' : 'btn-primary') + ' btn-block" data-act="title-write" data-title="' + esc(hint) + '">' +
+        foot: (hint
+            ? '<button class="btn btn-primary btn-block" data-act="title-write" data-title="' + esc(hint) + '">' +
               U.ic('edit', 16) + ' 就用这个标题写</button>'
             : '') +
           (lastFail
@@ -3813,7 +3708,7 @@
         if (L.setDsKey) L.setDsKey('');
         if (L.invalidateProbe) L.invalidateProbe();
         closeSheet();
-        toast('已清空解析地址');
+        toast('已清空自定义地址，恢复内置解析');
         render('tab');
         break;
 
@@ -3968,27 +3863,6 @@
         closeSheet();
         state.compose.mode = 'text';
         render('push');
-        break;
-
-      /* 打开原文，回来把剪贴板读进正文框 */
-      case 'open-grab':
-        openGrab(t.dataset.url || '');
-        break;
-
-      case 'grab-from-link': {
-        /* 从 compose 链接框读当前值（不依赖渲染时的快照，用户可能刚粘进来还没重渲染） */
-        var gl = String(state.compose.link1 || '').trim();
-        if (!/https?:\/\//.test(gl)) { toast('先在上面粘一条以 http 开头的链接'); break; }
-        openGrab(gl);
-        break;
-      }
-
-      case 'grab-read':
-        readClip().then(function (txt) {
-          if (!grabToCompose(txt)) toast('剪贴板里没读到成段的正文，长按输入框粘一次', 3800);
-        }).catch(function () {
-          toast('浏览器不让读剪贴板：长按正文输入框，粘贴一次就行', 4000);
-        });
         break;
 
       /* 免费、零依赖的一条路：正文在剪贴板里就直接读进来，不经过任何服务器。 */
@@ -4398,8 +4272,6 @@
 
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) return;
-      /* 从系统浏览器抱着正文回来：先把剪贴板读进正文框，这件事比刷新热榜重要 */
-      grabOnReturn();
       if (state.route !== 'home' && state.route !== 'rank') return;
       var act = state.hot.bySrc[state.hot.active];
       if (!act || !act.at || Date.now() - act.at > 60000) loadHot(state.hot.active);

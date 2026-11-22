@@ -11,15 +11,13 @@ window.WJLive = (function () {
   var AGG = 'https://api-hot.imsyy.top';
   var SNAPSHOT = 'data/hot.json';
 
-  /* 统计托管（GitHub Pages）没有自己的后端，浏览器又跨不过 CORS，取正文必须有一台服务器代抓。
-     这里支持配「多个」地址：自建 Cloudflare Worker、自己的 VPS 都可以一起填，
-     解析时并行探活、谁先返回用谁，一条挂了不影响另一条。
-
-     注意：不要再内置任何「云端默认实例」。之前那个地址是开发环境的临时域名，
-     下线后所有没配过地址的用户都会卡在 12 秒超时上——解析用不了，热榜也拖到只能读缓存。
-     现在没配置就是没配置，界面直说，让用户去部署自己的 Worker。 */
-  var CLOUD_DEFAULT = '';
-  var CLOUD_CODE = '';
+  /* 静态托管（GitHub Pages）没有自己的后端，浏览器又跨不过 CORS，取正文必须有一台服务器代抓。
+     这里内置一个免费、国内可直连、带 CORS 的公共解析节点作为默认，开箱即用；
+     用户也可以在「我的 → 解析服务」填自己的 Worker / VPS，填了就以用户的为准。
+     解析时并行探活、谁先返回用谁，一条挂了不影响另一条；默认节点若哪天不可用，
+     probe 探活 + deadMap 冷却会自动跳过它，不会一直拖时间。 */
+  var CLOUD_DEFAULT = 'https://ae4456e3164821b38.app.workbuddy.host';
+  var CLOUD_CODE = 'KQNPRGHZG2';
   var BASES_KEY = 'wj.parse.bases';
   var KEY_KEY = 'wj.parse.key';
 
@@ -52,15 +50,17 @@ window.WJLive = (function () {
             var b = tidyBase(x);
             if (b && out.indexOf(b) < 0) out.push(b);
           });
-          return out;
+          /* 数组是空的（以前手动清空过）也回退到默认节点，避免解析全废 */
+          if (out.length) return out;
+          return CLOUD_DEFAULT ? [CLOUD_DEFAULT] : [];
         }
       } catch (e) { /* ignore */ }
     }
     var one = null;
     try { one = localStorage.getItem('wj.parse.base'); } catch (e) { /* ignore */ }
-    if (one === null) return CLOUD_DEFAULT ? [CLOUD_DEFAULT] : [];
     one = tidyBase(one);
-    return one ? [one] : [];
+    /* 没配任何地址时用内置默认节点，保证开箱即用；用户配置始终优先。 */
+    return one ? [one] : (CLOUD_DEFAULT ? [CLOUD_DEFAULT] : []);
   }
 
   function setParseBases(list) {
@@ -679,7 +679,7 @@ window.WJLive = (function () {
      content 是洗干净的正文字（Markdown），公众号也能抓。
      关键是这家给浏览器发 CORS 头（预检回 Access-Control-Allow-Origin），
      所以不用部署任何中转就能在手机浏览器里直接解析——这正是这个 App 一直缺的那一环。
-     计费：每 1000 次成功请求约 5 元，失败、没正文的不计费。 */
+     这是可选通道，默认不启用；内置免费节点已能覆盖大多数场景。 */
   var DS_KEY = 'wj.ds.key';
   var DS_API = 'https://api.deepseek.com/v1/tools/fetch';
 
@@ -736,7 +736,7 @@ window.WJLive = (function () {
       var e = new Error(msg);
       e.status = r.status;
       if (r.status === 401) e.message = 'DeepSeek Key 无效或已失效';
-      else if (r.status === 402) e.message = 'DeepSeek 余额不足（抓取 1000 次约 5 元）';
+      else if (r.status === 402) e.message = 'DeepSeek 余额不足，请到平台充值或改用内置免费节点';
       else if (r.status === 403) e.message = '被目标站点安全策略拒绝（' + msg + '）';
       else if (r.status === 404) e.message = '这个页面抓不到内容（可能要登录，或页面没有正文）';
       else if (r.status === 429) e.message = '抓取太频繁（每秒 5 次上限），缓一下再试';
@@ -2252,10 +2252,9 @@ window.WJLive = (function () {
       if (!bases.length && !dsKey()) {
         err.code = 'NO_CHANNEL';
         err.message = '这次没取到正文';
-        err.detail = '三条路，按省事程度排：\n' +
-          '① 填一个 DeepSeek Key（我的 → 解析服务）：官方抓取接口，公众号也能抓，1000 次约 5 元，不用部署任何东西；\n' +
-          '② 部署一个自己的解析 Worker（同页有一键部署，约 1 分钟）；\n' +
-          '③ 直接点「粘贴全文」，把正文复制进来，改写效果完全一样。';
+        err.detail = '两条免费的路：\n' +
+          '① 直接点「粘贴全文」，把正文复制进来，改写效果完全一样；\n' +
+          '② 到我「我的 → 解析服务」点「检测」，确认内置解析节点是否在线，或填一个自己的免费 Worker 地址。';
       } else if (!bases.length && dsErr) {
         err.message = 'DeepSeek 这次没抓到：' + dsErr.message;
       }

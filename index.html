@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- 文匠 AI · 单文件构建 2026-11-22T16:49:26.753Z · 源文件见 src/ 与 assets/ -->
+<!-- 文匠 AI · 单文件构建 2026-11-22T17:48:22.070Z · 源文件见 src/ 与 assets/ -->
 <html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="UTF-8">
@@ -5915,15 +5915,13 @@ window.WJLive = (function () {
   var AGG = 'https://api-hot.imsyy.top';
   var SNAPSHOT = 'data/hot.json';
 
-  /* 统计托管（GitHub Pages）没有自己的后端，浏览器又跨不过 CORS，取正文必须有一台服务器代抓。
-     这里支持配「多个」地址：自建 Cloudflare Worker、自己的 VPS 都可以一起填，
-     解析时并行探活、谁先返回用谁，一条挂了不影响另一条。
-
-     注意：不要再内置任何「云端默认实例」。之前那个地址是开发环境的临时域名，
-     下线后所有没配过地址的用户都会卡在 12 秒超时上——解析用不了，热榜也拖到只能读缓存。
-     现在没配置就是没配置，界面直说，让用户去部署自己的 Worker。 */
-  var CLOUD_DEFAULT = '';
-  var CLOUD_CODE = '';
+  /* 静态托管（GitHub Pages）没有自己的后端，浏览器又跨不过 CORS，取正文必须有一台服务器代抓。
+     这里内置一个免费、国内可直连、带 CORS 的公共解析节点作为默认，开箱即用；
+     用户也可以在「我的 → 解析服务」填自己的 Worker / VPS，填了就以用户的为准。
+     解析时并行探活、谁先返回用谁，一条挂了不影响另一条；默认节点若哪天不可用，
+     probe 探活 + deadMap 冷却会自动跳过它，不会一直拖时间。 */
+  var CLOUD_DEFAULT = 'https://ae4456e3164821b38.app.workbuddy.host';
+  var CLOUD_CODE = 'KQNPRGHZG2';
   var BASES_KEY = 'wj.parse.bases';
   var KEY_KEY = 'wj.parse.key';
 
@@ -5956,15 +5954,17 @@ window.WJLive = (function () {
             var b = tidyBase(x);
             if (b && out.indexOf(b) < 0) out.push(b);
           });
-          return out;
+          /* 数组是空的（以前手动清空过）也回退到默认节点，避免解析全废 */
+          if (out.length) return out;
+          return CLOUD_DEFAULT ? [CLOUD_DEFAULT] : [];
         }
       } catch (e) { /* ignore */ }
     }
     var one = null;
     try { one = localStorage.getItem('wj.parse.base'); } catch (e) { /* ignore */ }
-    if (one === null) return CLOUD_DEFAULT ? [CLOUD_DEFAULT] : [];
     one = tidyBase(one);
-    return one ? [one] : [];
+    /* 没配任何地址时用内置默认节点，保证开箱即用；用户配置始终优先。 */
+    return one ? [one] : (CLOUD_DEFAULT ? [CLOUD_DEFAULT] : []);
   }
 
   function setParseBases(list) {
@@ -6583,7 +6583,7 @@ window.WJLive = (function () {
      content 是洗干净的正文字（Markdown），公众号也能抓。
      关键是这家给浏览器发 CORS 头（预检回 Access-Control-Allow-Origin），
      所以不用部署任何中转就能在手机浏览器里直接解析——这正是这个 App 一直缺的那一环。
-     计费：每 1000 次成功请求约 5 元，失败、没正文的不计费。 */
+     这是可选通道，默认不启用；内置免费节点已能覆盖大多数场景。 */
   var DS_KEY = 'wj.ds.key';
   var DS_API = 'https://api.deepseek.com/v1/tools/fetch';
 
@@ -6640,7 +6640,7 @@ window.WJLive = (function () {
       var e = new Error(msg);
       e.status = r.status;
       if (r.status === 401) e.message = 'DeepSeek Key 无效或已失效';
-      else if (r.status === 402) e.message = 'DeepSeek 余额不足（抓取 1000 次约 5 元）';
+      else if (r.status === 402) e.message = 'DeepSeek 余额不足，请到平台充值或改用内置免费节点';
       else if (r.status === 403) e.message = '被目标站点安全策略拒绝（' + msg + '）';
       else if (r.status === 404) e.message = '这个页面抓不到内容（可能要登录，或页面没有正文）';
       else if (r.status === 429) e.message = '抓取太频繁（每秒 5 次上限），缓一下再试';
@@ -8156,10 +8156,9 @@ window.WJLive = (function () {
       if (!bases.length && !dsKey()) {
         err.code = 'NO_CHANNEL';
         err.message = '这次没取到正文';
-        err.detail = '三条路，按省事程度排：\n' +
-          '① 填一个 DeepSeek Key（我的 → 解析服务）：官方抓取接口，公众号也能抓，1000 次约 5 元，不用部署任何东西；\n' +
-          '② 部署一个自己的解析 Worker（同页有一键部署，约 1 分钟）；\n' +
-          '③ 直接点「粘贴全文」，把正文复制进来，改写效果完全一样。';
+        err.detail = '两条免费的路：\n' +
+          '① 直接点「粘贴全文」，把正文复制进来，改写效果完全一样；\n' +
+          '② 到我「我的 → 解析服务」点「检测」，确认内置解析节点是否在线，或填一个自己的免费 Worker 地址。';
       } else if (!bases.length && dsErr) {
         err.message = 'DeepSeek 这次没抓到：' + dsErr.message;
       }
@@ -9321,9 +9320,8 @@ window.WJUI = (function () {
         '<div class="foot"><button class="mini-btn" data-act="paste">' + ic('copy', 12) + ' 从剪贴板</button>' +
         (c.link1 ? '<button class="mini-btn" data-act="clear-compose">' + ic('close', 12) + ' 清空</button>' : '') +
         '<button class="mini-btn" data-act="preview-link">' + ic('search', 12) + ' 先解析看看</button>' +
-        '<button class="mini-btn" data-act="grab-from-link">' + ic('external', 12) + ' 打开原文读回</button>' +
         '<button class="mini-btn" data-act="start" data-mode="text">' + ic('text', 12) + ' 直接粘全文</button>' +
-        '<div class="spacer"></div><span class="sec-sub">解析不通就用「打开原文读回」，任何链接都有效</span></div></div>';
+        '<div class="spacer"></div><span class="sec-sub">解析不通就直接粘全文，改写效果一样</span></div></div>';
     if (c.preview) {
       h += '<div class="pv">' +
         '<div class="pv-h"><b>' + esc(c.preview.title || '已取到正文') + '</b>' +
@@ -9817,7 +9815,7 @@ window.WJUI = (function () {
       : (_pbs.length === 1 && _pbs[0] === window.WJLive.CLOUD_DEFAULT ? '默认节点'
         : _pbs.length + ' 条通道');
     h += '<button class="row" data-act="parse-service"><span class="ri">' + ic('wand', 15) + '</span>' +
-      '<span class="rt"><b>解析服务</b><small>' + (_pbs.length ? '粘贴链接取正文用的后端' : '未配置 · 取正文请用「打开原文读回」') + '</small></span>' +
+      '<span class="rt"><b>解析服务</b><small>' + (_pbs.length ? '内置节点 · 粘贴链接即可抓正文' : '未配置') + '</small></span>' +
       '<span class="rv"' + (_pbs.length ? '' : ' style="color:var(--warn)"') + '>' + _pbName + '</span>' +
       '<span class="chev">' + ic('right', 15) + '</span></button>';
 
@@ -11575,107 +11573,6 @@ window.WJCreate = (function () {
     return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
   }
 
-  /* ---------------- 「打开原文 · 自动读回」 ----------------
-     浏览器读不了别人的网页（同源策略），而国内网络基本打不通公共代理、workers.dev 这类境外中转，
-     所以最靠得住的一条路是：用系统浏览器打开原文 → 全选复制 → 切回来，我们自己把剪贴板读进正文框。
-     两步，不需要服务器、不需要 Key，公众号 / 头条 / 小红书 / 知乎 都一样有效。 */
-  var GRAB_KEY = 'wj.grab';
-
-  function grabState() {
-    try {
-      var g = JSON.parse(localStorage.getItem(GRAB_KEY) || 'null');
-      if (!g || !g.at || Date.now() - g.at > 10 * 60000) return null;
-      return g;
-    } catch (e) { return null; }
-  }
-  function armGrab(url) {
-    try { localStorage.setItem(GRAB_KEY, JSON.stringify({ url: url, at: Date.now() })); } catch (e) { /* ignore */ }
-  }
-  function clearGrab() {
-    try { localStorage.removeItem(GRAB_KEY); } catch (e) { /* ignore */ }
-    var bar = document.getElementById('grabBar');
-    if (bar) bar.remove();
-  }
-
-  function grabBar(text) {
-    var old = document.getElementById('grabBar');
-    if (old) old.remove();
-    var el = document.createElement('div');
-    el.id = 'grabBar';
-    el.setAttribute('style', 'position:fixed;left:12px;right:12px;bottom:18px;z-index:9999;' +
-      'background:var(--acc,#d9ff4b);color:#12140f;border-radius:16px;padding:13px 15px;display:flex;' +
-      'align-items:center;gap:10px;box-shadow:0 12px 34px rgba(0,0,0,.45);font-size:14px;font-weight:600');
-    el.innerHTML = '<span style="flex:1;line-height:1.45">' + U.esc(text) + '</span>' +
-      '<button data-act="grab-read" style="border:0;background:#12140f;color:#d9ff4b;border-radius:10px;' +
-      'padding:9px 13px;font-size:13px;font-weight:700">读进来</button>';
-    /* 必须挂在 app 里面：点击是委托到 app 上处理的，挂到 body 上的按钮点了没反应。 */
-    (document.getElementById('app') || document.body).appendChild(el);
-  }
-
-  function grabToCompose(txt) {
-    var t = dejunk(txt);
-    if (!t || t.length < 30) return false;
-    state.compose.mode = 'text';
-    state.compose.text1 = t;
-    clearGrab();
-    closeSheet();
-    go('compose', { nav: 'push' });
-    setTimeout(function () {
-      var ta = document.querySelector("[data-field='text1']");
-      if (ta) { ta.value = t; }
-      syncCounters();
-      autosize();
-    }, 40);
-    toast('已读回 ' + t.length + ' 字，直接点生成就行', 3600);
-    return true;
-  }
-
-  function readClip() {
-    if (!(navigator.clipboard && navigator.clipboard.readText)) return Promise.reject(new Error('no clipboard'));
-    return navigator.clipboard.readText();
-  }
-
-  function openGrab(url) {
-    if (!url) { toast('没有拿到链接'); return; }
-    armGrab(url);
-    /* 用 <a target=_blank> 点一下，比 window.open 更不容易被拦截；
-       万一真被拦了，也不要把当前页面跳走（跳走就丢了正在编的内容），
-       改成把链接复制到剪贴板，让用户自己去浏览器打开。 */
-    var opened = false;
-    try {
-      var a = document.createElement('a');
-      a.href = url;
-      a.target = '_blank';
-      a.rel = 'noopener';
-      a.style.display = 'none';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      opened = true;
-    } catch (e) { opened = false; }
-
-    if (!opened) {
-      try { navigator.clipboard.writeText(url); } catch (e2) { /* ignore */ }
-      grabBar('链接已复制：去浏览器打开原文，复制正文后回来点这里');
-      return;
-    }
-    grabBar('在原文里长按全选 → 复制，然后切回这里');
-    toast('复制完正文切回来，会自动读进输入框', 4200);
-  }
-
-  /* 从原文切回来：先静默试一次自动读；浏览器不给读就留一条按钮，点一下就能读 */
-  function grabOnReturn() {
-    var g = grabState();
-    if (!g) return;
-    setTimeout(function () {
-      readClip().then(function (txt) {
-        if (!grabToCompose(txt)) grabBar('已切回：点这里把正文读进来');
-      }).catch(function () {
-        grabBar('已切回：点这里把正文读进来');
-      });
-    }, 450);
-  }
-
   /* 老配置里可能留着打不开的地址（预览链接、已删的 Worker）。
      启动后静默体检一次，把连不上的从配置里摘掉，别让它一直拖慢解析。 */
   async function scrubBases() {
@@ -13273,8 +13170,8 @@ window.WJCreate = (function () {
     var key = L.parseKey ? L.parseKey() : '';
     var html =
       '<p style="color:var(--ink-2);line-height:1.6">浏览器读不了别人的网页（跨域限制），抓正文要有个接口代抓。' +
-      '内置通道只适合简单静态页；公众号、微博、小红书这类站点，最稳的通用办法是「打开原文读回」——贴链接、打开、复制正文、切回来自动读进编辑框，任何链接都有效。' +
-      '要自动抓正文，可在下面填自己的服务地址，留空则用内置通道。</p>' +
+      'App 已内置一个免费解析节点，粘贴链接即可自动抓正文，无需配置。' +
+      '想用更稳的自家服务，可在下面填自己的地址，填了就优先用你的。</p>' +
 
       (list.length
         ? '<div class="note mt-s" style="border-color:rgba(217,255,75,.28)">' + U.ic('check', 13) +
@@ -13527,12 +13424,8 @@ window.WJCreate = (function () {
       '<div class="note mt-s">' + U.ic('info', 14) + '<div>' + why + '</div></div>' + detail,
       {
         title: '这个链接没取到正文',
-        foot: (err && err.url
-          ? '<button class="btn btn-primary btn-block" data-act="open-grab" data-url="' + esc(err.url) + '">' +
-            U.ic('external', 15) + ' 打开原文 · 复制后自动读回</button>'
-          : '') +
-          (hint
-            ? '<button class="btn ' + (err && err.url ? 'btn-soft' : 'btn-primary') + ' btn-block" data-act="title-write" data-title="' + esc(hint) + '">' +
+        foot: (hint
+            ? '<button class="btn btn-primary btn-block" data-act="title-write" data-title="' + esc(hint) + '">' +
               U.ic('edit', 16) + ' 就用这个标题写</button>'
             : '') +
           (lastFail
@@ -14884,7 +14777,7 @@ window.WJCreate = (function () {
         if (L.setDsKey) L.setDsKey('');
         if (L.invalidateProbe) L.invalidateProbe();
         closeSheet();
-        toast('已清空解析地址');
+        toast('已清空自定义地址，恢复内置解析');
         render('tab');
         break;
 
@@ -15039,27 +14932,6 @@ window.WJCreate = (function () {
         closeSheet();
         state.compose.mode = 'text';
         render('push');
-        break;
-
-      /* 打开原文，回来把剪贴板读进正文框 */
-      case 'open-grab':
-        openGrab(t.dataset.url || '');
-        break;
-
-      case 'grab-from-link': {
-        /* 从 compose 链接框读当前值（不依赖渲染时的快照，用户可能刚粘进来还没重渲染） */
-        var gl = String(state.compose.link1 || '').trim();
-        if (!/https?:\/\//.test(gl)) { toast('先在上面粘一条以 http 开头的链接'); break; }
-        openGrab(gl);
-        break;
-      }
-
-      case 'grab-read':
-        readClip().then(function (txt) {
-          if (!grabToCompose(txt)) toast('剪贴板里没读到成段的正文，长按输入框粘一次', 3800);
-        }).catch(function () {
-          toast('浏览器不让读剪贴板：长按正文输入框，粘贴一次就行', 4000);
-        });
         break;
 
       /* 免费、零依赖的一条路：正文在剪贴板里就直接读进来，不经过任何服务器。 */
@@ -15469,8 +15341,6 @@ window.WJCreate = (function () {
 
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) return;
-      /* 从系统浏览器抱着正文回来：先把剪贴板读进正文框，这件事比刷新热榜重要 */
-      grabOnReturn();
       if (state.route !== 'home' && state.route !== 'rank') return;
       var act = state.hot.bySrc[state.hot.active];
       if (!act || !act.at || Date.now() - act.at > 60000) loadHot(state.hot.active);
