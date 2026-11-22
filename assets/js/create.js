@@ -237,25 +237,81 @@ window.WJCreate = (function () {
         var w = text.match(/不少于\s*(\d{2,5})\s*字/);
         return w ? Number(w[1]) : 0;
       })(),
+      understanding: localUnderstanding(name, tags, ways, text),
+      concepts: localConcepts(name, tags, text),
+      research: localResearch(name, tags, text),
       note: '本机规则解析，未联网核对；发布前请对照原帖',
       by: 'local'
     };
   }
 
+  /* 常见"挑战/生活方式"概念的常识解读。这里放的是公共常识，不是活动数据，
+     也不编造任何日期金额。作用：免费模型偶尔连不上时，别让理解退化成机械拼标题。 */
+  var GLOSSARY = [
+    { re: /no\s?spend|不消费|零消费/i, term: 'NoSpend（不消费挑战）', desc: '一种刻意克制非必要消费的生活方式实验：在一段时间内（常见是一周/一个月）除了吃饭、房租这类必要开销，尽量不买任何非必需品。人们用它来重新审视"我真正需要什么"、摆脱冲动消费和消费主义，重点不是抠门省钱，而是记录下每次想买又忍住的过程和心态变化。所以这类内容最值得写的是真实的心路、具体忍住了什么、生活因此发生了什么变化。' },
+    { re: /断舍离/i, term: '断舍离', desc: '一种整理和生活的理念：断绝不需要的东西、舍弃多余的物品、脱离对物品的执念。写这类内容要说清扔了什么、为什么、之后生活哪里变轻了，而不是泛泛谈"极简"。' },
+    { re: /city\s?walk|城市漫步/i, term: 'City Walk（城市漫步）', desc: '一种慢节奏的城市探索方式：不赶景点、不打卡，用脚步随意穿行街区，重新发现身边被忽略的风景和小店。内容重点在有温度的观察和个人路线，而非旅游攻略式的罗列。' },
+    { re: /反向消费|反向购物/i, term: '反向消费', desc: '年轻人重新审视消费的行为：不追大牌和溢价、不为营销买单，转而追求"该省省、该花花"的性价比和真实需求。写的时候要有具体的对比和判断，不要空喊口号。' },
+    { re: /极简| minimalist|极简生活/i, term: '极简生活', desc: '主动减少物品和欲望、把精力留给真正重要之事的生活方式。要写清"减了什么、留下了什么、换来什么"，避免只晒空荡的房间。' },
+    { re: /多巴胺穿搭|多巴胺/i, term: '多巴胺穿搭', desc: '用明亮、高饱和的颜色搭配来调动积极情绪的穿衣风格。内容要落到具体配色和穿上后的真实感受，不只是喊"开心"。' },
+    { re: /搭子/i, term: '搭子', desc: '指只为某一具体活动临时结伴的人（饭搭子、运动搭子等），关系轻、目的明确。写的时候抓住"轻量陪伴"这个新社交分寸感。' }
+  ];
+
+  function conceptHits(name, tags, text) {
+    var hay = String(name || '') + ' ' + (tags || []).join(' ') + ' ' + String(text || '');
+    return GLOSSARY.filter(function (g) { return g.re.test(hay); });
+  }
+
+  /* 本地兜底理解：先讲清任务，再把命中的概念用人话解释——不是机械拼标题 */
+  function localUnderstanding(name, tags, ways, text) {
+    var parts = [];
+    parts.push('这是一个名为「' + String(name || '活动').slice(0, 30) + '」的创作任务');
+    if (tags && tags.length) parts.push('要求带话题 #' + tags[0]);
+    if (ways && ways.length) parts.push('参与方式包括：' + ways.slice(0, 3).map(function (w) { return w.name; }).join('、'));
+    var hits = conceptHits(name, tags, text).slice(0, 2);
+    hits.forEach(function (h) { parts.push(h.term + '指的是：' + h.desc); });
+    if (!hits.length) parts.push('要认真读出帖子里真正想让人做什么，而不是照字面硬解；写出真实具体、有自己角度的内容才算合格');
+    else parts.push('所以这类内容真正值得写的，是结合上面的含义讲出自己的真实经历和具体细节，而不是空喊口号');
+    parts.push('发布前请对照原帖核一遍日期和奖项');
+    return (parts.join('。') + '。').replace(/。{2,}/g, '。');
+  }
+
+  function localConcepts(name, tags, text) {
+    return conceptHits(name, tags, text).slice(0, 5).map(function (h) {
+      return { term: h.term, why: h.desc.slice(0, 120) };
+    });
+  }
+
+  /* 本地兜底研究问题：围绕"任务里出现的东西怎么回事 / 真人怎么做 / 去哪找素材"，不是搜帖子本身 */
+  function localResearch(name, tags, text) {
+    var hit = conceptHits(name, tags, text || '')[0];
+    var subject = hit ? hit.term.replace(/（.*?）/g, '') : (cleanBrand(name).split(' ')[0] || String(name || '').slice(0, 12) || '这个活动');
+    var out = [
+      subject + ' 是什么意思 真实体验',
+      subject + ' 怎么参与 心得 收获',
+      subject + ' 普通人 做法 变化'
+    ];
+    if (tags && tags[0]) out.push(tags[0] + ' 小红书 高赞内容 写法');
+    return out.slice(0, 6);
+  }
+
+  /* 只让模型做它最擅长、也最关键的一件事：把任务读懂。
+     结构化字段（时间/话题/奖项/参与方式）交给本地规则，稳定且不会编数字。
+     输出要求刻意做得极简（三个字段），免费模型也能稳定返回。 */
   function taskMessages(text, title, url) {
-    var sys = '你是一名活动运营，专门把品牌活动帖拆成创作者能直接执行的任务。' +
-      '只根据帖子正文提取，帖子没写的字段留空字符串，绝对不要猜日期、金额、名额。只输出 JSON。';
-    var user = '把下面这条活动帖拆成结构化任务。\n\n' +
-      '要求：\n' +
-      '1) 如果帖子里有多种参与方式（例如"作品投稿/互动游戏/评论区祝福"），每一种单独放进 ways；只有一种就放一条。\n' +
-      '2) deadline 用原文写法（如 2026年11月20日—11月30日），原文没有就留空。\n' +
-      '3) hashtags 去掉 # 号，保留原文大小写与标点。\n' +
-      '4) rules 只放硬性要求（原创、带话题、公开可见、不得搬运、评选口径），不要放宣传语。\n' +
-      '5) awards 每条写清奖项名、名额、奖品；原文没有名额就只写奖品。\n' +
-      '6) minWords：原文要求"不少于 N 字"时填 N，否则 0。\n' +
-      '7) 不确定的字段留空，不要编。\n\n' +
-      '输出 JSON：{"platformName":"","title":"","brand":"","deadline":"","hashtags":[],"ways":[{"name":"","desc":"","need":""}],"awards":[],"rules":[],"minWords":0,"note":""}\n\n' +
-      '帖子标题：' + (title || '未知') + '\n帖子正文：\n' + String(text || '').slice(0, 9000);
+    var sys = '你是一个真正懂内容创作的人。你的活儿是把一条活动帖读透，讲清楚"一个正常人接到这个任务会怎么想、怎么做"。' +
+      '像人读阅读理解一样：从头到尾读完、前后连起来理解，不能只看开头。' +
+      '遇到 NoSpend、断舍离、City Walk、反向消费这类概念或挑战，别按字面硬解——用常识想清楚它在现实里指什么行为、为什么有人做、普通人怎么参与。' +
+      '只输出一个简单 JSON，不要输出别的内容。';
+    var user = '读下面的活动帖，然后只做三件事：\n' +
+      '1) understanding：用三五句大白话讲清这是什么活动、主办方真正想要什么内容、一个真人会怎么理解并完成它、写成什么样才算合格。' +
+      '如果帖子里有 NoSpend 这类不常见的概念，用常识解释它到底指什么行为，不要只翻译字面。\n' +
+      '2) concepts：帖子里"不查一下就不懂"的概念/挑战/玩法，数组，每个写 {"term":"概念","why":"为什么要想懂它"}；没有就写 []。\n' +
+      '3) research：为了弄懂任务、收集创作素材，你准备联网搜的问题，4-6 条。' +
+      '注意不是去搜"这个活动本身"（原帖已经有），而是搜"这个概念是什么/真人怎么做/有什么真实体验和素材"。' +
+      '比如有 NoSpend 就搜"NoSpend 是什么 真实体验""NoSpend 挑战 怎么坚持 心得""不消费挑战 普通人 收获"。\n\n' +
+      '只输出 JSON：{"understanding":"","concepts":[{"term":"","why":""}],"research":[]}\n\n' +
+      '活动标题：' + (title || '未知') + '\n活动正文（请读到最后一行）：\n' + String(text || '');
     return [{ role: 'system', content: sys }, { role: 'user', content: user }];
   }
 
@@ -293,25 +349,74 @@ window.WJCreate = (function () {
       awards: (o.awards || f.awards || []).map(String).slice(0, 8),
       rules: (o.rules || f.rules || []).map(String).slice(0, 8),
       minWords: Number(o.minWords || f.minWords || 0) || 0,
+      understanding: String(o.understanding || f.understanding || '').slice(0, 1200),
+      concepts: (Array.isArray(o.concepts) && o.concepts.length ? o.concepts : f.concepts || []).slice(0, 8).map(function (x) {
+        return { term: String(x.term || '').slice(0, 40), why: String(x.why || '').slice(0, 160) };
+      }).filter(function (x) { return x.term; }),
+      research: (Array.isArray(o.research) && o.research.length ? o.research : f.research || []).slice(0, 8).map(String).filter(Boolean).slice(0, 8),
       note: String(o.note || (o.by === 'ai' ? 'AI 从原帖提取，已保留原文出处' : f.note || '')).slice(0, 200),
       by: 'ai',
       raw: String(o.raw || '').slice(0, 200)
     };
   }
 
+  /* 把全文要点压成一段紧凑 brief：标题、话题、全部参与方式、奖项、规则、时间都在，
+     AI 据此就能"通读全文要点"地理解任务，而不用把上千字原文硬塞给处理长文本不稳的免费模型。 */
+  function taskBrief(local, rawText) {
+    var b = [];
+    b.push('活动：' + (local.title || '未标明'));
+    if (local.deadline) b.push('时间：' + local.deadline);
+    if ((local.hashtags || []).length) b.push('话题：' + local.hashtags.map(function (x) { return '#' + x; }).join(' '));
+    if ((local.ways || []).length) b.push('参与方式：\n' + local.ways.map(function (w, i) {
+      return (i + 1) + '）' + w.name + (w.desc ? '——' + w.desc : '');
+    }).join('\n'));
+    if ((local.awards || []).length) b.push('奖项：' + local.awards.slice(0, 6).join('；'));
+    if ((local.rules || []).length) b.push('规则：' + local.rules.slice(0, 6).join('；'));
+    /* 正文里除结构化字段外可能还有"灵感/玩法说明"，补一段原文兜底，保证不漏下半部分 */
+    var extra = String(rawText || '').replace(/\s+/g, ' ').slice(0, 700);
+    if (extra) b.push('原文节选：' + extra);
+    return b.join('\n').slice(0, 2600);
+  }
+
   async function extractTask(text, title, url, chain) {
+    /* 结构化字段本地提取：稳、不编数字。AI 只负责"像人一样理解"这一段。 */
     var local = localTask(text, title, url);
+    local.by = 'ai';
     if (!chain || !chain.length) return local;
+    var brief = taskBrief(local, text);
+    var res = null, o = null;
+    /* 免费通道偶发超时/限流，且长 JSON 容易被 maxTokens 截断。重试两次、给足 token，
+       宁可多等一两秒，也要让"像人一样理解"这一步真正跑出来，而不是回退到本地拼接。 */
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        res = await L.chatChain(chain, taskMessages(brief, title, url), { temperature: 0.5, maxTokens: 1600 });
+        o = parseJSON(res.text);
+        if (o && (o.understanding || (o.research || []).length)) break;
+        o = null;
+      } catch (e) {
+        o = null;
+        if (attempt < 2) await sleep(600);
+      }
+    }
     try {
-      var res = await L.chatChain(chain, taskMessages(text, title, url), { temperature: 0.2, maxTokens: 1600 });
-      var o = parseJSON(res.text);
-      if (!o) return local;
-      var out = normalizeTask(o, local);
-      out.by = 'ai';
-      out.model = (res.provider.name ? res.provider.name + ' · ' : '') + res.model;
-      return out;
+      if (!o || (!o.understanding && !(o.research || []).length)) return local;
+      /* 合并：理解/概念/研究问题用 AI 的；时间话题奖项参与方式仍用本地的（不交模型，避免编数字）。 */
+      if (o.understanding) local.understanding = String(o.understanding).slice(0, 1200);
+      if (Array.isArray(o.concepts) && o.concepts.length) {
+        local.concepts = o.concepts.slice(0, 8).map(function (x) {
+          return { term: String(x.term || '').slice(0, 40), why: String(x.why || '').slice(0, 160) };
+        }).filter(function (x) { return x.term; });
+      }
+      if (Array.isArray(o.research) && o.research.length) {
+        local.research = o.research.slice(0, 8).map(function (q) {
+          return String(q).replace(/^\s*\d+[\.、\)]\s*/, '').trim();
+        }).filter(Boolean).slice(0, 8);
+      }
+      local.model = (res.provider && res.provider.name ? res.provider.name + ' · ' : '') + res.model;
+      local.note = '理解由 AI 结合原帖形成，规则字段照原帖';
+      return local;
     } catch (e) {
-      local.note = '模型没调通，已用本机规则解析：' + (e.message || '');
+      local.note = 'AI 没连上，用本机规则理解：' + (e.message || '');
       return local;
     }
   }
@@ -341,21 +446,30 @@ window.WJCreate = (function () {
     return ((t && t.brand) || '') + ' ' + ev;
   }
 
+  /* 搜索词 = AI 读懂任务后提出的研究问题。
+     重点：搜的是「怎么理解/怎么完成/去哪找素材」，不是把原帖标题再搜一遍。
+     原帖我们已经全文拿到了，再搜活动名只会得到同一条活动页，对创作毫无帮助。 */
   function queriesFor(task) {
-    var brand = cleanBrand(task.brand || task.title).split(' ').slice(0, 2).join(' ');
-    if (!brand) brand = String(task.title || '').slice(0, 10);
-    var tag = (task.hashtags || [])[0] || '';
     var out = [];
     var push = function (s) {
       s = String(s || '').replace(/\s+/g, ' ').trim();
       if (s && len(s) >= 2 && out.indexOf(s) < 0) out.push(s);
     };
-    push(String(task.title || '').slice(0, 26));
-    push(brand + ' 活动 规则');
-    push(brand + ' 两周年');
-    if (tag) push(tag);
-    push(brand + ' 怎么玩');
-    return out.slice(0, 4);
+    /* AI 研究问题优先：这些是"要弄懂这个任务和收集素材"而提出的问题 */
+    (task.research || []).forEach(push);
+    /* 概念补充：帖子里不懂的名词，逐个搜它的真实含义和玩法 */
+    (task.concepts || []).forEach(function (c) {
+      if (c && c.term) push(String(c.term) + ' 是什么 怎么做');
+    });
+    /* 兜底：完全没有研究问题时，围绕任务主体问"怎么回事/怎么做/真实体验" */
+    if (!out.length) {
+      var brand = cleanBrand(task.brand || task.title).split(' ').slice(0, 2).join(' ') || String(task.title || '').slice(0, 10);
+      push(brand + ' 是什么意思 怎么参与');
+      push(brand + ' 真实体验 心得');
+      var tag = (task.hashtags || [])[0] || '';
+      if (tag) push(tag + ' 小红书 高赞写法');
+    }
+    return out.slice(0, 8);
   }
 
   /* 必应结果页被解析成纯文本时，按「域名行」切块 */
@@ -580,8 +694,11 @@ window.WJCreate = (function () {
     var lines = [];
     (ev || []).forEach(function (e, i) {
       if (!e.on) return;
-      var head = '[E' + (i + 1) + '] ' + (e.from === 'task' ? '任务原帖（官方说明）' : (e.site || host(e.url) || '网页')) + '｜' + (e.date || '日期未知') + '｜' + (e.title || '');
-      var body = String(e.text || e.snippet || '').replace(/\s+/g, ' ').slice(0, 900);
+      var head = '[E' + (i + 1) + '] ' + (e.from === 'task' ? '任务原帖（官方说明，全文）' : (e.site || host(e.url) || '网页')) + '｜' + (e.date || '日期未知') + '｜' + (e.title || '');
+      /* 原帖要点已经浓缩进 understanding，这里给模型看的是"足以核对事实"的一段，
+         不必把上万字原文全塞进去撑爆免费模型的上下文；完整原帖在资料池里可随时查看。 */
+      var cap = e.from === 'task' ? 3500 : 1400;
+      var body = String(e.text || e.snippet || '').replace(/\s+/g, ' ').slice(0, cap);
       lines.push(head + '\n' + body);
     });
     return lines.join('\n\n') || '（没有可用的检索资料）';
@@ -610,7 +727,9 @@ window.WJCreate = (function () {
     var want = target || (minW ? Math.max(minW, 600) : (p.genre === 'script' ? 450 : p.genre === 'short' ? 260 : 700));
 
     var sys = '你是一个在' + plat + '上有真实粉丝的中文创作者，不是文案机器。' +
-      '你写东西的顺序是：先想这条内容对谁有用、凭什么可信、读者看完能带走什么，再动笔。\n' +
+      '你写东西的顺序是：先把任务真正读懂——它想让人做什么、里面的概念和行为到底指什么（例如 NoSpend 是一种刻意不消费、重新审视欲望的生活方式实验，不是简单的省钱），' +
+      '再想这条内容对谁有用、凭什么可信、读者看完能带走什么，最后才动笔。' +
+      '每一句话都要像一个真人在认真表达，不要像说明书那样生硬，不要只按字面理解任务后机械执行。\n' +
       '铁律（违反任何一条都算失败）：\n' +
       '1. 只能使用【任务信息】【检索资料】【用户素材】里出现过的事实。数字、日期、金额、名额、人名、机构、奖项，一个都不许编。资料里没有的细节，换一种写法绕开，不要用"据悉""业内人士""有消息称"来填空。\n' +
       '2. 资料之间打架时，采信官方来源和日期更新的那条，并在 facts 里写清楚你用了哪条。\n' +
@@ -630,6 +749,9 @@ window.WJCreate = (function () {
       '要执行的方式：' + p.pickNames.join('；') + '\n' +
       '硬性要求：' + ((t.rules || []).join('；') || '原创、真实、不搬运') + '\n' +
       '奖项（只用于判断内容方向，不要写进正文）：' + ((t.awards || []).slice(0, 4).join('；') || '未注明') + '\n\n' +
+      '【对这个任务的理解】（这是读完原帖和联网资料后形成的，写作时要带着这个理解，不要退回字面）\n' +
+      (t.understanding || '（没有额外理解，自己按上面的任务信息去想）') + '\n' +
+      ((t.concepts || []).length ? '其中这些概念的意思：' + t.concepts.map(function (x) { return x.term + '（' + (x.why || '结合资料理解') + '）'; }).join('；') + '\n' : '') + '\n' +
       '【检索资料】（编号即出处，正文里的每个数字都应该能对上其中一条）\n' + evidenceBlock(p.evidence) + '\n\n' +
       '【用户素材】\n' + materialBlock(p.material) + '\n\n' +
       '【平台写法】' + E.platformBrief(p.platform) + '\n' +
@@ -887,6 +1009,23 @@ window.WJCreate = (function () {
       '<span><i>' + U.ic('tag', 12) + '</i>' + (t.hashtags.length ? '#' + esc(t.hashtags[0]) : '未注明话题') + '</span>' +
       (t.minWords ? '<span><i>' + U.ic('text', 12) + '</i>不少于 ' + t.minWords + ' 字</span>' : '') +
       '</div>';
+
+    /* 把"读懂了什么 + 查了什么"摆出来：让用户看到 AI 不是照字面执行，而是真的理解了任务 */
+    if (t.understanding || (t.concepts || []).length || (t.research || []).length) {
+      h += '<div class="sec"><div class="sec-head"><div class="h2" style="font-size:15px">' +
+        U.ic('sparkle', 15) + ' 我读明白了什么</div><span class="sec-sub">读懂任务再动手</span></div>' +
+        '<div class="panel" style="padding:12px 16px">';
+      if (t.understanding) h += '<div class="tk-line" style="line-height:1.7">' + esc(t.understanding) + '</div>';
+      if ((t.concepts || []).length) {
+        h += '<div class="tk-line dim" style="margin-top:8px;font-size:12px">关键概念：' +
+          t.concepts.map(function (x) { return esc(x.term); }).join(' · ') + '</div>';
+      }
+      if ((t.research || []).length) {
+        h += '<div class="tk-line dim" style="margin-top:8px;font-size:12px">联网研究了：' +
+          t.research.slice(0, 5).map(function (q) { return esc(q); }).join(' · ') + '</div>';
+      }
+      h += '</div></div>';
+    }
 
     h += '<div class="sec"><div class="sec-head"><div class="h2" style="font-size:15px">' +
       (t.ways.length > 1 ? '选一个你要执行的（可多选）' : '任务内容') + '</div>' +

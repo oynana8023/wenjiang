@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI, C = window.WJCreate;
 
-  var VERSION = 'v2.21.0';
+  var VERSION = 'v2.24.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -2545,23 +2545,75 @@
     }
     c.task = task;
     c.picks = task.ways.length ? [0] : [];
+    /* 搜索词 = AI 读懂任务后提出的研究问题：搜的是"怎么理解/怎么做/找什么素材"，
+       不是把原帖标题再搜一遍。原帖我们已经全文拿到了。 */
     c.queries = C.queriesFor(task);
-    /* 原帖是活动规则的唯一权威来源：先放进资料池并勾上，
-       检索不到东西时也有一份可核对的事实，不至于让模型凭空编。 */
+    /* 原帖是活动规则的唯一权威来源：先放进资料池并勾上，全文入池——
+       任务的灵感、规则、奖项常在下半部分，截断会让模型"读了上半段就不知道后面"。 */
     c.evidence = [];
     c.result = null;
+    c.searchNote = ''; c.searchErr = '';
     if (src.text && src.text.length > 80) {
       c.evidence.push({
         id: 'src', title: (task.title || src.title || '任务原帖') + '（原帖）',
         url: url, site: task.platformName || '活动原帖', date: '',
-        snippet: String(src.text).slice(0, 200), text: String(src.text).slice(0, 2200),
+        snippet: String(src.text).slice(0, 200), text: String(src.text).slice(0, 12000),
         rel: 100, on: true, from: 'task'
       });
     }
     if (task.platform) c.set.platform = task.platform;
+
+    /* 拆解与联网研究是同一件事的两半：AI 读完任务、列出研究问题后，立刻自己去查，
+       而不是停下等用户再点一次"去查资料"。查不到也不卡住——原帖已在资料池里。 */
+    c.stepNote = '边拆边查：正在研究' + ((task.concepts || [])[0] ? '「' + (task.concepts[0].term || '') + '」' : '任务背景');
+    render('same');
+    var rr;
+    try {
+      rr = await C.searchAll(c.queries, function (note) {
+        c.stepNote = note;
+        var el = document.querySelector('[data-step-note]');
+        if (el) el.textContent = note;
+      });
+    } catch (e) {
+      rr = { items: [], channels: {}, error: e.message || '' };
+    }
+    var n = crApplyResearch(rr);
+    if (n > 0) c.searchNote = '读完任务后已自动研究，带回 ' + n + ' 条素材；下面还能继续加。';
     c.busy = false;
     c.stepNote = '';
     go('task', { nav: 'push' });
+  }
+
+  /* 把一轮检索结果并进资料池。相关度按"这条是哪个问题搜来的"算——
+     研究问题问的是"概念怎么做/怎么理解/什么素材"，就该用它来判相关，不能用品牌名一刀切，
+     否则搜"NoSpend 怎么做"得到的真经验会被当成跑题丢掉。 */
+  function crApplyResearch(r) {
+    var c = cr();
+    var added = 0;
+    (r.items || []).forEach(function (it) {
+      var key = String(it.url || (it.site + '|' + it.title)).replace(/[#?].*$/, '').slice(0, 120);
+      var dup = c.evidence.some(function (e) {
+        return String(e.url || (e.site + '|' + e.title)).replace(/[#?].*$/, '').slice(0, 120) === key;
+      });
+      var basis = it.q || C.coreOf(c.task) || c.task.title || '';
+      var rl = C.rel(basis, (it.title || '') + ' ' + (it.snippet || ''));
+      if (dup || rl < 0.2) return;
+      c.evidence.push({
+        id: 'e' + Date.now() + '_' + added,
+        title: it.title || '',
+        url: it.url || '',
+        site: it.site || '',
+        date: it.date || '',
+        snippet: it.snippet || '',
+        text: '',
+        rel: Math.round(rl * 100),
+        /* 相关度不够的先列出来但不勾：交给用户判断，别把无关网页塞进模型 */
+        on: rl >= 0.35,
+        from: it.from || 'search'
+      });
+      added += 1;
+    });
+    return added;
   }
 
   async function crSearch(rotate) {
@@ -2586,30 +2638,7 @@
       r = { items: [], channels: {}, error: e.message || '检索失败' };
     }
     c.searchBusy = false;
-    var added = 0;
-    var core = C.coreOf(c.task);
-    (r.items || []).forEach(function (it) {
-      var key = String(it.url || (it.site + '|' + it.title)).replace(/[#?].*$/, '').slice(0, 120);
-      var dup = c.evidence.some(function (e) {
-        return String(e.url || (e.site + '|' + e.title)).replace(/[#?].*$/, '').slice(0, 120) === key;
-      });
-      var rl = C.rel(core, (it.title || '') + ' ' + (it.snippet || ''));
-      if (dup || rl < 0.25) return;
-      c.evidence.push({
-        id: 'e' + Date.now() + '_' + added,
-        title: it.title || '',
-        url: it.url || '',
-        site: it.site || '',
-        date: it.date || '',
-        snippet: it.snippet || '',
-        text: '',
-        rel: Math.round(rl * 100),
-        /* 相关度不够的先列出来但不勾：交给用户判断，别把无关网页塞进模型 */
-        on: rl >= 0.45,
-        from: it.from || 'search'
-      });
-      added += 1;
-    });
+    var added = crApplyResearch(r);
     if (!Object.keys(r.channels || {}).length) {
       c.searchErr = '没有可用的检索通道，这一轮没能联网查资料。上面那条「官方原帖」已经勾上了，日期、话题、奖项都能对着它写；' +
         '想补充最新报道的话，到「我的 → 解析服务」填一个 Worker 地址（约 3 分钟），或自己贴一篇报道链接。';
