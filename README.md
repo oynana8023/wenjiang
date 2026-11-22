@@ -16,7 +16,7 @@
 
 **2. 界面不再让你猜。** 检测一个 `*.workers.dev` 地址时，直接判定「被按域名拦了（SNI 阻断），换 DNS / 改 hosts / 固定 IP 都没用」，并给三条解法；解析失败时这段也写在错误详情最前面。被墙域名只给 4 秒预算（握手阶段就失败，等 9 秒只是让用户干瞪眼）。启动体检命中同类地址，提示语改成「已停用 N 条国内打不开的解析地址」。解析服务面板顶部新增一张红框卡片，把三条路写全，下面两个按钮直达部署文档。
 
-**3. 新增国内直连部署包 `worker/aliyun-fc/`。** 同一份 `worker/index.js` 原样跑在阿里云函数计算 FC 3.0 的 Web 函数上，拿到 `xxx.cn-hangzhou.fcapp.run`：国内节点直连、免备案、每月 100 万次调用 + 40 万 CU-秒免费、不需要信用卡。适配层只有一个文件（Node `http` → Web `Request`/`Response`），接口和 CF 版完全一致（`/api/health`、`/api/parse`、`/api/meta`、`/api/img`、`/api/llm`）。本地实测：`/api/health` 返回 `{"ok":true,"version":"3.6.0","runtime":"worker"}`；`/api/parse` 抓少数派文章取到 1124 字正文和 5 张配图，`/api/meta` 正常返回标题、摘要、分类。
+**3. 新增国内直连部署包 `worker/aliyun-fc/`。** 同一份 `worker/index.js` 原样跑在阿里云函数计算 FC 3.0 的 Web 函数上，拿到 `xxx.cn-hangzhou.fcapp.run`：国内节点直连、免备案、不需要信用卡。适配层只有一个文件（Node `http` → Web `Request`/`Response`），接口和 CF 版完全一致（`/api/health`、`/api/parse`、`/api/meta`、`/api/img`、`/api/llm`）。本地实测：`/api/health` 返回 `{"ok":true,"version":"3.6.0","runtime":"worker"}`；`/api/parse` 抓少数派文章取到 1124 字正文和 5 张配图，`/api/meta` 正常返回标题、摘要、分类。**费用提醒**：网上流传的「每月 100 万次免费」是旧口径，阿里云 2026 年实际是「首次开通用户领 3 个月 CU 试用包，每月 15 万 CU，约 190 万次调用」，之后转按量，个人用量每月几毛到两块；公网流量另算但可忽略。**务必把最小实例数保持 0，否则不用也扣费**。详见 `worker/aliyun-fc/README.md` 的成本章节。
 
 **4. 三条路，按改动量排。** ① 给现有 Worker 绑自己的域名：代码一行不改，Cloudflare → Workers 和 Pages → 选中它 → Settings → Domains & Routes → Add → Custom Domain，域名可以白嫖（`eu.org`、DNSHE 的免费二级域），NS 指到 Cloudflare 免费版即可；② 挪到阿里云 FC：见 `worker/aliyun-fc/README.md`，15 分钟，国内最快；③ 什么都不配：地址留空走内置公共阅读器，或者填 DeepSeek Key（官方抓取接口能直连、能抓公众号，约 5 元/1000 次）。
 

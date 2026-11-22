@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI, C = window.WJCreate;
 
-  var VERSION = 'v2.19.0';
+  var VERSION = 'v2.19.1';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -2230,8 +2230,9 @@
       'Cloudflare → Workers 和 Pages → 选中它 → Settings → Domains &amp; Routes → Add → Custom Domain。' +
       '域名可以白嫖（eu.org、DNSHE 的免费二级域），NS 指到 Cloudflare 免费版就行。</div>' +
       '<div><b>② 换个地方（15 分钟，国内最快）</b>　同一份代码挪到阿里云函数计算，' +
-      '拿到 <code>xxx.cn-hangzhou.fcapp.run</code>，国内节点直连、免备案、每月 100 万次免费。' +
-      '仓库里 <code>worker/aliyun-fc/</code> 已经写好了适配层，照着点几下就行。</div>' +
+      '拿到 <code>xxx.cn-hangzhou.fcapp.run</code>，国内节点直连、免备案。' +
+      '<b>费用说清楚</b>：只有前 3 个月试用额度（约 190 万次），之后按量、个人用每月几毛到两块；' +
+      '<b>最小实例数一定保持 0，否则不用也扣费</b>。仓库里 <code>worker/aliyun-fc/</code> 已写好适配层，照着点几下就行。</div>' +
       '<div><b>③ 什么都不配（0 分钟）</b>　这条地址留空，App 会自动走内置公共阅读器；' +
       '或者填一个 DeepSeek Key，官方抓取接口能直连、能抓公众号。</div>' +
       '</div></div></div>' +
