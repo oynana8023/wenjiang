@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- 文匠 AI · 单文件构建 2026-11-23T00:27:51.195Z · 源文件见 src/ 与 assets/ -->
+<!-- 文匠 AI · 单文件构建 2026-11-23T07:10:33.590Z · 源文件见 src/ 与 assets/ -->
 <html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="UTF-8">
@@ -8044,8 +8044,10 @@ window.WJLive = (function () {
     bases.forEach(function (b) {
       if (isDead(b)) { spare.push(b); return; }
       tasks.push({ label: hostOf(b) || '解析服务', via: 'cloud', run: function () {
-        /* 被墙域名只给 4 秒：SNI 阻断通常在握手阶段就失败，等 9 秒纯粹是让用户干瞪眼 */
-        var budget = walledHost(b) ? 4000 : 9000;
+        /* 被墙域名只给 4 秒：SNI 阻断通常在握手阶段就失败，等 9 秒纯粹是让用户干瞪眼。
+           自建云端节点给 16 秒：知乎这类站点服务端要用无头浏览器渲染，通常要 6-12 秒，
+           9 秒会在服务端返回前就放弃，明明能解析却报失败。总预算仍是 20 秒。 */
+        var budget = walledHost(b) ? 4000 : 16000;
         return callBase(b, url, minLen, budget, titleHint).then(
           function (r) { markBase(b, false); return r; },
           /* 只有网络层失败（超时/连不上）才记「不通」；业务失败说明服务是活的 */
@@ -11242,7 +11244,7 @@ window.WJCreate = (function () {
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI, C = window.WJCreate;
 
-  var VERSION = 'v2.25.1';
+  var VERSION = 'v2.26.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 

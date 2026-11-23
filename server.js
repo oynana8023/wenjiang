@@ -1062,6 +1062,130 @@ function imagesOf(html, target, extra) {
   return list.slice(0, 12);
 }
 
+/* ---------------- 知乎专用：无头浏览器渲染 ----------------
+   知乎对服务器端 fetch 一律 403（普通 grabHtml 拿到的是拦截页），
+   只有真实浏览器渲染后的 DOM 里才有正文。这里按需加载 Playwright，
+   找不到依赖或超时就返回 null，让 parseUrl 走原来的兜底流程，不影响其它站点。 */
+let _pwCache;
+let _pwTried = false;
+function loadPlaywright() {
+  if (_pwTried) return _pwCache;
+  _pwTried = true;
+  const roots = [
+    process.env.NODE_PATH,
+    '/root/.nvm/versions/node/v22.13.1/lib/node_modules',
+    '/usr/local/lib/node_modules',
+    '/usr/lib/node_modules'
+  ].filter(Boolean);
+  const candidates = ['playwright', 'playwright-core'];
+  roots.forEach(function (r) {
+    candidates.push(path.join(r, 'playwright'), path.join(r, 'playwright-core'));
+  });
+  for (const c of candidates) {
+    try {
+      const m = require(c);
+      if (m && m.chromium) { _pwCache = m; return m; }
+    } catch (e) { /* 试下一个 */ }
+  }
+  return null;
+}
+
+function chromeExecutable() {
+  const env = process.env.CHROME_PATH || process.env.CHROMIUM_PATH;
+  const list = [env, '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser'].filter(Boolean);
+  for (const p of list) {
+    try { if (fs.existsSync(p)) return p; } catch (e) { /* ignore */ }
+  }
+  return undefined; // 交给 Playwright 自带的 chromium
+}
+
+async function zhihuViaBrowser(url) {
+  const pw = loadPlaywright();
+  if (!pw) return null;
+  let browser = null;
+  const execPath = chromeExecutable();
+  const task = (async function () {
+    browser = await pw.chromium.launch({
+      headless: true,
+      executablePath: execPath,
+      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled']
+    });
+    const ctx = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      viewport: { width: 1280, height: 900 },
+      locale: 'zh-CN'
+    });
+    try {
+      await ctx.addInitScript(function () {
+        try { Object.defineProperty(navigator, 'webdriver', { get: function () { return undefined; } }); } catch (e) {}
+      });
+    } catch (e) { /* ignore */ }
+    const page = await ctx.newPage();
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 });
+    /* 回答列表页/单回答页正文都在 .RichContent-inner，专栏在 .Post-RichTextContainer */
+    try {
+      await page.waitForSelector('.RichContent-inner, .Post-RichTextContainer, .RichText', { timeout: 5000 });
+    } catch (e) { /* 没有就用下面的兜底 */ }
+    await page.waitForTimeout(2500);
+    return await page.evaluate(function () {
+      var h1 = document.querySelector('h1.QuestionHeader-title, h1.Post-title, .Post-title, h1');
+      var title = h1 ? String(h1.innerText || '').trim() : '';
+      var nodes = [];
+      document.querySelectorAll('.RichContent-inner, .Post-RichTextContainer').forEach(function (e) { nodes.push(e); });
+      var richCount = nodes.length;
+      if (!nodes.length) {
+        document.querySelectorAll('.RichText').forEach(function (e) { nodes.push(e); });
+      }
+      var parts = nodes.map(function (e) { return String(e.innerText || '').trim(); })
+        .filter(function (t) { return t.length > 20; });
+      if (!parts.length) {
+        var main = document.querySelector('.QuestionPage, article, main');
+        if (main) parts = [String(main.innerText || '').trim()];
+      }
+      var text = parts.join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
+      var imgs = [];
+      document.querySelectorAll('.RichContent-inner img, .Post-RichTextContainer img, .RichText img').forEach(function (img) {
+        var u = img.getAttribute('data-original') || img.getAttribute('data-actualsrc') || img.getAttribute('src') || '';
+        if (/^https?:/i.test(u)) imgs.push(u.replace(/&amp;/g, '&'));
+      });
+      if (!title) title = String(document.title || '').replace(/\s*-\s*知乎\s*$/, '').trim();
+      return { title: title, text: text, imgs: Array.from(new Set(imgs)).slice(0, 9), richCount: richCount, finalUrl: location.href };
+    });
+  })();
+
+  /* 整体硬超时：前端这条通道给 16 秒，这里 14 秒必须给结果，宁可降级也不能让前端先超时 */
+  const timeout = new Promise(function (_, rej) {
+    setTimeout(function () { rej(new Error('zhihu-browser-timeout')); }, 14000);
+  });
+  try {
+    const info = await Promise.race([task, timeout]);
+    if (process.env.WJ_DEBUG) console.log('[zh] info', JSON.stringify({ richCount: info && info.richCount, len: info && info.text && info.text.length, title: info && info.title, url: info && info.finalUrl }));
+    /* 登录墙/验证码/荒原页：没有真实正文节点，或正文里全是登录提示，判为不可用走降级 */
+    if (!info.richCount) { if (process.env.WJ_DEBUG) console.log('[zh] reject: no rich node'); return null; }
+    const blocked = /打开知乎App|获取短信验证码|验证码登录|没有知识存在的荒原|进入知乎/.test(info.text || '');
+    if (blocked) { if (process.env.WJ_DEBUG) console.log('[zh] reject: blocked page'); return null; }
+    const text = tidyText(info.text || '');
+    if (!text || text.length < 60) { if (process.env.WJ_DEBUG) console.log('[zh] reject: too short', text.length); return null; }
+    let title = String(info.title || '').replace(/\s*-\s*知乎\s*$/, '').trim();
+    title = cleanShellTitle(title, 'www.zhihu.com') || title;
+    return {
+      title: title,
+      text: text.slice(0, 12000),
+      chars: text.length,
+      via: 'zhihu-browser',
+      note: '知乎正文由无头浏览器渲染后提取',
+      images: info.imgs || [],
+      head: (info.imgs || [])[0] || '',
+      related: { url: url, title: title }
+    };
+  } catch (e) {
+    if (process.env.WJ_DEBUG) console.log('[zh] error:', e.message);
+    return null;
+  } finally {
+    if (browser) { try { await browser.close(); } catch (e) { /* ignore */ } }
+  }
+}
+
 async function parseUrl(url, hintTitle) {
   let target;
   try {
@@ -1076,7 +1200,16 @@ async function parseUrl(url, hintTitle) {
   const isXhs = /(^|\.)(xiaohongshu\.com|xhslink\.com)$/i.test(host);
   const isMf = /(^|\.)mifengs\.com$/i.test(host);
   const isVideo = /(^|\.)(douyin\.com|iesdouyin\.com|kuaishou\.com|bilibili\.com|b23\.tv|youtube\.com|youtu\.be)$/i.test(host);
+  const isZhihu = /(^|\.)(zhihu\.com|zhuanlan\.zhihu\.com)$/i.test(host);
   const need = isWx ? 90 : 120;
+
+  /* 知乎：服务端 fetch 必 403，直接走无头浏览器渲染通道 */
+  if (isZhihu) {
+    try {
+      const zh = await zhihuViaBrowser(url);
+      if (zh && usable(zh.text, 40)) return zh;
+    } catch (e) { /* 降级到下面的普通抓取/兜底 */ }
+  }
 
   const cached = pageGet(url);
   if (cached) {

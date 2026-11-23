@@ -2140,8 +2140,10 @@ window.WJLive = (function () {
     bases.forEach(function (b) {
       if (isDead(b)) { spare.push(b); return; }
       tasks.push({ label: hostOf(b) || '解析服务', via: 'cloud', run: function () {
-        /* 被墙域名只给 4 秒：SNI 阻断通常在握手阶段就失败，等 9 秒纯粹是让用户干瞪眼 */
-        var budget = walledHost(b) ? 4000 : 9000;
+        /* 被墙域名只给 4 秒：SNI 阻断通常在握手阶段就失败，等 9 秒纯粹是让用户干瞪眼。
+           自建云端节点给 16 秒：知乎这类站点服务端要用无头浏览器渲染，通常要 6-12 秒，
+           9 秒会在服务端返回前就放弃，明明能解析却报失败。总预算仍是 20 秒。 */
+        var budget = walledHost(b) ? 4000 : 16000;
         return callBase(b, url, minLen, budget, titleHint).then(
           function (r) { markBase(b, false); return r; },
           /* 只有网络层失败（超时/连不上）才记「不通」；业务失败说明服务是活的 */
