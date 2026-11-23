@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- 文匠 AI · 单文件构建 2026-11-23T00:13:09.299Z · 源文件见 src/ 与 assets/ -->
+<!-- 文匠 AI · 单文件构建 2026-11-23T00:27:51.195Z · 源文件见 src/ 与 assets/ -->
 <html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="UTF-8">
@@ -8495,7 +8495,24 @@ window.WJLive = (function () {
       { id: 'glm-4.5-flash', kind: 'chat' },
       { id: 'glm-z1-flash', kind: 'chat' },
       { id: 'cogview-3-flash', kind: 'image' }
+    ],
+    'api.llm7.io': [
+      { id: 'gemma-3-27b', kind: 'chat' },
+      { id: 'gpt-oss:20b', kind: 'chat' }
     ]
+  };
+
+  /* 内置免费备线 llm7 用固定匿名 key=unused，/models 会吐出 80 多个型号，
+     但其中绝大多数（claude / gpt-6 / gemini / deepseek 等）要真实 Key 或订阅，
+     只有下面几个是真能免费调用的。若不收敛，自动测试按「高级模型优先」排序，
+     头一批全是要钱的，6/6 全 401，用户看到的就是「Key 没通过验证 / 免费线不能用」。
+     实测（2026-11）：unused key 仅 gemma-3-27b、gpt-oss:20b 可调用；
+     gpt-oss:120b 要订阅，其余要真实 key。这里只留这两个，别让用户去撞一整屏红标。
+     注意：只有 key=unused 时才收敛；用户填了自己的真实 key 就放行全部型号。 */
+  var FREE_ANON_ONLY = {
+    host: 'api.llm7.io',
+    key: 'unused',
+    ids: ['gemma-3-27b', 'gpt-oss:20b']
   };
 
   function annotate(id, meta) {
@@ -8591,7 +8608,8 @@ window.WJLive = (function () {
     if (!arr.length && firstErr && firstErr.status !== 404) throw firstErr;
 
     /* 厂商列表漏掉的已知免费型号补进来（智谱的 flash 系列经常不返回） */
-    var extra = KNOWN_FREE[hostOf(base)] || [];
+    var host = hostOf(base);
+    var extra = KNOWN_FREE[host] || [];
     for (var k = 0; k < extra.length; k++) {
       if (seen[extra[k].id]) continue;
       seen[extra[k].id] = 1;
@@ -8600,6 +8618,16 @@ window.WJLive = (function () {
         id: extra[k].id, kind: a2.kind, tags: a2.tags, family: a2.family,
         good: a2.good, free: true, owned: '', status: '', preset: true
       });
+    }
+
+    /* 内置免费备线（llm7 + 固定 key=unused）：/models 吐 80+ 型号，绝大多数要真实 Key。
+       收敛到已知能免费调用的几个，避免自动测试拿一堆要钱的型号去撞 401。
+       用户填了真实 key 则放行全部。 */
+    if (FREE_ANON_ONLY.host === host && String(cfg.key || '') === FREE_ANON_ONLY.key) {
+      var allow = {};
+      FREE_ANON_ONLY.ids.forEach(function (id) { allow[id] = 1; });
+      out = out.filter(function (m) { return allow[m.id]; });
+      out.forEach(function (m) { m.free = true; });
     }
 
     if (!out.length) {
@@ -11214,7 +11242,7 @@ window.WJCreate = (function () {
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI, C = window.WJCreate;
 
-  var VERSION = 'v2.25.0';
+  var VERSION = 'v2.25.1';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
