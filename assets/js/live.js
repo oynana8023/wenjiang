@@ -2314,7 +2314,7 @@ window.WJLive = (function () {
   /* ---------------- 常用服务商预设 ---------------- */
   var PRESETS = [
     { key: 'free', name: '内置免费通道', base: 'https://text.pollinations.ai/openai', tip: '不用注册、不用填 Key，点一下就能写', free: true, presetKey: '', models: ['openai-fast'] },
-    { key: 'polli', name: '内置免费 · 备线', base: 'https://api.llm7.io/v1', tip: '第二备线，主通道忙时自动切过去；Key 固定填 unused', free: true, presetKey: 'unused', models: ['gpt-oss:20b', 'gemma-3-27b'] },
+    { key: 'polli', name: '内置免费 · 备线', base: 'https://api.llm7.io/v1', tip: '第二备线，主通道忙时自动切过去；Key 固定填 unused', free: true, presetKey: 'unused', models: ['gemma-3-27b', 'gpt-oss:20b'] },
     { key: 'zhipu', name: '智谱 GLM', base: 'https://open.bigmodel.cn/api/paas/v4', tip: 'glm-4-flash / glm-4v-flash 等免费模型' },
     { key: 'deepseek', name: 'DeepSeek', base: 'https://api.deepseek.com/v1', tip: 'deepseek-chat 便宜、中文稳' },
     { key: 'siliconflow', name: '硅基流动', base: 'https://api.siliconflow.cn/v1', tip: '聚合国产开源模型，有免费额度' },

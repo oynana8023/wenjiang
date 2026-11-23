@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI, C = window.WJCreate;
 
-  var VERSION = 'v2.24.0';
+  var VERSION = 'v2.25.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -175,18 +175,28 @@
   /* 调用顺序：默认服务商优先，其余按添加顺序排队当备用 */
   function providerChain(kind) {
     var act = activeProvider();
-    /* 本地 Ollama 本来就没有 Key；内置免费通道（pollinations）也是无 Key 直连。
+    /* 本地 Ollama 本来就没有 Key；内置免费通道（pollinations / llm7 用 unused）也是无 Key 直连。
        以前只放行 localhost，结果「内置免费通道」被当成没配 Key 直接剔掉，
        用户点了一键启用却还是掉进本机引擎——这就是「模型全部不能用」的第二个原因。 */
     var localNoKey = /^https?:\/\/(localhost|127\.|\[::1\]|0\.0\.0\.0)|text\.pollinations\.ai/i;
-    return providers().filter(function (p) {
+    var list = providers().filter(function (p) {
       if (!p.base) return false;
-      /* 本地 Ollama 这类本来就没有 Key，不能因为空 Key 被剔掉 */
-      if (!p.key && !localNoKey.test(p.base)) return false;
+      /* 本地 Ollama 这类本来就没有 Key，不能因为空 Key 被剔掉；llm7 备线用固定 key=unused */
+      if (!p.key && !localNoKey.test(p.base) && !/api\.llm7\.io/i.test(p.base)) return false;
       return kind === 'image' ? !!p.imageModel : !!p.model;
     }).sort(function (a, b) {
       return (b === act ? 1 : 0) - (a === act ? 1 : 0);
     });
+
+    /* 关键兜底（v2.25）：无论用户自建的 Key 是死是活，链尾永远挂一条内置免费通道。
+       以前 create 原创流程直接吃 providerChain，没有 build() 那层 freeFallback，
+       用户填的付费 Key 一旦全 401，改写和原创就一起全挂、也没得兜底。
+       这里在统一入口补上，build / 原创 / 出图全部覆盖，一处修复全局生效。 */
+    var hasFree = list.some(function (p) { return /pollinations\.ai|api\.llm7\.io/i.test(String(p.base || '')); });
+    if (kind !== 'image' && !hasFree) {
+      list.push({ id: 'free-auto', name: '内置免费通道', base: 'https://text.pollinations.ai/openai', key: '', model: 'openai-fast', models: [], free: true });
+    }
+    return list;
   }
 
   function save() {
@@ -1526,11 +1536,13 @@
   }
 
   /* 内置免费通道：不注册、不填 Key、装上就能写。
-     主通道 LLM7（OpenAI 兼容，匿名 Key 用 unused），备线 Pollinations。
-     两个都支持浏览器直连，不需要任何中转。 */
+     主通道 Pollinations（openai-fast，实测稳定出中文），备线 LLM7（OpenAI 兼容，匿名 Key 用 unused）。
+     两个都支持浏览器直连，不需要任何中转。
+     v2.25：llm7 默认模型由 gpt-oss:20b 换成 gemma-3-27b——前者是推理模型，
+     短请求里 160 token 全被 reasoning 吃掉、content 留空，会被「写不出内容」判死。 */
   var FREE_PROVIDERS = [
     { name: '内置免费通道', base: 'https://text.pollinations.ai/openai', key: '', models: ['openai-fast'] },
-    { name: '内置免费备线', base: 'https://api.llm7.io/v1', key: 'unused', models: ['gpt-oss:20b', 'gemma-3-27b'] }
+    { name: '内置免费备线', base: 'https://api.llm7.io/v1', key: 'unused', models: ['gemma-3-27b', 'gpt-oss:20b'] }
   ];
 
   function freeCatalogMeta() {
@@ -1945,7 +1957,7 @@
       draft.probing = false;
       renderModelArea();
       if (e.code === 'AUTH') {
-        toast('Key 没通过验证：' + e.message, 4000);
+        toast('Key 没通过验证：' + e.message + '。这个 Key 用不了，直接在服务商列表选「内置免费通道」，不用 Key 也能写。', 5000);
       } else {
         toast('测试中断：' + (e.message || ''), 3200);
       }
@@ -4161,6 +4173,9 @@
 
   function boot() {
     load();
+    /* v2.25：打开就有一条免费通道兜底，不注册、不填 Key 也能写。
+       ensureFreeProviders 按 base 去重，不会重复添加；已有默认服务商不会被顶掉。 */
+    ensureFreeProviders();
     applyTheme();
     watchSystemTheme();
 
