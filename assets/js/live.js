@@ -579,11 +579,31 @@ window.WJLive = (function () {
     });
   }
 
-  async function fetchSource(id) {
+  async function fetchSource(id, force) {
     if (await hasServer()) {
-      var d = await getJSON(withShare('/api/hot?src=' + encodeURIComponent(id)), 9000);
+      var d = await getJSON(withShare('/api/hot?src=' + encodeURIComponent(id) + (force ? '&force=1' : '')), force ? 30000 : 9000);
       if (d && d.ok) return normList(d);
       throw new Error((d && d.error) || '抓取失败');
+    }
+    /* 静态托管（GitHub Pages）没有同源后端，以前只能靠浏览器直连各平台接口。
+       但 2026-11 起 60s 被 Cloudflare 限流、codelife 头条榜失效、聚合镜像长期挂，
+       三条直连通道全军覆没，用户只能吃几小时前的缓存。
+       内置免费节点（app.workbuddy.host）带 CORS、带 sharecode 即可用，
+       服务端已能抓实时榜（头条官方接口补了 Referer），所以静态站先走它拿实时数据；
+       节点不可达再退回浏览器直连竞速。 */
+    if (CLOUD_DEFAULT) {
+      try {
+        var url = apiUrl(CLOUD_DEFAULT, '/api/hot', { src: id });
+        if (force) url += '&force=1';
+        var cd = await getJSON(url, force ? 30000 : 9000);
+        if (cd && cd.ok) {
+          /* 只有服务端快照足够新（30 分钟内）才算实时；更旧的数据退回直连竞速，
+             免得把昨天的榜标成「实时」。force 时服务端已同步抓过，必然是新的。 */
+          var fresh = !cd.updatedAt || (Date.now() - new Date(cd.updatedAt).getTime() < 30 * 60000);
+          var list = normList(cd);
+          if (fresh && list && list.length) return list;
+        }
+      } catch (e) { /* 节点不通，退回浏览器直连 */ }
     }
     /* 热榜走的是各平台公开接口，跟自建解析服务没关系。
        以前这里先拿 4 秒去问解析服务，用户填了打不开的地址时，每个源都要空等 4 秒，
@@ -634,7 +654,7 @@ window.WJLive = (function () {
       return { ok: true, items: c.items.slice(0, 50), blocked: c.blocked || 0, via: 'live', at: c.at, prov: c.prov, memo: true };
     }
     try {
-      var list = await fetchSource(id);
+      var list = await fetchSource(id, force);
       hotMem[id] = { at: Date.now(), items: list, blocked: lastBlocked };
       return { ok: true, items: list.slice(0, 50), blocked: lastBlocked, via: 'live', at: Date.now() };
     } catch (e) {

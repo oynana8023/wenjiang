@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI, C = window.WJCreate;
 
-  var VERSION = 'v2.27.0';
+  var VERSION = 'v2.28.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 

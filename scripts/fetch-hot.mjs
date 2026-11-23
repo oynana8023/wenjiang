@@ -29,13 +29,14 @@ function timeout(ms) {
   return c.signal;
 }
 
-async function get(url, type = 'json', ms = 15000) {
+async function get(url, type = 'json', ms = 15000, extraHeaders) {
   const r = await fetch(url, {
     signal: timeout(ms),
     headers: {
       'User-Agent': UA,
       Accept: type === 'json' ? 'application/json, text/plain, */*' : 'text/html,application/xhtml+xml',
-      'Accept-Language': 'zh-CN,zh;q=0.9'
+      'Accept-Language': 'zh-CN,zh;q=0.9',
+      ...(extraHeaders || {})
     }
   });
   if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -118,10 +119,19 @@ const ALT = {
   baidu: [() => via60s('baidu')]
 };
 
-/* ---------- 通道 2：官方接口直连 ---------- */
+/* ---------- 通道 2：官方接口直连 ----------
+   头条 hot-board 必须带 Referer: https://www.toutiao.com/ 才放行，
+   不带就是 403（这正是快照长期卡住的根因）。这里显式补上来源头。 */
 async function viaToutiao() {
-  const d = await get('https://www.toutiao.com/hot-event/hot-board/?origin=toutiao_pc', 'json');
-  return tidy(d.data || []);
+  const d = await get(
+    'https://www.toutiao.com/hot-event/hot-board/?origin=toutiao_pc',
+    'json',
+    15000,
+    { Referer: 'https://www.toutiao.com/', 'Sec-Fetch-Site': 'same-origin' }
+  );
+  const arr = (d && d.data) || [];
+  if (!arr.length) throw new Error('头条官方接口无数据');
+  return tidy(arr);
 }
 
 async function viaBilibili() {
@@ -255,6 +265,15 @@ const DIRECT = {
 };
 
 async function one(id) {
+  /* 头条的聚合/镜像源（imsyy、60s、codelife）2026-11 起全挂或限流，
+     官方直连（带 Referer）反而最稳，所以头条直接优先走官方接口，
+     别再每次都先空等三个失效通道。 */
+  if (id === 'toutiao' && DIRECT[id]) {
+    try {
+      const items = await DIRECT[id]();
+      if (items.length) return { ok: true, via: 'direct', items };
+    } catch (e) { /* 官方也挂就往后走兜底 */ }
+  }
   try {
     const items = await viaAgg(id);
     if (items.length) return { ok: true, via: 'aggregate', items };

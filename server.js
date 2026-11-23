@@ -61,13 +61,19 @@ function refreshHot() {
   return hotBusy;
 }
 
-async function getHot(src) {
+async function getHot(src, force) {
   if (!hotCache) hotCache = readHot();
-  if (!hotCache) {
+  var age = hotCache ? Date.now() - new Date(hotCache.updatedAt).getTime() : Infinity;
+  if (force) {
+    /* 用户点了「刷新」：同步等一轮抓完再返回，确保拿到此刻的数据而不是旧快照。
+       refreshHot 内部有 hotBusy 去重，并发刷新只会真正抓一次。 */
+    await refreshHot();
+    hotCache = readHot();
+  } else if (!hotCache) {
     /* 冷启动、连快照文件都没有：只能等一次抓取 */
     await refreshHot();
     hotCache = readHot();
-  } else if (Date.now() - new Date(hotCache.updatedAt).getTime() > 10 * 60 * 1000) {
+  } else if (age > 10 * 60 * 1000) {
     /* 过期就后台刷新，本次先把手上的快照发出去——热榜抓一轮要十几秒，
        让前端干等会把 /api/hot 拖成超时，前端就误判「后端挂了」。 */
     refreshHot()
@@ -1997,7 +2003,8 @@ const server = http.createServer(async (req, res) => {
         return relayLLM(req, res, ip);
       }
       if (u.pathname === '/api/hot') {
-        const d = await getHot(u.searchParams.get('src') || 'all');
+        const force = u.searchParams.get('force') === '1' || u.searchParams.get('refresh') === '1';
+        const d = await getHot(u.searchParams.get('src') || 'all', force);
         return send(res, 200, d);
       }
       /* 网页检索：内容创作查最新资料用 */
