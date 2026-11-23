@@ -301,10 +301,24 @@ window.WJLive = (function () {
     }
   }
 
-  function timeout(ms) {
+  function timeout(ms, external) {
     var ctrl = new AbortController();
     var t = setTimeout(function () { ctrl.abort(); }, ms);
-    return { signal: ctrl.signal, done: function () { clearTimeout(t); } };
+    var onAbort = null;
+    if (external) {
+      if (external.aborted) ctrl.abort();
+      else {
+        onAbort = function () { ctrl.abort(); };
+        try { external.addEventListener('abort', onAbort, { once: true }); } catch (e) {}
+      }
+    }
+    return {
+      signal: ctrl.signal,
+      done: function () {
+        clearTimeout(t);
+        if (onAbort) { try { external.removeEventListener('abort', onAbort); } catch (e) {} }
+      }
+    };
   }
 
   async function getJSON(url, ms, opts) {
@@ -2451,7 +2465,7 @@ window.WJLive = (function () {
     var directTries = 0;
 
     async function once(ms2) {
-      var tk = timeout(ms2);
+      var tk = timeout(ms2, opts.signal);
       try {
         var r = await fetch(b + path, {
           method: method,
@@ -2484,7 +2498,7 @@ window.WJLive = (function () {
     var list = relayList();
     for (var i = 0; i < list.length; i++) {
       var rb = list[i];
-      var tk2 = timeout(ms + 8000);
+      var tk2 = timeout(ms + 8000, opts.signal);
       try {
         var url = apiUrl(rb, '/api/llm');
         var rr = await fetch(url, {
@@ -2506,8 +2520,9 @@ window.WJLive = (function () {
     }
 
     /* 3) 中转全挂：再给直连一次（可能只是刚才在切网 / 服务在唤醒）。
-          以前少了这一步，用户只要曾经失败过一次就再也没有直连机会。 */
-    if (!directTries || directOk(host) === false) {
+          以前少了这一步，用户只要曾经失败过一次就再也没有直连机会。
+          竞速模式（opts.fast）下跳过这次重试——多一条候选在排队，没必要在一条死链上再耗一个 ms。 */
+    if (!opts.fast && (!directTries || directOk(host) === false)) {
       var r3 = await once(Math.min(ms, 30000));
       if (r3) return r3;
     }
@@ -2931,40 +2946,206 @@ window.WJLive = (function () {
 
   /* list: [{ id, name, base, key, model, imageModel, models }]
      默认服务商失败（401 / 429 / 超时 / 余额）就自动换下一家，返回是谁接的活 */
+  /* ============================================================
+     统一动态模型路由（v2.27）
+     把所有能用的模型聚合进一个候选池，按「实时健康度」动态择优：
+       1) 健康记忆：每个 host|model 记成功/失败与冷却截止，写进 localStorage，
+          跨会话记住谁 429 / 超时 / Key 失效，一段时间内不再尝试，不浪费用户时间。
+       2) 动态排名：每次调用前按冷却、历史失败、历史耗时给候选打分排序，
+          稳的、快的排前面；冷却中的直接跳过。
+       3) 阶梯竞速：对前几名并发发起（错峰 900ms），谁先写出正文就用谁，
+          其余在途请求立即中止，不让慢的、卡住的拖累整体。
+       4) 自动切换：429 / 超时 / 不可用自动记冷却让位；全部失败才报错。
+     改写 / 原创 / 二创 / 出图都走这一个入口，不再各写一套兜底。
+     ============================================================ */
+  var HEALTH_KEY = 'wj.model.health';
+  var healthMemo = null;
+
+  function healthMap() {
+    if (healthMemo) return healthMemo;
+    try { healthMemo = JSON.parse(localStorage.getItem(HEALTH_KEY) || '{}') || {}; }
+    catch (e) { healthMemo = {}; }
+    return healthMemo;
+  }
+
+  function saveHealth() {
+    try { localStorage.setItem(HEALTH_KEY, JSON.stringify(healthMemo || {})); }
+    catch (e) { /* ignore */ }
+  }
+
+  function hkey(p) {
+    return hostOf(normBase(p.base)) + '|' + (p.model || '');
+  }
+
+  /* 失败原因 → 冷却时长（毫秒）。auth/paid/missing 是硬伤，冷得久；
+     limited(429)/slow(超时) 是软伤，指数退避但有上限。 */
+  function coolFor(reason, fail) {
+    var n = Math.max(1, fail || 1);
+    if (reason === 'auth' || reason === 'paid' || reason === 'missing') return 6 * 60 * 60 * 1000;
+    if (reason === 'limited') return Math.min(15 * 1000 * n, 2 * 60 * 1000);
+    if (reason === 'slow') return Math.min(30 * 1000 * n, 5 * 60 * 1000);
+    return Math.min(12 * 1000 * n, 90 * 1000);
+  }
+
+  function markGood(p, ms) {
+    var m = healthMap(), k = hkey(p), h = m[k] || {};
+    h.fail = 0;
+    h.until = 0;
+    h.ok = (h.ok || 0) + 1;
+    h.lastMs = ms || h.lastMs || 0;
+    h.at = Date.now();
+    m[k] = h;
+    saveHealth();
+  }
+
+  function markBad(p, e) {
+    var m = healthMap(), k = hkey(p), h = m[k] || {};
+    var reason = whyFail(e && e.status, (e && e.message) || '');
+    h.fail = (h.fail || 0) + 1;
+    h.reason = reason;
+    h.until = Date.now() + coolFor(reason, h.fail);
+    h.at = Date.now();
+    m[k] = h;
+    saveHealth();
+    return reason;
+  }
+
+  /* 健康分：越高越优先。冷却中直接排除；成功过的降级程度小，
+     失败次数越多分越低，历史耗时越久越靠后。 */
+  function scoreOf(p) {
+    var m = healthMap(), h = m[hkey(p)] || {};
+    var now = Date.now();
+    if (h.until && h.until > now) return -1e9;           /* 冷却中，跳过 */
+    var s = 100;
+    s -= (h.fail || 0) * 22;
+    s += Math.min((h.ok || 0) * 6, 30);
+    if (h.lastMs) s -= Math.min(h.lastMs / 1500, 25);
+    return s;
+  }
+
+  /* 按健康度排序；原本 activeProvider 排在前的保持优先（同分时稳定） */
+  function rankCandidates(list) {
+    return (list || []).map(function (p, i) { return { p: p, i: i, s: scoreOf(p) }; })
+      .sort(function (a, b) { return (b.s - a.s) || (a.i - b.i); })
+      .map(function (x) { return x.p; });
+  }
+
+  function coolingInfo(list) {
+    var m = healthMap(), now = Date.now(), out = [];
+    (list || []).forEach(function (p) {
+      var h = m[hkey(p)] || {};
+      if (h.until && h.until > now) out.push({ name: p.name || hkey(p), sec: Math.ceil((h.until - now) / 1000), reason: h.reason || '' });
+    });
+    return out;
+  }
+
   async function chatChain(list, messages, opts) {
-    var errs = [];
-    for (var i = 0; i < list.length; i++) {
-      var p = list[i];
-      try {
-        var txt = await chat({ base: p.base, key: p.key, model: p.model }, messages, opts);
-        return { text: txt, provider: p, model: p.model, switched: i > 0, from: i };
-      } catch (e) {
-        var msg = (e && e.message) || '调用失败';
-        if (e && (e.status === 401 || e.status === 403)) msg += '（Key 无效或没权限）';
-        if (e && e.status === 429) msg += '（触发限流）';
-        if (e && (e.status === 402 || /balance|quota|余额/i.test(msg))) msg += '（余额不足）';
-        errs.push((p.name || p.base) + '：' + msg);
-      }
+    var ordered = rankCandidates(list);
+    if (!ordered.length) {
+      var e0 = new Error('还没有可用的模型服务商，去「我的 → 模型服务」加一个');
+      e0.code = 'NO_MODEL';
+      throw e0;
     }
+    var errs = [];
+
+    /* 阶梯竞速：最多同时放行 RACE 条，每条错峰 400ms。
+       首选先发 400ms 独占窗口；若它是慢通道（如 llm7 约 20 秒），
+       第二条 400ms 后跟上，快的那条先返回就中止其余——用户不用陪首选干等。
+       错峰而非全并发，是为了不把免费额度一次性打爆。 */
+    var RACE = Math.min(ordered.length, 3);
+    var first = await raceBatch(ordered.slice(0, RACE), messages, opts, 18000);
+    if (first.ok) {
+      first.value.switched = first.index > 0;
+      first.value.from = first.index;
+      return first.value;
+    }
+    errs = errs.concat(first.errs);
+
+    /* 前几名全军覆没：剩下的按健康度继续分批竞速（此时健康分已因刚才的失败下降）。
+       冷门候选只在热门全挂时才轮到，不浪费它们的免费额度。 */
+    var rest = rankCandidates(list).filter(function (p) { return ordered.slice(0, RACE).indexOf(p) === -1; });
+    while (rest.length) {
+      var batch = rest.slice(0, RACE);
+      var r = await raceBatch(batch, messages, opts, 18000);
+      if (r.ok) {
+        r.value.switched = true;
+        return r.value;
+      }
+      errs = errs.concat(r.errs);
+      rest = rest.slice(RACE);
+    }
+
     var err = new Error('所有模型服务商都没调通');
-    err.detail = errs.join('\n');
+    var cool = coolingInfo(list);
+    err.detail = errs.join('\n') + (cool.length ? '\n冷却中：' + cool.map(function (c) { return c.name + ' ' + c.sec + 's'; }).join('、') : '');
+    err.code = 'ALL_FAIL';
     throw err;
+  }
+
+  /* 一批候选阶梯竞速：谁先出正文谁赢，其余在途 AbortController 全部中止。 */
+  function raceBatch(batch, messages, opts, ms) {
+    return new Promise(function (resolve) {
+      var ctrls = [], timers = [], errs = [], settled = false;
+      function stop() {
+        settled = true;
+        timers.forEach(function (t) { clearTimeout(t); });
+        ctrls.forEach(function (c) { try { c.abort(); } catch (e) {} });
+      }
+      batch.forEach(function (p, idx) {
+        var timer = setTimeout(function () {
+          if (settled) return;
+          var ctrl = new AbortController();
+          ctrls.push(ctrl);
+          var o = Object.assign({}, opts, { race: true, ms: ms, signal: ctrl.signal });
+          var t0 = Date.now();
+          chat({ base: p.base, key: p.key, model: p.model }, messages, o)
+            .then(function (txt) {
+              if (settled) return;              /* 别人已赢，丢弃这条结果 */
+              markGood(p, Date.now() - t0);
+              stop();
+              resolve({ ok: true, value: { text: txt, provider: p, model: p.model }, index: idx });
+            }, function (e) {
+              if (settled) return;
+              e = e || new Error('调用失败');
+              e._reason = markBad(p, e);
+              var msg = (e.message || '调用失败');
+              if (e._reason === 'auth') msg += '（Key 无效或没权限）';
+              if (e._reason === 'limited') msg += '（触发限流，已临时冷却）';
+              if (e._reason === 'paid') msg += '（余额不足/需订阅，已冷却）';
+              if (e._reason === 'slow') msg += '（超时，已临时冷却）';
+              errs.push((p.name || hkey(p)) + '：' + msg);
+              if (errs.length >= batch.length) {
+                stop();
+                resolve({ ok: false, errs: errs });
+              }
+            });
+        }, idx * 400);
+        timers.push(timer);
+      });
+    });
   }
 
   async function genImageChain(list, prompt, size) {
     var errs = [];
-    for (var i = 0; i < list.length; i++) {
-      var p = list[i];
-      if (!p.imageModel) continue;
+    /* 出图同样按健康度排序、冷却中的跳过——出图接口慢且贵，更不能反复撞已经挂掉的那家。 */
+    var imgCands = (list || []).filter(function (p) { return !!p.imageModel; });
+    var ordered = rankCandidates(imgCands.map(function (p) {
+      return { base: p.base, key: p.key, model: p.imageModel, name: p.name, _src: p };
+    }));
+    for (var i = 0; i < ordered.length; i++) {
+      var c = ordered[i], p = c._src, t0 = Date.now();
       try {
-        var url = await genImage({ base: p.base, key: p.key, model: p.imageModel }, prompt, size);
-        return { url: url, provider: p, model: p.imageModel };
+        var url = await genImage({ base: c.base, key: c.key, model: c.model }, prompt, size);
+        markGood({ base: c.base, model: c.model }, Date.now() - t0);
+        return { url: url, provider: p, model: c.model };
       } catch (e) {
-        errs.push((p.name || p.base) + '：' + ((e && e.message) || '出图失败'));
+        markBad({ base: c.base, model: c.model }, e);
+        errs.push((p.name || c.base) + '：' + ((e && e.message) || '出图失败'));
       }
     }
+    var cool = coolingInfo(imgCands.map(function (p) { return { base: p.base, model: p.imageModel, name: p.name }; }));
     var err = new Error(errs.length ? '没有能出图的服务商' : '配置的模型都是识图模型，出不了图');
-    err.detail = errs.join('\n');
+    err.detail = errs.join('\n') + (cool.length ? '\n冷却中：' + cool.map(function (c) { return c.name + ' ' + c.sec + 's'; }).join('、') : '');
     throw err;
   }
 
@@ -2985,11 +3166,18 @@ window.WJLive = (function () {
   async function chat(cfg, messages, opts) {
     var base = normBase(cfg.base);
     var model = (opts && opts.model) || cfg.model;
+    /* 竞速模式下用短超时 + 关掉直连重试：单条最多等 opt.ms（默认 18 秒），
+       到点就判这条失败、让位给其他候选。串行兜底仍用原来的 90 秒。 */
+    var race = !!(opts && opts.race);
+    var ms = (opts && opts.ms) || (race ? 18000 : 90000);
+    var fast = race || !!(opts && opts.fast);
     var d;
     try {
       d = await llmJSON(base, '/chat/completions', {
         key: cfg.key,
-        ms: 90000,
+        ms: ms,
+        fast: fast,
+        signal: opts && opts.signal,
         body: {
           model: model,
           messages: messages,
@@ -3003,7 +3191,9 @@ window.WJLive = (function () {
       if (!(e.status === 400 && /max_tokens|max_completion|temperature|unsupported|parameter/i.test(e.message || ''))) throw e;
       d = await llmJSON(base, '/chat/completions', {
         key: cfg.key,
-        ms: 120000,
+        ms: race ? ms : 120000,
+        fast: fast,
+        signal: opts && opts.signal,
         body: {
           model: model,
           messages: messages,
@@ -3122,6 +3312,10 @@ window.WJLive = (function () {
     setRelayOverride: setRelayOverride,
     chat: chat,
     chatChain: chatChain,
+    rankCandidates: rankCandidates,
+    coolingInfo: coolingInfo,
+    healthMap: healthMap,
+    resetHealth: function () { healthMemo = {}; try { localStorage.removeItem(HEALTH_KEY); } catch (e) {} },
     genImageChain: genImageChain,
     genImage: genImage,
     visionAsk: visionAsk,

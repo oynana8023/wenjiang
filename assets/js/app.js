@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI, C = window.WJCreate;
 
-  var VERSION = 'v2.26.0';
+  var VERSION = 'v2.27.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -188,11 +188,11 @@
       return (b === act ? 1 : 0) - (a === act ? 1 : 0);
     });
 
-    /* 关键兜底（v2.25）：无论用户自建的 Key 是死是活，链尾永远挂一条内置免费通道。
-       以前 create 原创流程直接吃 providerChain，没有 build() 那层 freeFallback，
-       用户填的付费 Key 一旦全 401，改写和原创就一起全挂、也没得兜底。
-       这里在统一入口补上，build / 原创 / 出图全部覆盖，一处修复全局生效。 */
-    var hasFree = list.some(function (p) { return /pollinations\.ai|api\.llm7\.io/i.test(String(p.base || '')); });
+    /* 关键兜底（v2.27）：无论用户自建的 Key 是死是活，链尾永远有内置免费池。
+       免费池由 ensureFreeProviders 在启动时注入 providers()，改写 / 原创 / 出图
+       统一吃这一个链，再交给 L.chatChain 做健康排序 + 竞速 + 失败冷却。
+       万一用户手动删光了免费通道，这里补一条 pollinations，保证永远有得写。 */
+    var hasFree = list.some(function (p) { return /pollinations\.ai|api\.llm7\.io|aihorde\.net/i.test(String(p.base || '')); });
     if (kind !== 'image' && !hasFree) {
       list.push({ id: 'free-auto', name: '内置免费通道', base: 'https://text.pollinations.ai/openai', key: '', model: 'openai-fast', models: [], free: true });
     }
@@ -791,16 +791,10 @@
 
   async function build(src) {
     var c = state.compose;
+    /* providerChain 已把所有服务商 + 内置免费池聚合成一个链，
+       统一交给 L.chatChain 动态择优（健康排序 + 阶梯竞速 + 失败冷却）。
+       这里不再单独拼兜底——那是旧版「两条链」的遗留，会造成同一通道出现两次。 */
     var chain = providerChain('chat');
-
-    /* 自有服务商全挂时的兜底：内置免费通道（不需要 Key、允许浏览器直连）。
-       以前这种情况直接掉到本机引擎，用户看到的就是「模型白配了、整个软件在摆烂」。
-       现在先让免费模型把稿写出来，并在结果里标明是谁写的。 */
-    var freeFallback = null;
-    var hasFree = chain.some(function (p) { return /pollinations/i.test(String(p.base || '')); });
-    if (!hasFree) {
-      freeFallback = { id: 'free-auto', name: '内置免费通道', base: 'https://text.pollinations.ai/openai', key: '', model: 'openai-fast' };
-    }
     /* 目标字数：用户选的优先；没选就按原文长度换算。两边算法都在 engine 里，
        避免 UI、提示词、自检三处各写一套数字。 */
     var srcLen0 = String(src || '').replace(/\s/g, '').length;
@@ -814,8 +808,8 @@
         var msgs = aiPrompt(src, c);
         var res, o, check, tries = 0;
         while (true) {
-          res = await L.chatChain(chain.concat(freeFallback ? [freeFallback] : []), msgs);
-          if (res.switched && !tries) toast('默认服务商没响应，已自动切到 ' + (res.provider.name || '备用'), 3000);
+          res = await L.chatChain(chain, msgs);
+          if (res.switched && !tries) toast('已自动切到 ' + (res.provider.name || '备用'), 3000);
           o = parseAI(res.text);
           /* 自检要带上标签一起看：标签在单独字段里，不然小红书永远被判「缺话题标签」 */
           var chkText = E.tidyBody(o.body) +
@@ -1540,9 +1534,16 @@
      两个都支持浏览器直连，不需要任何中转。
      v2.25：llm7 默认模型由 gpt-oss:20b 换成 gemma-3-27b——前者是推理模型，
      短请求里 160 token 全被 reasoning 吃掉、content 留空，会被「写不出内容」判死。 */
+  /* 内置免费池（v2.27）：全部零注册、零 Key、浏览器可直连，聚合成一个链由 chatChain 动态调度。
+     - Pollinations：openai-fast，约 5 秒，但每 IP 45 秒间隔。
+     - llm7：固定 key=unused，gemma-3-27b / gpt-oss:20b，模型多但约 20 秒偏慢。
+     - AI Horde：匿名 key=0000000000，CORS 放行、开源非营利，延迟 5-17 秒波动大，
+       模型由在线志愿 worker 提供、动态变化，故只放一个实测能用的型号兜底；
+       它慢 / 超时时，动态路由会让前两条先返回，不拖累用户。 */
   var FREE_PROVIDERS = [
     { name: '内置免费通道', base: 'https://text.pollinations.ai/openai', key: '', models: ['openai-fast'] },
-    { name: '内置免费备线', base: 'https://api.llm7.io/v1', key: 'unused', models: ['gemma-3-27b', 'gpt-oss:20b'] }
+    { name: '内置免费备线', base: 'https://api.llm7.io/v1', key: 'unused', models: ['gemma-3-27b', 'gpt-oss:20b'] },
+    { name: '内置免费 · 公益算力', base: 'https://oai.aihorde.net/v1', key: '0000000000', models: ['Qwen/Qwen3.8-Flash-Next'] }
   ];
 
   function freeCatalogMeta() {
