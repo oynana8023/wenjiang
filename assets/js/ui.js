@@ -579,7 +579,7 @@ window.WJUI = (function () {
     /* 底部 */
     h += '<div class="dock">';
     h += '<div class="hscroll" style="margin-bottom:10px;padding-right:0">' +
-      ['body|成稿', 'titles|标题', 'orig|原文', 'images|配图'].map(function (x) {
+      ['body|成稿', 'titles|标题', 'orig|原文', 'images|原图'].map(function (x) {
         var p = x.split('|');
         return '<button class="chip' + (tab === p[0] ? ' on' : '') + '" data-act="rtab" data-tab="' + p[0] + '">' + p[1] + '</button>';
       }).join('') + '</div>';
@@ -595,20 +595,16 @@ window.WJUI = (function () {
 
   function images(state) {
     var r = state.result;
-    var s = state.settings;
-    var imgProv = (s.providers || []).filter(function (p) { return p.imageModel && p.base && p.key; });
-    var h = '<div class="sec-head mt-m"><div class="h2" style="font-size:15px">配图</div>' +
-      '<span class="sec-sub">' + (imgProv.length ? imgProv.length + ' 个出图模型' : '未配置出图模型') + '</span></div>';
+    var h = '<div class="sec-head mt-m"><div class="h2" style="font-size:15px">原文配图</div>' +
+      '<span class="sec-sub">取自原文页面，真实可考</span></div>';
 
-    /* 真实配图：能用原文的就别生成，至少保真 */
+    /* 封面：沿用原文里选定的一张 */
     if (r.cover) {
       h += '<div class="coverbox"><img src="' + esc(window.WJLive.imgUrl(r.cover)) + '" alt="">' +
         '<span class="cbtag">封面 · 原文配图</span></div>';
     }
 
     if (r.realImages && r.realImages.length) {
-      h += '<div class="sec-head mt-m" style="margin-bottom:8px"><div class="h2" style="font-size:13px">原文配图</div>' +
-        '<span class="sec-sub">取自原文页面，真实可考</span></div>';
       h += '<div class="imgrid real">' + r.realImages.map(function (src) {
         return '<div class="im"><img src="' + esc(window.WJLive.imgUrl(src)) + '" alt="" loading="lazy">' +
           '<div class="imtools">' +
@@ -617,72 +613,17 @@ window.WJUI = (function () {
           '</div></div>';
       }).join('') + '</div>';
       h += '<div class="note mt-s">' + ic('shield', 14) +
-        '<div>这些是文章自己的图，做资讯号时优先用它，比 AI 生成更站得住脚。点「设为封面」会放进成稿。</div></div>';
+        '<div>这些是文章自己的图，做资讯号时优先用它。点「设为封面」会放进成稿。</div></div>';
     } else if (r.url && !r.realTried) {
       h += '<div class="sk" style="height:76px;border-radius:12px;margin-top:10px"></div>';
     } else if (r.url) {
       h += '<div class="note mt-s">' + ic('image', 14) +
-        '<div>这篇原文没有可用的配图（或站点把图片交给了脚本加载），所以走下面的提示词方案。</div></div>';
+        '<div>这篇原文没有可用的配图，或站点把图片交给了脚本加载。</div></div>';
+    } else {
+      h += '<div class="note mt-m">' + ic('image', 14) +
+        '<div>这篇没有原文配图。纯文字成稿，复制正文即可发布。</div></div>';
     }
 
-    /* 已生成：图 + 依据，让用户一眼看出「这张是按哪句话画的」 */
-    if (r.images && r.images.length) {
-      var m = r.imageMeta || {};
-      var chk = m.check === 'pass' ? '<span class="chk ok">已核对画面</span>'
-        : m.check === 'fail' ? '<span class="chk bad">没画准，建议重生成</span>'
-          : (m.check === 'skip' ? '<span class="chk">未配备识图模型，无法自检</span>' : '');
-      h += '<div class="sec-head mt-m" style="margin-bottom:8px"><div class="h2" style="font-size:13px">已生成</div>' +
-        '<span class="sec-sub">' + esc(r.imageBy || '出图模型') + '</span></div>';
-      if (m.frame) {
-        h += '<div class="immeta">依据「' + esc(m.frame) + '」· ' + esc(m.ratio || '') +
-          (m.redrew ? ' · 已自动重画' : '') +
-          (m.basis && m.basis.length ? ' · 取自原文「' + esc(m.basis.slice(0, 3).join('/')) + '」' : '') + '</div>';
-      }
-      h += '<div class="imgrid gen">' + r.images.map(function (src, i) {
-        return '<div class="im"><img src="' + esc(src) + '" alt="">' +
-          (i === 0 && chk ? '<div class="imchk">' + chk + '</div>' : '') + '</div>';
-      }).join('') + '</div>';
-      if (m.promptCn) {
-        h += '<details class="pdet mt-s"><summary>这张图用的提示词</summary>' +
-          '<div class="pt">' + esc(m.promptCn) + '</div></details>';
-      }
-      h += '<div class="dock-row mt-s"><button class="btn btn-soft btn-block" data-act="gen-image">' +
-        ic('image', 15) + ' 再生成一组</button></div>';
-      return h;
-    }
-
-    if (state.imgLoading) {
-      h += '<div class="imgrid"><div class="im" style="display:grid;place-items:center"><div class="sk" style="width:60%;height:8px"></div></div>' +
-        '<div class="im" style="display:grid;place-items:center"><div class="sk" style="width:60%;height:8px"></div></div></div>';
-      h += '<div class="immeta center">正在按「' + esc((window.WJEngine.visuals(r.body, { title: r.title, style: r.styleKey })[state.imgFrame || 0] || {}).name || '封面') +
-        '」出图' + (imgProv.length > 1 ? '，失败会自动换下一家' : '') + '…</div>';
-      return h;
-    }
-
-    h += '<div class="note mt-m">' + ic('wand', 14) +
-      '<div>' + (imgProv.length
-        ? '提示词只写看得见的东西——物体、场景、光线，不写事件和观点，模型才画得准。点「用这张生成」直接出图。'
-        : '没有可用的出图模型。<b>下面的提示词已经按这篇稿子写好了</b>，复制到即梦、豆包、Midjourney 都能用。') + '</div></div>';
-
-    var vs = window.WJEngine.visuals(r.body, { title: r.title, style: r.styleKey });
-    h += '<div class="mt-m">' + vs.map(function (v, i) {
-      return '<div class="pcard">' +
-        '<div class="ph"><b>' + esc(v.name) + '</b>' +
-        '<span class="tg">' + esc(v.ratio) + '</span></div>' +
-        '<div class="psub">' + esc(v.subject) + '</div>' +
-        (v.basis && v.basis.length ? '<div class="pbasis">原文关键词：' +
-          esc(v.basis.slice(0, 4).join(' · ')) + '</div>' : '') +
-        '<details class="pdet"><summary>完整提示词</summary><div class="pt">' + esc(v.promptCn) + '</div></details>' +
-        '<div class="pact">' +
-        '<button class="mini-btn" data-act="copy-prompt" data-i="' + i + '">' + ic('copy', 12) + ' 中文</button>' +
-        '<button class="mini-btn" data-act="copy-prompt" data-i="' + i + '" data-lang="en">EN</button>' +
-        (imgProv.length ? '<button class="mini-btn solid" data-act="use-frame" data-i="' + i + '">' + ic('image', 12) + ' 用这张生成</button>' : '') +
-        '</div></div>';
-    }).join('') + '</div>';
-
-    h += '<div class="dock-row mt-s">' +
-      '<button class="btn btn-soft btn-block" data-act="gen-image">' + ic('image', 15) +
-      (imgProv.length ? ' 直接生成封面' : ' 生成封面') + '</button></div>';
     return h;
   }
 
@@ -749,25 +690,12 @@ window.WJUI = (function () {
     if (!act) act = ps[0] || null;
     var chatOn = null;
     for (var ci = 0; ci < ps.length; ci++) { if (ps[ci].model) { chatOn = ps[ci]; break; } }
-    var imgN = 0;
-    var imgFix = '', visN = 0;
-    for (var ii = 0; ii < ps.length; ii++) {
-      var pv = ps[ii];
-      if (!pv.imageModel) continue;
-      /* 名字像识图模型的单列出来：能不能用要看真画一次的结果 */
-      if (/(vision|-vl\b|4v\b|4o\b|glm-4v|omni)/i.test(pv.imageModel)) visN++;
-      else imgN++;
-      if (pv.imgNote) imgFix = pv.imgNote;
-    }
     var chatName = chatOn ? (chatOn.model + (chatOn.name ? ' · ' + chatOn.name : '')) : '';
     h += '<div class="sec"><div class="sec-head"><div class="h2" style="font-size:15px">生成引擎</div>' +
       '<span class="sec-sub">' + (chatOn ? '已接入 ' + ps.length + ' 家 · 走你的额度' : '未配置') + '</span></div>';
     h += '<div class="rows">';
     h += '<button class="row" data-act="open-model"><span class="ri">' + ic('cpu', 15) + '</span>' +
       '<span class="rt"><b>大模型配置</b><small>' + esc(chatName || '未选择模型，使用本机规则引擎') + '</small></span>' +
-      '<span class="chev">' + ic('right', 15) + '</span></button>';
-    h += '<button class="row" data-act="open-image-model"><span class="ri">' + ic('image', 15) + '</span>' +
-      '<span class="rt"><b>出图模型</b><small>' + esc(imgN ? imgN + ' 个模型可出图' : (visN ? visN + ' 个待验证（名字像识图模型）' : '未配置，只用提示词方案')) + '</small></span>' +
       '<span class="chev">' + ic('right', 15) + '</span></button>';
     h += '</div></div>';
 

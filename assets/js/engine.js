@@ -1688,16 +1688,7 @@ window.WJEngine = (function () {
   }
 
 
-  /* ---------------- 配图提示词 ----------------
-     一条铁律：提示词只写「看得见的东西」——具体的物体、材质、场景、光线。
-     事件词（发布/涨价/裁员）、观点词（影响/趋势/热议）、型号编码一律不写进画面，
-     因为它们不可绘制。模型拿到「某某价格公布」只能瞎猜，最后给一张
-     与稿子无关的「科技感」图——这就是提示词与成图不符的根因。
 
-     做法：① 把稿子归到一个可视类目（手机/汽车/芯片/咖啡…），
-           ② 用该类目的固定视觉描述打底（一定画得出来），
-           ③ 用稿子里的颜色、天气、场景做微调，
-           ④ 事件只用来换场景（发布会 / 空工位 / 夜景写字楼），不当作主体。 */
 
   /* 类目 → [中文主体, 英文主体, 中文场景, 英文场景, 自检关键词] */
   var VIS_CAT = {
@@ -2045,182 +2036,6 @@ window.WJEngine = (function () {
     return best;
   }
 
-  function visuals(text, opts) {
-    opts = opts || {};
-    var plain = stripMd(String(text || ''));
-    var title = String(opts.title || '').replace(/[｜|]/g, ' ').trim();
-    var scan = title + ' ' + plain.slice(0, 800);
-
-    /* 先认实物，再谈风格：有实物就画实物，没有才退回类目模板 */
-    var objs = visObjects(scan, title);
-    var main = null, second = null;
-    for (var oi = 0; oi < objs.length; oi++) {
-      if (objs[oi].g === 'people' && objs.length > 1) continue;
-      if (!main) { main = objs[oi]; continue; }
-      var ok = (VIS_COMPAT[main.g] || [main.g]).indexOf(objs[oi].g) > -1;
-      if (ok) { second = objs[oi]; break; }
-    }
-    /* 陪衬别和主体说同一件事：主体已经「压在文件上」，就不再「旁边一叠文件」 */
-    if (second && main && main.cn.indexOf(second.expect) > -1) second = null;
-
-    /* 有实物时以实物的组定类目，别再让「续航」「消费」这类词把类目带偏 */
-    var GROUP_CAT = { tech: 'gadget', vehicle: 'car', drink: 'drink', pack: 'food', people: 'office', port: 'place', health: 'health', stage: 'stage', finance: 'finance', object: 'home', place: 'place' };
-    var cat = main ? (VIS_CAT[main.g] ? main.g : (GROUP_CAT[main.g] || visCatOf(title, plain)))
-      : visCatOf(title, plain);
-    var cc = VIS_CAT[cat] || VIS_CAT.place;
-
-    /* 颜色只在标题里找，正文颜色词多是比喻，容易带偏 */
-    var color = null;
-    for (var ci = 0; ci < VIS_COLOR.length; ci++) {
-      if (VIS_COLOR[ci][0].test(title)) { color = { cn: VIS_COLOR[ci][1], en: VIS_COLOR[ci][2] }; break; }
-    }
-
-    /* 场景：文中场景 > 事件 > 类目默认 */
-    var setCn = cc[2], setEn = cc[3], setHit = null, bestN = 0, setHits = null;
-    var gate = [cat];
-    if (main) gate.push(main.g);
-    /* 多个场景同时出现时按命中次数定，别让一句「欢迎晚宴」压过通篇的「生产线」；
-       同时要求场景和主体讲得通——法槌不能摆在车间里。 */
-    for (var si = 0; si < VIS_SET.length; si++) {
-      var sc = VIS_SET[si];
-      if (sc.only) {
-        var okSet = false;
-        for (var gi = 0; gi < gate.length; gi++) { if (sc.only.indexOf(gate[gi]) > -1) { okSet = true; break; } }
-        if (!okSet) continue;
-      }
-      var hitm = scan.match(new RegExp(sc.re.source, 'g'));
-      var n = hitm ? hitm.length : 0;
-      if (n > bestN) { bestN = n; setHit = sc; setCn = sc.cn; setEn = sc.en; setHits = hitm; }
-    }
-    if (!setHit) {
-      for (var ei = 0; ei < VIS_EVENT.length; ei++) {
-        var ev = VIS_EVENT[ei];
-        if (!ev.re.test(scan)) continue;
-        if (ev.only && ev.only.indexOf(cat) < 0) continue;
-        setCn = ev.cn; setEn = ev.en; break;
-      }
-    }
-
-    /* 主物件是水果、农产品时，咖啡馆吧台这类场景不搭，换成中性台面 */
-    if (main && main.g === 'food' && setCn === cc[2] && !/咖啡|奶茶/.test(scan)) {
-      setCn = '木质台面，侧窗自然光'; setEn = 'a wooden surface with side window light';
-    }
-
-    var look = VIS_LOOK[opts.style] || VIS_LOOK.news;
-    var pal = VIS_PALETTE[VIS_GROUP[cat] || 'life'];
-
-    /* 三张图以前只换画幅、不换机位，主体和场景一个字没改，模型当然给出三张
-       「同一张图裁成不同比例」。现在拆成三个机位：封面拍主体，头图拍环境，
-       方图拍细节——主体、距离、镜头、背景四样都不同，同一篇稿子也不重样。 */
-    var baseCn = main
-      ? (main.cn + (color ? '，' + color.cn + '为主色' : ''))
-      : (setHit ? (setHit.subCn + (color ? '，' + color.cn + '为主色' : '')) : (cc[0] + (color ? '，' + color.cn + '配色' : '')));
-    var baseEn = main
-      ? (main.en + (color ? ', ' + color.en + ' dominant' : ''))
-      : (setHit ? (setHit.subEn + (color ? ', ' + color.en + ' dominant' : '')) : (cc[1] + (color ? ', ' + color.en + ' finish' : '')));
-    var baseShort = main ? main.short : (setHit ? setHit.short : cc[0].split('，')[0]);
-    var baseExpect = main ? main.expect : (setHit ? setHit.expect : cc[4]);
-    var baseHits = (main && main.hits) ? main.hits.slice(0) : (setHits ? setHits.slice(0) : []);
-
-    /* 场景名：命中场景用它的短标签；没命中就用类目短标签，别把场景句按逗号截一半 */
-    var setTag = setHit ? (setHit.tag || setCn.split('，')[0]) : (CAT_TAG[cat] || '现场');
-
-    /* 细节机位优先拍「陪衬物」：主体已经占了两张，第三张再拍它就没意义了。
-       没有陪衬就拍主体的材质局部，仍是同一件东西，但视角完全不同。 */
-    var detailCn = second
-      ? ('近景特写：' + second.cn + '，背景里' + baseShort + '虚化成光斑')
-      : ('近景特写：' + baseShort + '的局部，能看清材质、接缝和做工');
-    var detailEn = second
-      ? ('close-up of ' + second.en + ', with ' + baseShort + ' blurred into bokeh behind')
-      : ('extreme close-up on a detail of ' + baseEn + ', material, seams and finish clearly visible');
-    var detailExpect = second ? second.expect : baseExpect;
-    var detailShort = second ? second.short : baseShort;
-
-    var shots = [
-      {
-        /* 封面：主体撑满，环境只做背景，适合压标题 */
-        name: '封面 · 竖版', ratio: '3:4', size: '864x1152',
-        subjectCn: baseCn,
-        subjectEn: baseEn,
-        sceneCn: setHit
-          ? ('背景是虚化的' + setTag + '，只留一点环境暗示，不抢主体')
-          : '背景轻微虚化，色调干净，不抢主体',
-        sceneEn: setHit
-          ? ('the ' + setTag + ' blurred into soft bokeh behind, environment only suggested')
-          : 'a softly blurred, clean-toned backdrop that stays out of the way',
-        frameCn: '竖构图，主体占画面六成，落在下三分之二，上方留出干净空间压标题',
-        frameEn: 'vertical composition, subject filling sixty percent of the frame in the lower two thirds, clean space above for a headline',
-        lens: '85mm 镜头，f/2.0，浅景深', lensEn: '85mm lens, f/2.0, shallow depth of field',
-        expect: baseExpect,
-        brief: '画的是：' + baseShort + (setHit ? ' · ' + setTag : ' · 近景'),
-        basis: baseHits
-      },
-      {
-        /* 头图：退到广角，把「在哪里、和什么在一起」讲清楚 */
-        name: '头图 · 横版', ratio: '16:9', size: '1344x768',
-        subjectCn: setCn + '，' + baseShort + '位于画面左侧三分之一，占画面比例比近景小得多',
-        subjectEn: setEn + ', with ' + baseShort + ' placed in the left third and much smaller in frame',
-        sceneCn: '完整的环境，能看到空间纵深和周围的陈设',
-        sceneEn: 'the full environment with visible depth and surrounding fittings',
-        frameCn: '横构图，广角，环境占画面七成，主体偏左，右侧留白',
-        frameEn: 'horizontal wide composition, the environment taking seventy percent of the frame, subject offset to the left with clean space on the right',
-        lens: '24mm 广角，f/4，全景深', lensEn: '24mm wide lens, f/4, deep focus',
-        expect: setHit ? setHit.expect : baseExpect,
-        brief: '画的是：' + (setHit ? setTag + '全景' : '环境全景') + ' · ' + baseShort,
-        basis: (setHits && setHits.length ? setHits : baseHits)
-      },
-      {
-        /* 方图：贴近拍，讲材质、接口、标签这些「看得见但没人拍」的细节 */
-        name: '细节 · 方图', ratio: '1:1', size: '1024x1024',
-        subjectCn: detailCn,
-        subjectEn: detailEn,
-        sceneCn: '背景完全虚化，不留陈设',
-        sceneEn: 'background fully blurred, no props',
-        frameCn: '方构图，主体占满画面，浅景深，只保留一处对焦点',
-        frameEn: 'square composition, subject filling the frame, shallow depth of field with a single focal point',
-        lens: '100mm 微距，f/2.8', lensEn: '100mm macro lens, f/2.8',
-        expect: detailExpect,
-        brief: '画的是：' + detailShort + '的细节',
-        basis: (second && second.hits && second.hits.length ? second.hits : baseHits)
-      }
-    ];
-
-    function build(shot, simple) {
-      var light = simple ? '均匀柔光，背景是干净的纯色' : look[2];
-      var lightEn = simple ? 'even soft light on a clean seamless backdrop' : look[3];
-      var promptCn = '画面主体：' + shot.subjectCn + '。' +
-        '场景：' + (simple ? '纯净的浅灰背景，没有多余陈设' : shot.sceneCn) + '。' +
-        '构图：' + shot.frameCn + '。' +
-        '光线：' + light + '。' +
-        '色彩：' + pal[0] + '。' +
-        '风格：' + look[0] + '，真实材质，不卡通、不插画。' +
-        '镜头：' + shot.lens + '。' +
-        '画质：高清，细节真实，轻微胶片颗粒。' +
-        '不要：任何文字、字母、数字、水印、logo、拼接图、分屏、畸形结构、过度饱和。';
-      var prompt = shot.subjectEn + ', ' +
-        (simple ? 'on a clean seamless light grey backdrop, no extra props' : shot.sceneEn) + ', ' +
-        shot.frameEn + ', ' + lightEn + ', ' + pal[1] + ', ' + look[1] +
-        ', photorealistic materials, not cartoon, not illustration, ' +
-        shot.lensEn + ', high detail, fine film grain, ' +
-        'no text, no letters, no numbers, no watermark, no logo, no collage, no split screen, no distorted anatomy, no oversaturation';
-      return {
-        name: shot.name,
-        ratio: shot.ratio,
-        size: shot.size,
-        subject: shot.brief,
-        expect: shot.expect,
-        basis: shot.basis,
-        prompt: prompt,
-        promptCn: promptCn,
-        alt: simple ? null : {
-          prompt: shot.subjectEn + ', on a clean seamless light grey backdrop, no extra props, centered, ' + lightEn + ', ' + pal[1] + ', product photography, high detail, no text, no letters, no watermark, no logo',
-          promptCn: '画面主体：' + shot.subjectCn + '。场景：纯净的浅灰背景，没有多余陈设。构图：居中。光线：均匀柔光。色彩：' + pal[0] + '。风格：产品摄影。不要：任何文字、字母、水印、logo。'
-        }
-      };
-    }
-
-    return shots.map(function (s) { return build(s, false); });
-  }
 
   return {
     rewrite: rewrite,
@@ -2229,7 +2044,6 @@ window.WJEngine = (function () {
     mdToHtml: mdToHtml,
     toPlain: toPlain,
     tidyBody: tidyBody,
-    visuals: visuals,
     stripMd: stripMd,
     countWords: countWords,
     splitSentences: splitSentences,

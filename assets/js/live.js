@@ -3,7 +3,6 @@
    1) 热榜：同源后端 > 平台公开接口（全实时，多通道竞速）> 缓存兜底
    2) 链接解析：同源后端 > 阅读器代理链 > 直接抓取
    3) 模型：OpenAI 兼容 /models，带能力标注
-   4) 出图：/images/generations，不支持则降级为提示词
    ============================================================ */
 window.WJLive = (function () {
   'use strict';
@@ -2613,9 +2612,8 @@ window.WJLive = (function () {
   /* 明显不是「文字对话」的模型，先在列表里剔掉，省得测几百个 */
   var JUNK_RE = /(embed|rerank|bge[-_]|gte[-_]|moderation|guard|safety|detector|whisper|\btts\b|text-to-speech|speech|asr\b|transcribe|realtime|veo\b|sora\b|kling|ocr\b|nvclip|\bclip\b|reward|classifier|pii\b|deberta|minilm|arctic|nemoretriever|gliner|parler|\bbark\b|music|stable-audio|upscal|inpaint|controlnet|\bvae\b|tagger|sam2|depth|segment|translate|riva|calibration|synthetic|diffusion-xl-base)/i;
   var IMG_RE = /(dall-e|gpt-image|image|flux|seedream|kolors|cogview|sd-?xl|sd3|imagen|wanx|t2i|stable-diffusion|midjourney|paint)/i;
-  /* 识图模型（vision / VL / 4v / omni）只能读图，不能出图。
-     以前只看名字里有没有 image，导致 glm-4v-flash 这种识图模型被当成出图模型，
-     点生成必然失败——先把它们挡在门外。 */
+  /* 识图模型（vision / VL / 4v / omni）只能读图，不能当文字模型用。
+     单独标出来，选文案模型时避开。 */
   var VISION_RE = /(vision|-vl\b|vl-|v\d|4v\b|4o\b|omni|multimodal|internvl|pixtral|llava|minicpm-v|step-1v|glm-4v|qwen-vl|grok-vision|nemotron.*vl)/i;
 
   /* 厂商 /models 偶尔漏掉的免费型号，先摆进来，标成「待验证」，
@@ -2819,7 +2817,7 @@ window.WJLive = (function () {
   }
 
   /* 真发一条极短的对话，通了才算可用。
-     只测文字模型；出图的另走 probeImage（不会真出图）。 */
+     只测文字模型。 */
   /* 探测用的真实写作题：比「在吗」贵一点，但能筛掉「列表里有、实际写不出东西」的模型 */
   var PROBE_ASK = '用一句通顺的中文写「周末的早晨」，18 到 30 个字，只输出这一句，不要解释。';
 
@@ -2900,25 +2898,6 @@ window.WJLive = (function () {
     return stat;
   }
 
-  /* 出图模型：发一个空 prompt，模型存在会回「prompt 不能为空」，不存在才会回 model not found。
-     这样既能判断有没有权限，又不会真的生成图片扣钱。 */
-  /* 真出一张小图才算「可用」：接口收下 200 但返回空图的情况太常见了 */
-  async function probeImage(cfg, model) {
-    var base = normBase(cfg.base);
-    var looksVision = VISION_RE.test(String(model).toLowerCase());
-    var t0 = Date.now();
-    try {
-      var url = await genImage({ base: base, key: cfg.key, model: model }, 'a single red apple on a white table, product photo', '1024x1024');
-      if (!url || !/^(https?:|data:image)/.test(url)) throw new Error('返回里没有图片地址');
-      return { status: 'ok', why: '实测出图成功 · ' + ((Date.now() - t0) / 1000).toFixed(1) + 's' };
-    } catch (e) {
-      var w = whyFail(e.status, e.message);
-      var why = String(e.message || '出图失败').slice(0, 120);
-      if (looksVision && w !== 'auth' && w !== 'paid') why = '名字是识图模型，真画也画不出来：' + why;
-      return { status: w === 'missing' || w === 'paid' || w === 'auth' ? w : 'error', why: why };
-    }
-  }
-
   /* 用识图模型核对「图里到底有没有这个东西」。没有就重画，这是唯一能自动
      发现「提示词与成图不符」的办法，纯靠文本侧猜是猜不出来的。 */
   async function visionAsk(cfg, imageUrl, question) {
@@ -2976,7 +2955,7 @@ window.WJLive = (function () {
        3) 阶梯竞速：对前几名并发发起（错峰 900ms），谁先写出正文就用谁，
           其余在途请求立即中止，不让慢的、卡住的拖累整体。
        4) 自动切换：429 / 超时 / 不可用自动记冷却让位；全部失败才报错。
-     改写 / 原创 / 二创 / 出图都走这一个入口，不再各写一套兜底。
+     改写 / 原创 / 二创都走这一个入口，不再各写一套兜底。
      ============================================================ */
   var HEALTH_KEY = 'wj.model.health';
   var healthMemo = null;
@@ -3145,30 +3124,6 @@ window.WJLive = (function () {
     });
   }
 
-  async function genImageChain(list, prompt, size) {
-    var errs = [];
-    /* 出图同样按健康度排序、冷却中的跳过——出图接口慢且贵，更不能反复撞已经挂掉的那家。 */
-    var imgCands = (list || []).filter(function (p) { return !!p.imageModel; });
-    var ordered = rankCandidates(imgCands.map(function (p) {
-      return { base: p.base, key: p.key, model: p.imageModel, name: p.name, _src: p };
-    }));
-    for (var i = 0; i < ordered.length; i++) {
-      var c = ordered[i], p = c._src, t0 = Date.now();
-      try {
-        var url = await genImage({ base: c.base, key: c.key, model: c.model }, prompt, size);
-        markGood({ base: c.base, model: c.model }, Date.now() - t0);
-        return { url: url, provider: p, model: c.model };
-      } catch (e) {
-        markBad({ base: c.base, model: c.model }, e);
-        errs.push((p.name || c.base) + '：' + ((e && e.message) || '出图失败'));
-      }
-    }
-    var cool = coolingInfo(imgCands.map(function (p) { return { base: p.base, model: p.imageModel, name: p.name }; }));
-    var err = new Error(errs.length ? '没有能出图的服务商' : '配置的模型都是识图模型，出不了图');
-    err.detail = errs.join('\n') + (cool.length ? '\n冷却中：' + cool.map(function (c) { return c.name + ' ' + c.sec + 's'; }).join('、') : '');
-    throw err;
-  }
-
   /* 推理模型（gpt-oss / o 系 / R1 / GLM-Z1）经常把正文写进 reasoning_content，
      content 留空。旧版直接判「模型没有返回内容」，于是这类模型全被标成「写不出内容」
      从列表里删掉——用户看到的就是「配好的模型全不能用」。这里统一取文。 */
@@ -3229,36 +3184,6 @@ window.WJLive = (function () {
       throw e2;
     }
     return String(txt);
-  }
-
-  async function genImage(cfg, prompt, size) {
-    var base = normBase(cfg.base);
-    /* 各家认的尺寸不一样（智谱只认 1024x1024 / 864x1152 / 1344x768…，DALL·E 只认三档），
-       所以按「想要的 → 方图 → 不传」三级降级，别因为一个尺寸参数整单失败。 */
-    var tries = [size || '1024x1024', '1024x1024', ''];
-    var d = null, lastErr = null;
-    for (var i = 0; i < tries.length; i++) {
-      var body = { model: cfg.model, prompt: prompt, n: 1 };
-      if (tries[i]) body.size = tries[i];
-      try {
-        d = await llmJSON(base, '/images/generations', { key: cfg.key, ms: 150000, body: body });
-        break;
-      } catch (e) {
-        lastErr = e;
-        if (e.status !== 400 && e.status !== 422) throw e;
-      }
-    }
-    if (!d) throw lastErr || new Error('出图接口没有响应');
-    var it = d && d.data && (Array.isArray(d.data) ? d.data[0] : d.data);
-    if (!it) {
-      var alt = d && (d.images && d.images[0]);
-      if (alt) return typeof alt === 'string' ? alt : (alt.url || ('data:image/png;base64,' + alt.b64_json));
-      throw new Error('接口没有返回图片');
-    }
-    if (it.b64_json) return 'data:image/png;base64,' + it.b64_json;
-    if (it.url) return it.url;
-    if (typeof it === 'string') return it;
-    throw new Error('返回格式不认识');
   }
 
   /* 榜单封面：微博/抖音/头条这类条目只有搜索页，图片要到榜单接口里按标题匹配 */
@@ -3322,7 +3247,6 @@ window.WJLive = (function () {
     listModels: listModels,
     testModel: testModel,
     probeModels: probeModels,
-    probeImage: probeImage,
     bestChat: bestChat,
     bestImage: bestImage,
     rankOf: rankOf,
@@ -3336,8 +3260,6 @@ window.WJLive = (function () {
     coolingInfo: coolingInfo,
     healthMap: healthMap,
     resetHealth: function () { healthMemo = {}; try { localStorage.removeItem(HEALTH_KEY); } catch (e) {} },
-    genImageChain: genImageChain,
-    genImage: genImage,
     visionAsk: visionAsk,
     annotate: annotate,
     normBase: normBase,

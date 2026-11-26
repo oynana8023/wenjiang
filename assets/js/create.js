@@ -707,7 +707,7 @@ window.WJCreate = (function () {
   function materialBlock(mat) {
     var out = [];
     (mat.images || []).forEach(function (im, i) {
-      out.push('图片' + (i + 1) + '：' + (im.desc || '（未能识别内容，仅作配图）'));
+      out.push('图片' + (i + 1) + '：' + (im.desc || '（未能识别内容）'));
     });
     if (mat.video) {
       out.push('视频 ' + Math.round(mat.video.dur || 0) + ' 秒：' + (mat.video.desc || '') +
@@ -766,7 +766,7 @@ window.WJCreate = (function () {
       '{"title":"主标题","titles":["备选1","备选2","备选3"],"body":"正文，用\\n\\n分段' +
       (p.genre === 'script' ? '，每段前用【镜头】标注画面' : '') + '","tags":["话题1","话题2"],' +
       '"facts":[{"claim":"正文里的一个具体事实","src":"E1"}],' +
-      '"shots":["配图/封面建议1","建议2"],"why":"一句话说明这条为什么符合任务"}\n\n' +
+      '"why":"一句话说明这条为什么符合任务"}\n\n' +
       '如果资料不足以支撑任务要求的核心信息，就在 why 里直说"资料不足"，正文只写你能确证的部分，不要凑。';
 
     return [{ role: 'system', content: sys }, { role: 'user', content: user }];
@@ -889,7 +889,6 @@ window.WJCreate = (function () {
       plain: body,
       tags: tags,
       facts: (o.facts || []).map(function (f) { return { claim: String(f.claim || ''), src: String(f.src || '') }; }).filter(function (f) { return f.claim; }).slice(0, 12),
-      shots: (o.shots || []).map(String).slice(0, 5),
       why: String(o.why || ''),
       check: facts,
       quotes: quotes,
@@ -1290,13 +1289,6 @@ window.WJCreate = (function () {
           U.ic(x.ok ? 'check' : 'alert', 14) + '</span>' +
           '<span class="rt"><b>' + esc(x.t) + '</b>' + (x.hint ? '<small>' + esc(x.hint) + '</small>' : '') + '</span></div>';
       }).join('') + '</div></div>';
-
-    if ((r.shots || []).length) {
-      h += '<div class="sec"><div class="sec-head"><div class="h2" style="font-size:15px">配图建议</div></div>' +
-        '<div class="panel" style="padding:4px 16px">' + r.shots.map(function (x) {
-          return '<div class="tk-line">' + esc(x) + '</div>';
-        }).join('') + '</div></div>';
-    }
 
     h += '<div class="note mt-s">' + U.ic('info', 14) +
       '<div>这条是原创稿：角度和结构由模型组织，事实来自上面勾选的资料。发布前请自己再核对一遍日期与金额，' +
