@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI, C = window.WJCreate;
 
-  var VERSION = 'v2.29.0';
+  var VERSION = 'v2.30.0';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -310,53 +310,62 @@
       html = html.slice(0, idx);
     }
 
-    /* 顶栏 */
-    topbar.innerHTML = topbarHtml(route);
-    topbar.classList.toggle('solid', false);
+    /* 视图切换（v2.30）：支持 View Transitions 的浏览器走系统级过渡（无白屏），
+       不支持的走原 is-tab/is-push/is-pop CSS 动画降级 */
+    var swap = function () {
+      /* 顶栏 */
+      topbar.innerHTML = topbarHtml(route);
+      topbar.classList.toggle('solid', false);
 
-    /* 视图 */
-    viewHost.innerHTML = '<div class="view" id="view"></div>';
-    viewEl = document.getElementById('view');
-    viewEl.className = 'view ' + (state.genLoading ? 'is-root' :
-      navDir === 'push' ? 'is-push' : navDir === 'pop' ? 'is-pop' :
-        navDir === 'same' ? 'is-same' : 'is-tab');
-    viewEl.innerHTML = html;
+      /* 视图 */
+      viewHost.innerHTML = '<div class="view" id="view"></div>';
+      viewEl = document.getElementById('view');
+      viewEl.className = 'view ' + (state.genLoading ? 'is-root' :
+        navDir === 'push' ? 'is-push' : navDir === 'pop' ? 'is-pop' :
+          navDir === 'same' ? 'is-same' : 'is-tab');
+      viewEl.innerHTML = html;
 
-    /* 同页重渲染（换热榜源、刷新）原地不动；换标签页回到该页上次的位置 */
-    var keep = 0;
-    if (navDir === 'same' || (navDir === 'tab' && prevRoute === route)) keep = prevTop;
-    else if (navDir === 'tab' || navDir === 'pop') keep = scrollMem[route] || 0;
-    viewEl.scrollTop = keep;
-    topbar.classList.toggle('solid', keep > 6);
-    var hs1 = viewEl.querySelector('.hscroll');
-    if (hs1 && hscrollMem[route]) hs1.scrollLeft = hscrollMem[route];
-    if (keep) {
-      requestAnimationFrame(function () {
-        if (!viewEl) return;
-        viewEl.scrollTop = keep;
-        var hs2 = viewEl.querySelector('.hscroll');
-        if (hs2 && hscrollMem[route]) hs2.scrollLeft = hscrollMem[route];
-      });
+      /* 同页重渲染（换热榜源、刷新）原地不动；换标签页回到该页上次的位置 */
+      var keep = 0;
+      if (navDir === 'same' || (navDir === 'tab' && prevRoute === route)) keep = prevTop;
+      else if (navDir === 'tab' || navDir === 'pop') keep = scrollMem[route] || 0;
+      viewEl.scrollTop = keep;
+      topbar.classList.toggle('solid', keep > 6);
+      var hs1 = viewEl.querySelector('.hscroll');
+      if (hs1 && hscrollMem[route]) hs1.scrollLeft = hscrollMem[route];
+      if (keep) {
+        requestAnimationFrame(function () {
+          if (!viewEl) return;
+          viewEl.scrollTop = keep;
+          var hs2 = viewEl.querySelector('.hscroll');
+          if (hs2 && hscrollMem[route]) hs2.scrollLeft = hscrollMem[route];
+        });
+      }
+      lastRoute = route;
+      viewEl.addEventListener('scroll', onScroll, { passive: true });
+
+      /* 底部 */
+      dockHost.innerHTML = dockHtml;
+      app.classList.toggle('has-dock', !!dockHtml.trim());
+      var showChrome = !state.genLoading && NAV_ROUTES.indexOf(route) > -1;
+      navEl.classList.toggle('hide', !showChrome);
+      fabEl.classList.toggle('hide', !showChrome);
+      navEl.innerHTML = navHtml();
+      fabEl.innerHTML = U.ic('plus', 24, 2);
+      fabEl.setAttribute('data-act', 'fab');
+      /* 中间那一格现在是「创作」，悬浮加号会和它重叠，先整体收起 */
+      fabEl.classList.add('hide');
+
+      syncSegs();
+      animateScore();
+      syncCounters();
+      autosize();
+    };
+    if (document.startViewTransition && navDir !== 'same' && !state.genLoading) {
+      document.startViewTransition(swap);
+    } else {
+      swap();
     }
-    lastRoute = route;
-    viewEl.addEventListener('scroll', onScroll, { passive: true });
-
-    /* 底部 */
-    dockHost.innerHTML = dockHtml;
-    app.classList.toggle('has-dock', !!dockHtml.trim());
-    var showChrome = !state.genLoading && NAV_ROUTES.indexOf(route) > -1;
-    navEl.classList.toggle('hide', !showChrome);
-    fabEl.classList.toggle('hide', !showChrome);
-    navEl.innerHTML = navHtml();
-    fabEl.innerHTML = U.ic('plus', 24, 2);
-    fabEl.setAttribute('data-act', 'fab');
-    /* 中间那一格现在是「创作」，悬浮加号会和它重叠，先整体收起 */
-    fabEl.classList.add('hide');
-
-    syncSegs();
-    animateScore();
-    syncCounters();
-    autosize();
   }
 
   function topbarHtml(route) {
@@ -3898,7 +3907,7 @@
     var t = resolvedTheme();
     document.documentElement.setAttribute('data-theme', t);
     var m = document.querySelector('meta[name="theme-color"]');
-    if (m) m.setAttribute('content', t === 'dark' ? '#08080a' : '#f7f6f2');
+    if (m) m.setAttribute('content', t === 'dark' ? '#1c1c1e' : '#ffffff');
   }
 
   function watchSystemTheme() {
