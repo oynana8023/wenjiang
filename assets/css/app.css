@@ -3656,3 +3656,248 @@ img {
     animation: none !important;
   }
 }
+
+/* ============================================================
+   v2.30.1 交互与点缀：方向感转场 / 导航指示块 / 微反馈 / 光斑
+   点缀全站两处：hero 光斑 + 主按钮微光扫过；其余均为交互反馈
+   ============================================================ */
+
+/* ---------- 方向感页面转场（View Transitions 分派） ---------- */
+/* push：新页从右滑入；pop：从左回位；tab：上浮淡入 */
+[data-vt="push"]::view-transition-old(root) {
+  animation: vtOut 150ms var(--ease-exit) both;
+}
+[data-vt="push"]::view-transition-new(root) {
+  animation: vtInR 300ms var(--ease-enter) both;
+}
+[data-vt="pop"]::view-transition-old(root) {
+  animation: vtOut 150ms var(--ease-exit) both;
+}
+[data-vt="pop"]::view-transition-new(root) {
+  animation: vtInL 300ms var(--ease-enter) both;
+}
+[data-vt="tab"]::view-transition-old(root) {
+  animation: vtOut 120ms var(--ease-exit) both;
+}
+[data-vt="tab"]::view-transition-new(root) {
+  animation: vtInU 200ms var(--ease-enter) both;
+}
+@keyframes vtInR {
+  from {
+    opacity: 0;
+    transform: translate3d(32px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes vtInL {
+  from {
+    opacity: 0;
+    transform: translate3d(-32px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes vtInU {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 12px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------- 统一过渡手感：hover 120ms 内出现反馈 ---------- */
+.btn,
+.mini-btn,
+.chip,
+.mbtn,
+.preset,
+.mtab,
+.quota,
+.iconbtn,
+.nav button,
+.pv-acts button,
+.madd button,
+.entry,
+.card,
+.model,
+.prov,
+.tp,
+.cm,
+.tk,
+.stylecard,
+.row,
+.seg .thumb,
+.rank .t,
+.rank .go,
+.field,
+.msearch,
+.mtest {
+  transition-property: transform, border-color, background-color, color, box-shadow, opacity, filter;
+  transition-duration: 120ms;
+  transition-timing-function: var(--ease-enter);
+}
+.card,
+.model,
+.prov,
+.tp,
+.cm,
+.tk,
+.stylecard,
+.row {
+  transition-duration: 160ms;
+}
+
+/* ---------- 按下微反馈：100ms 内可见，不等 click ---------- */
+.entry:active .ico,
+.row:active .ri {
+  transform: scale(0.92);
+}
+.rank:active .no {
+  color: var(--acc);
+}
+.rank:active .go {
+  transform: translateX(2px);
+}
+.nav button:active svg {
+  transform: scale(0.88);
+}
+.nav button svg,
+.entry .ico,
+.row .ri {
+  transition: transform 120ms var(--ease-enter);
+}
+.cm:active .cm-cp {
+  color: var(--acc);
+  transform: scale(1.08);
+}
+.tk:active .tk-box,
+.ev:active .ev-box {
+  border-color: var(--acc);
+}
+.btn:active {
+  filter: brightness(0.92);
+}
+
+/* ---------- 链接下划线从左滑入 ---------- */
+.mlink,
+.sec-more,
+.prose a {
+  background: linear-gradient(currentColor, currentColor) no-repeat left bottom / 0% 1px;
+  transition: background-size 200ms var(--ease-enter), color 120ms;
+  padding-bottom: 1px;
+}
+.mlink:hover,
+.sec-more:hover,
+.prose a:hover {
+  background-size: 100% 1px;
+}
+
+/* ---------- 底部导航：滑动指示块 ---------- */
+.nav {
+  overflow: hidden;
+}
+.nav .navthumb {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 0;
+  width: 0;
+  border-radius: var(--r-xs);
+  background: var(--acc-soft);
+  transition: transform 250ms var(--ease-enter), width 250ms var(--ease-enter);
+  z-index: 0;
+}
+.nav button {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------- Toast：进 200 出 150 ---------- */
+.toast {
+  transition: opacity 150ms var(--ease-exit), transform 200ms var(--ease-enter);
+}
+
+/* ---------- dock 按钮逐个入场（40ms 步进） ---------- */
+.dock-row > * {
+  animation: fadeUp 200ms var(--ease-enter) both;
+}
+.dock-row > *:nth-child(2) {
+  animation-delay: 40ms;
+}
+.dock-row > *:nth-child(3) {
+  animation-delay: 80ms;
+}
+.dock-row > *:nth-child(4) {
+  animation-delay: 120ms;
+}
+
+/* ---------- 点缀 1：hero 低饱和光斑（周期 ≥20s，位移 <15%） ---------- */
+.hero::before {
+  content: "";
+  position: absolute;
+  top: -160px;
+  right: -80px;
+  width: 420px;
+  height: 420px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0, 113, 227, 0.07), transparent 70%);
+  filter: blur(90px);
+  pointer-events: none;
+  animation: drift 24s linear infinite alternate;
+}
+[data-theme="dark"] .hero::before {
+  background: radial-gradient(circle, rgba(10, 132, 255, 0.12), transparent 70%);
+}
+@keyframes drift {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(-36px, 20px, 0);
+  }
+}
+
+/* ---------- 点缀 2：主按钮微光扫过（hover 触发一次，400ms） ---------- */
+.btn-primary {
+  position: relative;
+  overflow: hidden;
+}
+.btn-primary::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    115deg,
+    transparent 32%,
+    rgba(255, 255, 255, 0.28) 50%,
+    transparent 68%
+  );
+  transform: translateX(-130%);
+  pointer-events: none;
+}
+.btn-primary:hover::after {
+  animation: sheen 500ms var(--ease-enter);
+}
+@keyframes sheen {
+  to {
+    transform: translateX(130%);
+  }
+}
+
+/* 桌面侧栏布局下指示块退场（侧栏用左指示条） */
+@media (min-width: 1024px) {
+  .nav .navthumb {
+    display: none;
+  }
+  .nav {
+    overflow: visible;
+  }
+}

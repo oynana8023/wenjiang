@@ -6,7 +6,7 @@
 
   var D = window.WJData, E = window.WJEngine, L = window.WJLive, U = window.WJUI, C = window.WJCreate;
 
-  var VERSION = 'v2.30.0';
+  var VERSION = 'v2.30.1';
   var DAILY = 20;
   var KEY = 'wj.v2';
 
@@ -351,6 +351,7 @@
       navEl.classList.toggle('hide', !showChrome);
       fabEl.classList.toggle('hide', !showChrome);
       navEl.innerHTML = navHtml();
+      syncNavThumb();
       fabEl.innerHTML = U.ic('plus', 24, 2);
       fabEl.setAttribute('data-act', 'fab');
       /* 中间那一格现在是「创作」，悬浮加号会和它重叠，先整体收起 */
@@ -362,6 +363,9 @@
       autosize();
     };
     if (document.startViewTransition && navDir !== 'same' && !state.genLoading) {
+      /* 方向感转场：push 从右滑入、pop 反向、tab 上浮淡入（CSS 按 data-vt 分派） */
+      document.documentElement.dataset.vt =
+        navDir === 'push' ? 'push' : navDir === 'pop' ? 'pop' : 'tab';
       document.startViewTransition(swap);
     } else {
       swap();
@@ -399,13 +403,32 @@
       { k: 'works', i: 'folder', t: '作品' },
       { k: 'me', i: 'user', t: '我的' }
     ];
-    return items.map(function (it) {
+    /* navthumb：滑动的激活指示块，跟手但不抢戏 */
+    return '<span class="navthumb" aria-hidden="true"></span>' + items.map(function (it) {
       if (!it) return '<span></span>';
       var on = state.route === it.k || (it.k === 'create' && ['task', 'studio', 'origin'].indexOf(state.route) > -1);
       return '<button class="' + (on ? 'on' : '') + '" data-act="tab" data-tab="' + it.k + '">' +
         U.ic(it.i, 21, on ? 1.9 : 1.6) + '<span>' + it.t + '</span></button>';
     }).join('');
   }
+
+  /* 指示块贴齐当前激活的导航项；首次同步不动画（避免开场滑过） */
+  var navThumbReady = false;
+  function syncNavThumb() {
+    var thumb = navEl.querySelector('.navthumb');
+    var on = navEl.querySelector('button.on');
+    if (!thumb || !on) return;
+    thumb.style.width = on.offsetWidth + 'px';
+    thumb.style.transform = 'translateX(' + on.offsetLeft + 'px)';
+    if (!navThumbReady) {
+      thumb.style.transition = 'none';
+      requestAnimationFrame(function () { thumb.style.transition = ''; });
+      navThumbReady = true;
+    }
+  }
+  window.addEventListener('resize', function () {
+    if (navEl && !navEl.classList.contains('hide')) syncNavThumb();
+  });
 
   function onScroll() {
     if (!viewEl) return;
